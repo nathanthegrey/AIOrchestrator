@@ -31,6 +31,7 @@ public static class OrchestratorConfig_Loader
             Get_Long_OrNull(configRoot, "telegramOwnerUserId"),
             Get_String_OrNull(secretsRoot, "telegramBotToken"),
             Get_Bool_OrNull(configRoot, "telegramItalianLayer"),
+            Get_Bool_OrNull(configRoot, "telegramStatusScreenshots"),
             Get_String_OrNull(configRoot, "voiceTranscribeCommand"),
             Get_Long_OrNull(configRoot, "orchestrationTokenBudget"));
     }
@@ -59,6 +60,7 @@ public static class OrchestratorConfig_Loader
             ["telegramSupergroupChatId"] = config.TelegramSupergroupChatId,
             ["telegramOwnerUserId"] = config.TelegramOwnerUserId,
             ["telegramItalianLayer"] = config.TelegramItalianLayer,
+            ["telegramStatusScreenshots"] = config.TelegramStatusScreenshots,
             ["voiceTranscribeCommand"] = config.VoiceTranscribeCommand,
             ["orchestrationTokenBudget"] = config.OrchestrationTokenBudget,
         };

@@ -11,6 +11,13 @@ public interface ITelegramApiClient
     /// <summary>Renames a topic (used when the supervisor sets the short goal name).</summary>
     Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Renames the forum's GENERAL topic. Its own Bot API call, not the one above with a special id:
+    /// the General topic carries no message_thread_id — the absence is exactly how this app tells it
+    /// apart from every other topic — so there is no id to pass. Needs can_manage_topics on the bot.
+    /// </summary>
+    Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken);
+
     /// <summary>Deletes a topic AND its messages — closed orchestrations disappear from Telegram entirely.</summary>
     Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken);
 
@@ -43,10 +50,34 @@ public interface ITelegramApiClient
     Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The same edit, but the caller lays the buttons out in ROWS. The one-per-row shape above is
+    /// right for decisions, whose labels are sentences; it is wrong for the topic's standing command
+    /// bar, where four short commands stacked vertically would be a slab of buttons under a status
+    /// line the owner reads all day.
+    /// </summary>
+    Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken);
+
+    /// <summary>
     /// sendMessage with an inline keyboard — one tappable button per (data, label) pair. Returns
     /// the message id so a tap can rewrite it to show WHICH option was chosen.
     /// </summary>
     Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
+
+    /// <summary>The same send, with the buttons laid out in ROWS — see the row-aware edit above.</summary>
+    Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// sendMessage carrying a persistent REPLY keyboard — the bar of buttons that sits above the
+    /// owner's input box, which is a different thing from the inline keyboard above: an inline
+    /// button sends a callback_query, a reply-keyboard button sends its own TEXT as an ordinary
+    /// message. That is why the labels must be the literal slash commands — the tap arrives at the
+    /// bridge indistinguishable from the owner typing them, and needs no handler of its own.
+    ///
+    /// The keyboard is CHAT-level state, not message-level: it survives its carrier message and
+    /// stays up until something replaces it. Returns the carrier's message id so the previous one
+    /// can be cleaned up.
+    /// </summary>
+    Task<long?> Send_MessageWithReplyKeyboard_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<string>> keyboardRows, CancellationToken cancellationToken);
 
     /// <summary>Answers a button tap (stops the phone-side spinner); text shows as a small toast.</summary>
     Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken);

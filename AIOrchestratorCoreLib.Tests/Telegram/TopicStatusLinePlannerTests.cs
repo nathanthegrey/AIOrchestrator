@@ -191,8 +191,13 @@ public class TopicStatusLinePlannerTests
     // Posted once and edited forever meant the line SCROLLED AWAY: entering the topic showed whatever
     // was last said, and the current state was somewhere above. The owner wants the status to be the
     // thing they see without typing a command, so when it is no longer the last message AND the topic
-    // has been quiet for two minutes, it is rewritten at the bottom. While it IS the last message it
-    // keeps being edited exactly as before, because an edit notifies nobody.
+    // has gone quiet, it is rewritten at the bottom. While it IS the last message it keeps being
+    // edited exactly as before, because an edit notifies nobody.
+    //
+    // THE WINDOW IS TEN SECONDS since 2026-08-24 — two minutes made the move correct and invisible,
+    // and the owner asked for it to feel immediate. See REPOST_AFTER_QUIET_SECONDS for why a short
+    // window is not a waterfall: the status line's own message is never recorded as topic traffic, so
+    // the fresh post reads as un-buried and nothing reposts again until real traffic arrives.
 
     /// <summary>
     /// The rule as the owner stated it: buried by later traffic, and the topic has gone quiet.
@@ -248,8 +253,9 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// AND THE WINDOW IS TWO MINUTES — the one number the owner actually specified, asserted with
-    /// LITERAL seconds because the case above cannot see it.
+    /// AND THE WINDOW IS TEN SECONDS — the one number the owner actually specified (2026-08-24:
+    /// *"the topic status message should arrive immediately, not after 2 minutes, but more like after
+    /// 10 seconds"*), asserted with LITERAL seconds because the case above cannot see it.
     ///
     /// F2, rev-1: every other test passes `REPOST_AFTER_QUIET_SECONDS` symbolically, so they pin the
     /// ARITHMETIC around the constant and never its VALUE. Set the constant to 0 and all of them stay
@@ -258,14 +264,75 @@ public class TopicStatusLinePlannerTests
     /// notification in the middle of the owner's own sentence, which is the waterfall item 14 exists
     /// to prevent, arriving with a green suite.
     ///
-    /// 119 and 120 pin it exactly rather than approximately: 30 alone would allow anything above 30.
+    /// 9 and 10 pin it EXACTLY rather than approximately: asserting only that 11 reposts would allow
+    /// any window from 0 to 11, and asserting only that 9 holds would allow the old 120 to survive.
+    /// The 120 case is what makes this red against the previous value, and the 11 case is the owner's
+    /// sentence read literally — "just over ten seconds" must already be moving.
     /// </summary>
     [Fact]
-    public void TheQuietWindowIsTwoMinutes()
+    public void TheQuietWindowIsTenSeconds()
     {
-        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(30).Action);
-        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(119).Action);
-        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(120).Action);
+        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(5).Action);
+        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(9).Action);
+        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(10).Action);
+        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(11).Action);
+    }
+
+    /// <summary>
+    /// THE OWNER'S COMPLAINT, as a case rather than as a boundary: a line buried while the topic then
+    /// went quiet for a quarter of a minute must ALREADY have moved. This is the assertion that reads
+    /// red against the old two-minute window — 15 seconds of quiet planned an Edit there, which is
+    /// the "it arrives after 2 minutes" the owner reported.
+    /// </summary>
+    [Fact]
+    public void AShortPauseIsAlreadyLongEnoughToMoveTheLine()
+    {
+        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(15).Action);
+        Assert.Equal(TopicStatusActions.Repost, Plan_AfterQuietSeconds(60).Action);
+    }
+
+    /// <summary>
+    /// AND THE SHORT WINDOW IS STILL A PAUSE-DETECTOR, which is the half that keeps it from becoming
+    /// the waterfall item 14 exists to prevent. A message that landed a moment ago holds the line
+    /// exactly as it did at 120 — the owner typing a second sentence is not a quiet topic, and the
+    /// repost must not interrupt them mid-thought.
+    /// </summary>
+    [Fact]
+    public void TrafficThatHasJustLandedStillHoldsTheRepost()
+    {
+        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(0).Action);
+        Assert.Equal(TopicStatusActions.Edit, Plan_AfterQuietSeconds(2).Action);
+    }
+
+    /// <summary>
+    /// WHAT ACTUALLY BOUNDS THE REPOST, and it is not the window. After a repost the app's stored id
+    /// is the FRESH message, whose Telegram id is higher than every message the topic has seen —
+    /// and the status line's own post is deliberately never recorded as topic traffic
+    /// (`BridgeEngineModel._newestTopicMessageByThread` is written only by `Remember_TopicMessage`,
+    /// which the status-line refresh does not call). So the very next tick reads the line as
+    /// UN-BURIED and plans an edit, at any window value.
+    ///
+    /// This is the case that says a ten-second window cannot delete-and-send every ten seconds in a
+    /// quiet topic: without it, "10 is safe" rests on an argument in a comment in another file.
+    /// The state is the one that exists two seconds after a repost — quiet far longer than the
+    /// window, and the stored id now above the newest traffic id.
+    /// </summary>
+    [Fact]
+    public void AFreshlyRepostedLineIsNoLongerBuriedAndDoesNotRepostAgain()
+    {
+        const long BURYING_TRAFFIC_ID = STATUS_ID + 20;
+        const long REPOSTED_ID = BURYING_TRAFFIC_ID + 1;
+
+        // The traffic that buried the old line is still the newest thing the app knows of, and it is
+        // now an hour old — far past any window this constant could hold.
+        var newest = Newest(BURYING_TRAFFIC_ID, NOW.AddHours(-1));
+
+        Assert.False(TopicStatusLine_Planner.Is_RepostDue(
+            REPOSTED_ID, newest, NOW, TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS));
+
+        Assert.Equal(
+            TopicStatusActions.Edit,
+            Plan(existingMessageId: REPOSTED_ID, lastWrittenText: "an older line", newestTopicMessage: newest).Action);
     }
 
     /// <summary>

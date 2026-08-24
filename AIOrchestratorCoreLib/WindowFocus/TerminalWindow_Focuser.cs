@@ -11,6 +11,8 @@ namespace AIOrchestratorCoreLib.WindowFocus;
 public static class TerminalWindow_Focuser
 {
     const int SW_RESTORE = 9;
+    const int SW_SHOW = 5;
+    const int SW_MINIMIZE = 6;
 
     delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -31,6 +33,21 @@ public static class TerminalWindow_Focuser
 
     [DllImport("user32.dll")]
     static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    static extern bool AttachThreadInput(uint attachingThreadId, uint attachedToThreadId, bool attach);
 
     [DllImport("user32.dll")]
     static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -132,15 +149,87 @@ public static class TerminalWindow_Focuser
     /// <summary>Returns false when no visible window carries the fragment in its title.</summary>
     public static bool Try_Focus_ByTitleFragment(string titleFragment)
     {
-        var foundHandle = Find_WindowHandle_ByTitleFragment(titleFragment);
+        return Try_Focus_Handle(Find_WindowHandle_ByTitleFragment(titleFragment));
+    }
 
-        if (foundHandle == IntPtr.Zero)
+    /// <summary>
+    /// RAISING IS NOT ONE CALL, and treating it as one is what put "click its taskbar icon" in front
+    /// of the owner (their report, 2026-08-24: "sometimes the app can't bring a terminal to the
+    /// foreground, the icon in the Windows taskbar starts blinking"). Windows refuses
+    /// SetForegroundWindow to a process that does not already own the foreground — the foreground
+    /// lock — and flashes the taskbar button instead. The app then reported a failure that the owner
+    /// had to fix by hand, which is the opposite of what /show is for.
+    ///
+    /// So it escalates, cheapest first: the plain call; then the same call with our input queue
+    /// attached to the current foreground window's thread, which for that moment makes us a thread
+    /// Windows will hand the foreground to; then a minimise/restore, whose side effect is that the
+    /// window comes up in its own right.
+    ///
+    /// EVERY STEP IS VERIFIED AGAINST GetForegroundWindow rather than the call's return value.
+    /// SetForegroundWindow can return true having done nothing but flash the button, so believing it
+    /// is how a raise that never happened gets logged as a success.
+    /// </summary>
+    public static bool Try_Focus_Handle(IntPtr windowHandle)
+    {
+        if (windowHandle == IntPtr.Zero)
             return false;
 
-        if (IsIconic(foundHandle))
-            ShowWindow(foundHandle, SW_RESTORE);
+        if (IsIconic(windowHandle))
+            ShowWindow(windowHandle, SW_RESTORE);
 
-        return SetForegroundWindow(foundHandle);
+        SetForegroundWindow(windowHandle);
+
+        if (Is_Foreground(windowHandle))
+            return true;
+
+        Try_Focus_WithAttachedInput(windowHandle);
+
+        if (Is_Foreground(windowHandle))
+            return true;
+
+        // A VISIBLE BOUNCE, and deliberately so: the point of /show is that the owner wants to look
+        // at this window, so a flicker is a far smaller cost than being told to go and click it.
+        ShowWindow(windowHandle, SW_MINIMIZE);
+        ShowWindow(windowHandle, SW_RESTORE);
+        SetForegroundWindow(windowHandle);
+
+        return Is_Foreground(windowHandle);
+    }
+
+    static bool Is_Foreground(IntPtr windowHandle)
+    {
+        return GetForegroundWindow() == windowHandle;
+    }
+
+    static void Try_Focus_WithAttachedInput(IntPtr windowHandle)
+    {
+        var foregroundHandle = GetForegroundWindow();
+
+        if (foregroundHandle == IntPtr.Zero)
+            return;
+
+        var foregroundThreadId = GetWindowThreadProcessId(foregroundHandle, IntPtr.Zero);
+        var ourThreadId = GetCurrentThreadId();
+
+        if (foregroundThreadId == 0 || foregroundThreadId == ourThreadId)
+            return;
+
+        if (!AttachThreadInput(ourThreadId, foregroundThreadId, true))
+            return;
+
+        try
+        {
+            BringWindowToTop(windowHandle);
+            ShowWindow(windowHandle, SW_SHOW);
+            SetForegroundWindow(windowHandle);
+        }
+        finally
+        {
+            // DETACH ALWAYS. A left-attached input queue ties this app's keyboard handling to another
+            // process's for as long as the app runs — an effect that would long outlive the single
+            // failed raise it came from.
+            AttachThreadInput(ourThreadId, foregroundThreadId, false);
+        }
     }
 
     /// <summary>
@@ -177,6 +266,18 @@ public static class TerminalWindow_Focuser
     // --title at spawn, and a running window picks it up at its next respawn. The owner chose that
     // trade deliberately on 2026-08-21, told what it costs: a terminal keeps its old title until the
     // watchdog or an app restart brings it back.
+
+    /// <summary>
+    /// THE HANDLE ITSELF, for a caller that has to do more than one thing to the SAME window — /screen
+    /// raises it, maximises it, photographs it and puts it back. Every other entry point here re-finds
+    /// the window per call, which is right for a single action and wrong for a sequence: a second
+    /// lookup can land on a different window if one is spawned in between, and the restore would then
+    /// resize a window nobody had maximised. Returns IntPtr.Zero when nothing carries the fragment.
+    /// </summary>
+    public static IntPtr Find_Handle_ByTitleFragment_OrZero(string titleFragment)
+    {
+        return Find_WindowHandle_ByTitleFragment(titleFragment);
+    }
 
     static IntPtr Find_WindowHandle_ByTitleFragment(string titleFragment)
     {

@@ -323,6 +323,24 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
             _queuedUpdatesJson = updatesJson;
     }
 
+    // The General topic's name is not this probe's subject; accepting it silently keeps the rename
+    // from showing up as traffic in whatever this fake counts.
+    public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    public Task<long?> Send_MessageWithReplyKeyboard_Async(
+        long? messageThreadId,
+        string text,
+        IReadOnlyList<IReadOnlyList<string>> keyboardRows,
+        CancellationToken cancellationToken)
+    {
+        // The persistent command bar is not this probe's subject. Accept it and hand back no id, so
+        // installing it cannot perturb the sends this test actually counts.
+        return Task.FromResult<long?>(null);
+    }
+
     public Task<long?> Send_MessageWithButtons_Async(
         long? messageThreadId,
         string text,
@@ -395,6 +413,21 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
     }
 
     /// <summary>Recorded the same way: to this fake's readers an edit is an edit, buttons or not.</summary>
+    // THE ROW-AWARE PAIR IS THE STATUS LINE, NOT A DECISION KEYBOARD, so it delegates to the PLAIN
+    // send and edit — which is exactly what the status line called before it started carrying the
+    // owner's standing command bar. Routing it to the button-recording pair instead made the status
+    // line look like a question: this probe's ButtonMessageId_OrNull then returned the status
+    // message's id and the run failed claiming the question's keyboard was never taken down.
+    public Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, text, cancellationToken);
+    }
+
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    {
+        return Send_Message_Async(messageThreadId, text, cancellationToken);
+    }
+
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
         lock (_lock)
