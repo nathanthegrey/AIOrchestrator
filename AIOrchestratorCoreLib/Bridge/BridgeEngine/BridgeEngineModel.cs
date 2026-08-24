@@ -7895,16 +7895,16 @@ internal sealed class BridgeEngineModel(
     /// so the caller can take the keyboards down too; a caller that only needs the state cleared can
     /// ignore it.
     /// </summary>
-    List<(long MessageId, long ButtonGroupId)> Clear_OpenQuestions(string orchId)
+    List<(long MessageId, long ButtonGroupId, string QuestionText)> Clear_OpenQuestions(string orchId)
     {
-        List<(long MessageId, long ButtonGroupId)> answered = [];
+        List<(long MessageId, long ButtonGroupId, string QuestionText)> answered = [];
 
         lock (_ownerStateLock)
         {
             foreach (var pair in _openQuestions)
             {
                 if (pair.Value.OrchId == orchId)
-                    answered.Add((pair.Key, pair.Value.ButtonGroupId));
+                    answered.Add((pair.Key, pair.Value.ButtonGroupId, pair.Value.Text));
             }
 
             foreach (var question in answered)
@@ -7925,16 +7925,25 @@ internal sealed class BridgeEngineModel(
     /// re-entered the tap handler and injected the tapped label as a SECOND owner message,
     /// contradicting the answer they had actually given.
     ///
-    /// BEST-EFFORT ON PURPOSE. The state is already cleared by the time this runs; a keyboard that
-    /// cannot be removed is a cosmetic residue, and it must never take the owner's message down with
-    /// it. <see cref="Remove_Buttons_BestEffort_Async"/> swallows everything but a real cancellation.
+    /// THE RECORD MATTERS AS MUCH AS THE KEYBOARD, and leaving it out was this fix's first miss. A
+    /// tap rewrites its question to carry the choice underneath; removing the buttons alone still
+    /// left the owner scrolling back to a question with no sign it had been answered, which is the
+    /// half they actually reported. So the typed path writes the same record, with their own words
+    /// in place of a label.
+    ///
+    /// BEST-EFFORT ON PURPOSE, AND IN THAT ORDER. The state is already cleared by the time this
+    /// runs; a keyboard that cannot be removed is a cosmetic residue, and it must never take the
+    /// owner's message down with it. The edit is attempted first because it removes the keyboard as
+    /// a side effect — Edit_MessageText_Async deliberately sends no reply_markup — and a failed edit
+    /// falls back to removing the buttons alone, exactly as the tap path does: the record is nice, a
+    /// live keyboard on an answered question is a bug.
     ///
     /// The TAPPED question is not in this list: <see cref="Handle_CallbackTap_Async"/> removes its
     /// own entry before routing, and consumes its own group. What this closes on that path is any
     /// OTHER question still open in the same orchestration, which is the same rule the state clear
     /// has always applied — any owner message answers whatever was pending.
     /// </summary>
-    async Task Close_AnsweredQuestions_Async(string orchId, CancellationToken cancellationToken)
+    async Task Close_AnsweredQuestions_Async(string orchId, string answerText, CancellationToken cancellationToken)
     {
         var answered = Clear_OpenQuestions(orchId);
 
@@ -7955,7 +7964,46 @@ internal sealed class BridgeEngineModel(
             return;
 
         foreach (var question in answered)
-            await Remove_Buttons_BestEffort_Async(_telegramClient, question.MessageId, cancellationToken);
+            await Record_AnsweredQuestion_BestEffort_Async(question, answerText, cancellationToken);
+    }
+
+    async Task Record_AnsweredQuestion_BestEffort_Async(
+        (long MessageId, long ButtonGroupId, string QuestionText) question,
+        string answerText,
+        CancellationToken cancellationToken)
+    {
+        var client = _telegramClient;
+
+        if (client == null)
+            return;
+
+        // The question is already out of _openQuestions by the time this runs, so its text comes
+        // from what the clear handed back — there is nothing left to look up.
+        var questionText = question.QuestionText;
+
+        if (questionText.Length == 0)
+        {
+            await Remove_Buttons_BestEffort_Async(client, question.MessageId, cancellationToken);
+            return;
+        }
+
+        try
+        {
+            await client.Edit_MessageText_Async(
+                question.MessageId,
+                QuestionPrompt_Builder.Build_AnsweredByMessageText(questionText, answerText),
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Answered-question edit failed: {ex.Message}");
+
+            await Remove_Buttons_BestEffort_Async(client, question.MessageId, cancellationToken);
+        }
     }
 
     static string Build_HoldReceiptText(int heldCount)
@@ -8228,7 +8276,7 @@ internal sealed class BridgeEngineModel(
         // unfreezes and everything the supervisor queued behind the question flows now — and the
         // keyboard comes down with it, so a question answered IN WRITING is as closed on the phone as
         // one answered by tapping.
-        await Close_AnsweredQuestions_Async(orchId, cancellationToken);
+        await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
         Clear_AwaitingAnswerFlag(orchId);
 
         // The owner is engaged, so nothing is deadlocked — a suppressed entry from before must not

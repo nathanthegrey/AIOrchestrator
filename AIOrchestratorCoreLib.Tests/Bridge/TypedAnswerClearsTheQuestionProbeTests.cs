@@ -154,6 +154,18 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
             + "was never taken down, so the answered question is still tappable and a later tap would "
             + $"inject a second, contradictory answer.{Environment.NewLine}"
             + $"removals: {_telegram.Dump_ButtonRemovals()} edits: {_telegram.Dump_EditedMessageIds()}");
+
+        // 5 — AND THE RECORD. Taking the keyboard down is not enough on its own: the owner scrolls
+        // back to the question, and without the tick under it, it still reads as unanswered. That is
+        // the half they reported, so it gets its own assertion rather than riding on the removal.
+        var record = _telegram.EditedTextFor_OrNull(questionMessageId.Value);
+
+        Assert.True(
+            record != null && record.Contains("✅", StringComparison.Ordinal),
+            "NO RECORD: the question was closed but nothing on it says so, so scrolling back shows a "
+            + $"question that still reads as open.{Environment.NewLine}text: {record}");
+
+        Assert.Contains(TYPED_ANSWER, record!, StringComparison.Ordinal);
     }
 
     bool Glyph_IsOn()
@@ -271,6 +283,7 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
     readonly List<string> _topicNames = [];
     readonly List<long> _buttonRemovals = [];
     readonly List<long> _editedMessageIds = [];
+    readonly Dictionary<long, string> _editedTextByMessageId = [];
     long? _buttonMessageId;
     string? _queuedUpdatesJson;
     long _nextMessageId = 9000;
@@ -386,10 +399,19 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
 
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
 
+    public string? EditedTextFor_OrNull(long messageId)
+    {
+        lock (_lock)
+            return _editedTextByMessageId.TryGetValue(messageId, out var text) ? text : null;
+    }
+
     public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
     {
         lock (_lock)
+        {
             _editedMessageIds.Add(messageId);
+            _editedTextByMessageId[messageId] = text;
+        }
 
         return Task.CompletedTask;
     }
