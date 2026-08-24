@@ -333,6 +333,25 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// ONE TOPIC-NAME SYNC AT A TIME. The sync is reached from BOTH long-running loops — the mirror
+    /// tick and the inbound command loop, started side by side under Task.WhenAll — and it is a
+    /// read-compare-push-record sequence over a Dictionary nothing guarded. Interleave two of them
+    /// and the record stops describing the push: one loop's edit reaches Telegram last while the
+    /// other's name is what the map ends up holding. From then on the guard reads "already applied"
+    /// about a name Telegram never received, and because the guard's whole job is to skip, the topic
+    /// can never be corrected — every later tick agrees there is nothing to do.
+    ///
+    /// The owner, 2026-08-24, on a topic switched back to Normal six minutes earlier with no sync
+    /// error logged: *"the topic still has the moon even though I removed the DND"*.
+    ///
+    /// A gate rather than a lock on the dictionary, because locking the map alone would leave the
+    /// ORDER free — and the order is the defect. Held across the Telegram calls on purpose: this is
+    /// a best-effort path that already runs sequentially, and a command's sync waiting for a tick's
+    /// costs a moment and then re-reads the store, so it pushes fresher state rather than staler.
+    /// </summary>
+    readonly SemaphoreSlim _topicNameSyncGate = new(1, 1);
+
+    /// <summary>
     /// WHEN A TOPIC NAME MAY BE ATTEMPTED AGAIN after an attempt whose outcome we could not learn.
     ///
     /// A SECOND DICTIONARY, DELIBERATELY, AND IT IS THE POINT OF THE FIX — the same move
@@ -5761,6 +5780,7 @@ internal sealed class BridgeEngineModel(
                     : "🧪 cleared — this topic is back to normal.",
                 cancellationToken);
 
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
@@ -5835,6 +5855,7 @@ internal sealed class BridgeEngineModel(
                     : "↩️ NOT finished any more — the tick is off this topic and it is back to normal.",
                 cancellationToken);
 
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
@@ -6152,6 +6173,8 @@ internal sealed class BridgeEngineModel(
 
             // Sent BEFORE the new mode takes hold on the next tick, so the confirmation gets through.
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Mode(newMode, appWide: false), cancellationToken);
+
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
@@ -6207,6 +6230,8 @@ internal sealed class BridgeEngineModel(
             // Sent BEFORE the new presence takes hold on the next tick, so the confirmation itself
             // is not the first thing terminal mode drops.
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Presence(newPresence), cancellationToken);
+
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
@@ -6305,6 +6330,8 @@ internal sealed class BridgeEngineModel(
         var effective = turningOn ? wantedMode : TelegramDeliveryModes.Normal;
 
         await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Mode(effective, appWide: true), cancellationToken);
+
+        await Forget_AllAppliedTopicNames_Async(cancellationToken);
         await Sync_TopicNames_BestEffort_Async(cancellationToken);
     }
 
@@ -6337,6 +6364,73 @@ internal sealed class BridgeEngineModel(
     }
 
     async Task Sync_TopicNames_BestEffort_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        await _topicNameSyncGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            await Sync_TopicNames_Inside_Gate_Async(cancellationToken);
+        }
+        finally
+        {
+            _topicNameSyncGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// AN EXPLICIT OWNER ACTION OUTRANKS THE MEMO. The applied-name map exists to skip pointless API
+    /// calls, and it is right about that almost always — but when it is wrong it is wrong in the one
+    /// direction that cannot self-correct, because being wrong means SKIPPING. It records a name as
+    /// applied on a genuine Telegram refusal too, which the code above says plainly is "a dictionary
+    /// saying applied about a name that is not".
+    ///
+    /// So the commands that change what the name should SAY — mode, presence, /done, /test — drop
+    /// their entry first and push unconditionally. It costs one edit on an action the owner takes by
+    /// hand, and it means the thing they just asked for is never suppressed by a stale belief. The
+    /// periodic tick keeps the memo, which is where the saving actually lives.
+    /// </summary>
+    /// <remarks>
+    /// AWAITED, NEVER Wait()ed. The gate is deliberately held across Telegram calls, so a blocking
+    /// acquire here would park a thread-pool thread for as long as an HTTP timeout — on the inbound
+    /// command loop, which is the owner's own keystrokes.
+    /// </remarks>
+    async Task Forget_AppliedTopicName_Async(string orchId, CancellationToken cancellationToken)
+    {
+        await _topicNameSyncGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            _appliedTopicNames.Remove(orchId);
+
+            // A pending backoff is also a reason to skip, and an owner action should not wait it out.
+            _topicNameRetryAfterUtc.Remove(orchId);
+        }
+        finally
+        {
+            _topicNameSyncGate.Release();
+        }
+    }
+
+    /// <summary>Same, for the app-wide commands: every open topic's name changes at once.</summary>
+    async Task Forget_AllAppliedTopicNames_Async(CancellationToken cancellationToken)
+    {
+        await _topicNameSyncGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            _appliedTopicNames.Clear();
+            _topicNameRetryAfterUtc.Clear();
+        }
+        finally
+        {
+            _topicNameSyncGate.Release();
+        }
+    }
+
+    async Task Sync_TopicNames_Inside_Gate_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
             return;
