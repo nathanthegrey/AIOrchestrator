@@ -1,7 +1,7 @@
 ﻿# AI Orchestrator status line for Claude Code.
 # 1) Renders the session's orchestration role so every terminal is identifiable at a glance:
-#      red    SUPERVISOR · <orch-id>
-#      blue   IMP-N · <orch-id>
+#      red    SUPERVISOR · <display name, falling back to the orch-id>
+#      blue   IMP-N · <display name, falling back to the orch-id>
 #      amber  GENERAL SUPERVISOR
 #    Falls back to model + cwd for non-orchestrated sessions.
 # 2) TELEMETRY PROBE: for orchestrated sessions it dumps the RAW statusline JSON (cost, usage,
@@ -85,23 +85,38 @@ function Get-ProgressSuffix($root, $id) {
 # the phone name the session identically, so "the one called AI-Orch - away mode loop" means one
 # thing in both places.
 #
-# Same discipline as the progress suffix below: EVERY failure path returns '' and the caller draws
-# exactly the line it drew before this existed. An unnamed orchestration, a missing session.json, a
-# half-written one - all of them mean "no name to show", never a broken status line.
-function Get-DisplayNameSuffix($root, $id) {
+# IT REPLACES THE ID, IT DOES NOT SIT NEXT TO IT. This started life as Get-DisplayNameSuffix, an
+# append-only helper, so a named orchestration rendered BOTH: "SUPERVISOR  strategy-lab-7  PB ·
+# equity control bug". The owner, 2026-08-24: *"the new name doesn't replace the original unreadable,
+# pointless default name like 'strategy-lab-7'. So the status bar gets unnecessarily longer. That
+# name should be replaced and the new name should take its place while keeping its color (right now
+# it's just being added, and it's white)"*. The id is the fallback, never a prefix to the name.
+#
+# AND THE COLOUR COMES FROM THE CALLER, which is the other half of what they asked for. The suffix
+# carried a hardcoded ESC[97m bright white, and it could not have done better: it took only a root
+# and an id, so it never knew whether it was being drawn on a red supervisor line, an orange solo
+# one or a blue member one. Returning the bare LABEL puts it inside the caller's own colour run —
+# each render line already opens one for the id and closes it after — so the name inherits the role
+# colour by construction rather than by a parameter someone has to remember to pass.
+#
+# Same discipline as the progress suffix below, with the fallback moved: EVERY failure path returns
+# the ID and the caller draws exactly the line it drew before names existed. An unnamed
+# orchestration, a missing session.json, a half-written one - all of them mean "no name to show",
+# never a broken status line and never an empty gap where the id used to be.
+function Get-OrchLabel($root, $id) {
     try {
-        if (-not $id) { return '' }
+        if (-not $id) { return $id }
 
         $file = Join-Path $root "$id\session.json"
-        if (-not (Test-Path -LiteralPath $file)) { return '' }
+        if (-not (Test-Path -LiteralPath $file)) { return $id }
 
         $session = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
 
-        if (-not $session.displayName) { return '' }
+        if (-not $session.displayName) { return $id }
 
-        return " $esc[97m$($session.displayName)$esc[0m"
+        return $session.displayName
     } catch {
-        return ''
+        return $id
     }
 }
 
@@ -147,7 +162,7 @@ if ($null -ne $json) {
 
 # --- Render ---
 if ($role -eq 'supervisor') {
-    Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;91m SUPERVISOR $esc[0m$esc[31m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -eq 'solo') {
     # THE SOLO CARRIES THE PROGRESS TOO, and it was the one role that did not. The suffix was wired
@@ -164,17 +179,17 @@ elseif ($role -eq 'solo') {
     # 208 is the orange that matches the 🟠 this session already speaks with in the Telegram mirror,
     # so the two surfaces name the same voice the same way.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'SOLO' }
-    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
+    Write-Output "$esc[1;38;5;208m $memberUpper $esc[0m$esc[38;5;208m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$contextSuffix$(Get-ProgressSuffix $supervisionRoot $orchId)"
 }
 elseif ($role -in @('implementer','reviewer')) {
     # NOT the members: an implementer's terminal showing the orchestration's overall percentage would
     # invite it to reason about work that is not its own. The ledger belongs to whoever talks to the
     # owner.
     $memberUpper = if ($member) { $member.ToUpper() } else { 'IMPLEMENTER' }
-    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$contextSuffix"
+    Write-Output "$esc[1;94m $memberUpper $esc[0m$esc[34m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$contextSuffix"
 }
 elseif ($role -eq 'communicator') {
-    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $orchId $esc[0m$(Get-DisplayNameSuffix $supervisionRoot $orchId) $model$contextSuffix"
+    Write-Output "$esc[1;92m COMMUNICATOR $esc[0m$esc[32m $(Get-OrchLabel $supervisionRoot $orchId) $esc[0m $model$contextSuffix"
 }
 elseif ($role -eq 'general') {
     Write-Output "$esc[1;93m GENERAL SUPERVISOR $esc[0m $model$contextSuffix"

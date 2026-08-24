@@ -107,4 +107,50 @@ public class QuestionPromptBuilderTests
 
         Assert.Equal("❓ Merge now, or hold?\n\n✅ Hold", answered);
     }
+
+    /// <summary>
+    /// THE SAME RECORD FOR AN ANSWER THAT WAS TYPED. The owner answers by message whenever the reply
+    /// needs more than a label, and that path used to stamp nothing at all — so scrolling back showed
+    /// a question that still read as open. Owner, 2026-08-24: *"The unanswered question — or rather,
+    /// the one I answered with a message instead of a tap — dated back further."*
+    /// </summary>
+    [Fact]
+    public void Build_AnsweredByMessageText_RecordsTheirWords_NotAChoice()
+    {
+        var answered = QuestionPrompt_Builder.Build_AnsweredByMessageText("❓ Merge now, or hold?", "hold it, I want to read the diff first");
+
+        Assert.Equal("❓ Merge now, or hold?\n\n✅ answered: hold it, I want to read the diff first", answered);
+    }
+
+    /// <summary>
+    /// A typed answer can be a pasted conversation. The record must stay a record rather than become
+    /// a second copy of the message, so only the first line survives and it is truncated.
+    /// </summary>
+    [Fact]
+    public void Build_AnsweredByMessageText_TakesTheFirstLineAndTruncatesIt()
+    {
+        var pasted = $"{new string('x', QuestionPrompt_Builder.MAX_ANSWER_PREVIEW_LENGTH + 40)}\nand a second line";
+
+        var answered = QuestionPrompt_Builder.Build_AnsweredByMessageText("❓ Which?", pasted);
+
+        Assert.Equal(
+            $"❓ Which?\n\n✅ answered: {new string('x', QuestionPrompt_Builder.MAX_ANSWER_PREVIEW_LENGTH)}…",
+            answered);
+
+        Assert.DoesNotContain("second line", answered, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A photo or a sticker leaves no usable preview. It still answered the question, so the record
+    /// still has to say so — a tick with nothing after it would read as a rendering bug.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \n  \n")]
+    public void Build_AnsweredByMessageText_WithNothingToPreview_StillSaysItWasAnswered(string ownerText)
+    {
+        var answered = QuestionPrompt_Builder.Build_AnsweredByMessageText("❓ Which?", ownerText);
+
+        Assert.Equal($"❓ Which?\n\n✅ answered: {QuestionPrompt_Builder.ANSWERED_IN_WRITING}", answered);
+    }
 }

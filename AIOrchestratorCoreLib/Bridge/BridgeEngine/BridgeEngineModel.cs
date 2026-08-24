@@ -333,6 +333,25 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// ONE TOPIC-NAME SYNC AT A TIME. The sync is reached from BOTH long-running loops — the mirror
+    /// tick and the inbound command loop, started side by side under Task.WhenAll — and it is a
+    /// read-compare-push-record sequence over a Dictionary nothing guarded. Interleave two of them
+    /// and the record stops describing the push: one loop's edit reaches Telegram last while the
+    /// other's name is what the map ends up holding. From then on the guard reads "already applied"
+    /// about a name Telegram never received, and because the guard's whole job is to skip, the topic
+    /// can never be corrected — every later tick agrees there is nothing to do.
+    ///
+    /// The owner, 2026-08-24, on a topic switched back to Normal six minutes earlier with no sync
+    /// error logged: *"the topic still has the moon even though I removed the DND"*.
+    ///
+    /// A gate rather than a lock on the dictionary, because locking the map alone would leave the
+    /// ORDER free — and the order is the defect. Held across the Telegram calls on purpose: this is
+    /// a best-effort path that already runs sequentially, and a command's sync waiting for a tick's
+    /// costs a moment and then re-reads the store, so it pushes fresher state rather than staler.
+    /// </summary>
+    readonly SemaphoreSlim _topicNameSyncGate = new(1, 1);
+
+    /// <summary>
     /// WHEN A TOPIC NAME MAY BE ATTEMPTED AGAIN after an attempt whose outcome we could not learn.
     ///
     /// A SECOND DICTIONARY, DELIBERATELY, AND IT IS THE POINT OF THE FIX — the same move
@@ -477,6 +496,14 @@ internal sealed class BridgeEngineModel(
         public string OrchId = "";
         public string Text = "";
         public DateTime AskedUtc;
+
+        /// <summary>
+        /// The button group this question's keyboard belongs to, so an answer that did NOT come
+        /// through that keyboard can still take it down. A tap knows its group from the ticket it
+        /// arrived on; a typed answer knows only the orchestration, and without this it had no route
+        /// back to the buttons it had just answered.
+        /// </summary>
+        public long ButtonGroupId;
     }
 
     /// <summary>
@@ -3058,8 +3085,9 @@ internal sealed class BridgeEngineModel(
         if (_configProvider.Get_Current().TelegramItalianLayer && channel.IsOwnerChannel)
             prompt = await _translator.Translate_ToItalian_Async(prompt, cancellationToken);
 
-        var messageId = await client.Send_MessageWithButtons_Async(
-            threadId, prompt, Register_Buttons(threadId, optionLabels, prompt), cancellationToken);
+        var buttons = Register_Buttons(threadId, optionLabels, prompt, out var buttonGroupId);
+
+        var messageId = await client.Send_MessageWithButtons_Async(threadId, prompt, buttons, cancellationToken);
 
         Remember_TopicMessage(threadId, messageId);
 
@@ -3075,6 +3103,7 @@ internal sealed class BridgeEngineModel(
                     OrchId = channel.OrchId,
                     Text = prompt,
                     AskedUtc = DateTime.UtcNow,
+                    ButtonGroupId = buttonGroupId,
                 };
             }
 
@@ -3091,7 +3120,7 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionLabels, string questionText)
+    IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionLabels, string questionText, out long groupId)
     {
         List<(string Data, string Label)> buttons = [];
 
@@ -3099,6 +3128,7 @@ internal sealed class BridgeEngineModel(
         {
             // One GROUP per button message: the first tap invalidates all its siblings.
             _buttonGroupSequence++;
+            groupId = _buttonGroupSequence;
 
             foreach (var label in optionLabels)
             {
@@ -5750,6 +5780,7 @@ internal sealed class BridgeEngineModel(
                     : "🧪 cleared — this topic is back to normal.",
                 cancellationToken);
 
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
@@ -5807,13 +5838,24 @@ internal sealed class BridgeEngineModel(
             Raise_OrchestrationActivity(session.OrchId);
 
             // BEFORE the new mode takes hold on the next tick, so the confirmation itself gets through.
+            //
+            // THE "CLEARED" REPLY MUST NOT LEAD WITH THE TICK. Both replies used to open with ✅, so
+            // on a phone the message undoing the mark looked exactly like the message making it —
+            // and /done is a SILENT TOGGLE, so a second press is the natural thing to do when the
+            // topic list has not visibly changed yet. The owner did precisely that on 2026-08-24,
+            // 17 seconds apart, and reported the tick "not being added" when it had been added and
+            // then removed. It had happened twice before on other topics, the same way.
+            //
+            // So the off reply says the state it leaves behind, in words, with a glyph that cannot be
+            // mistaken for success; and the on reply now says that repeating the command undoes it.
             await Send_DirectReply_BestEffort_Async(
                 client, messageThreadId,
                 turningOn
-                    ? "✅ marked finished — muted, and the topic stays open. Text here whenever you want it back; that alone wakes it up."
-                    : "✅ cleared — this topic is back to normal.",
+                    ? "✅ marked finished — muted, and the topic stays open. Text here whenever you want it back; that alone wakes it up. Sending /done again clears the mark."
+                    : "↩️ NOT finished any more — the tick is off this topic and it is back to normal.",
                 cancellationToken);
 
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
@@ -6131,6 +6173,8 @@ internal sealed class BridgeEngineModel(
 
             // Sent BEFORE the new mode takes hold on the next tick, so the confirmation gets through.
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Mode(newMode, appWide: false), cancellationToken);
+
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
@@ -6186,6 +6230,8 @@ internal sealed class BridgeEngineModel(
             // Sent BEFORE the new presence takes hold on the next tick, so the confirmation itself
             // is not the first thing terminal mode drops.
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Presence(newPresence), cancellationToken);
+
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
         }
         catch (Exception ex)
@@ -6284,6 +6330,8 @@ internal sealed class BridgeEngineModel(
         var effective = turningOn ? wantedMode : TelegramDeliveryModes.Normal;
 
         await Send_DirectReply_BestEffort_Async(client, messageThreadId, Describe_Mode(effective, appWide: true), cancellationToken);
+
+        await Forget_AllAppliedTopicNames_Async(cancellationToken);
         await Sync_TopicNames_BestEffort_Async(cancellationToken);
     }
 
@@ -6316,6 +6364,73 @@ internal sealed class BridgeEngineModel(
     }
 
     async Task Sync_TopicNames_BestEffort_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        await _topicNameSyncGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            await Sync_TopicNames_Inside_Gate_Async(cancellationToken);
+        }
+        finally
+        {
+            _topicNameSyncGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// AN EXPLICIT OWNER ACTION OUTRANKS THE MEMO. The applied-name map exists to skip pointless API
+    /// calls, and it is right about that almost always — but when it is wrong it is wrong in the one
+    /// direction that cannot self-correct, because being wrong means SKIPPING. It records a name as
+    /// applied on a genuine Telegram refusal too, which the code above says plainly is "a dictionary
+    /// saying applied about a name that is not".
+    ///
+    /// So the commands that change what the name should SAY — mode, presence, /done, /test — drop
+    /// their entry first and push unconditionally. It costs one edit on an action the owner takes by
+    /// hand, and it means the thing they just asked for is never suppressed by a stale belief. The
+    /// periodic tick keeps the memo, which is where the saving actually lives.
+    /// </summary>
+    /// <remarks>
+    /// AWAITED, NEVER Wait()ed. The gate is deliberately held across Telegram calls, so a blocking
+    /// acquire here would park a thread-pool thread for as long as an HTTP timeout — on the inbound
+    /// command loop, which is the owner's own keystrokes.
+    /// </remarks>
+    async Task Forget_AppliedTopicName_Async(string orchId, CancellationToken cancellationToken)
+    {
+        await _topicNameSyncGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            _appliedTopicNames.Remove(orchId);
+
+            // A pending backoff is also a reason to skip, and an owner action should not wait it out.
+            _topicNameRetryAfterUtc.Remove(orchId);
+        }
+        finally
+        {
+            _topicNameSyncGate.Release();
+        }
+    }
+
+    /// <summary>Same, for the app-wide commands: every open topic's name changes at once.</summary>
+    async Task Forget_AllAppliedTopicNames_Async(CancellationToken cancellationToken)
+    {
+        await _topicNameSyncGate.WaitAsync(cancellationToken);
+
+        try
+        {
+            _appliedTopicNames.Clear();
+            _topicNameRetryAfterUtc.Clear();
+        }
+        finally
+        {
+            _topicNameSyncGate.Release();
+        }
+    }
+
+    async Task Sync_TopicNames_Inside_Gate_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
             return;
@@ -7879,21 +7994,119 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>The owner engaged — whatever they said, the conversation moves again.</summary>
-    void Clear_OpenQuestions(string orchId)
+    /// <summary>
+    /// The owner engaged — whatever they said, the conversation moves again. Returns what it closed,
+    /// so the caller can take the keyboards down too; a caller that only needs the state cleared can
+    /// ignore it.
+    /// </summary>
+    List<(long MessageId, long ButtonGroupId, string QuestionText)> Clear_OpenQuestions(string orchId)
     {
+        List<(long MessageId, long ButtonGroupId, string QuestionText)> answered = [];
+
         lock (_ownerStateLock)
         {
-            List<long> answered = [];
-
             foreach (var pair in _openQuestions)
             {
                 if (pair.Value.OrchId == orchId)
-                    answered.Add(pair.Key);
+                    answered.Add((pair.Key, pair.Value.ButtonGroupId, pair.Value.Text));
             }
 
-            foreach (var messageId in answered)
-                _openQuestions.Remove(messageId);
+            foreach (var question in answered)
+                _openQuestions.Remove(question.MessageId);
+        }
+
+        return answered;
+    }
+
+    /// <summary>
+    /// AN ANSWER IS AN ANSWER, WHICHEVER WAY IT ARRIVED — so a typed reply closes the question on
+    /// the phone exactly as a tap does.
+    ///
+    /// Only the tap path ever took a keyboard down. Answer the same question in writing — which the
+    /// owner does whenever the reply needs more than a label — and the buttons stayed live under a
+    /// question that was already settled. Two things followed, and the owner reported the second:
+    /// the topic still READ as an open question, and a later tap on those still-live buttons
+    /// re-entered the tap handler and injected the tapped label as a SECOND owner message,
+    /// contradicting the answer they had actually given.
+    ///
+    /// THE RECORD MATTERS AS MUCH AS THE KEYBOARD, and leaving it out was this fix's first miss. A
+    /// tap rewrites its question to carry the choice underneath; removing the buttons alone still
+    /// left the owner scrolling back to a question with no sign it had been answered, which is the
+    /// half they actually reported. So the typed path writes the same record, with their own words
+    /// in place of a label.
+    ///
+    /// BEST-EFFORT ON PURPOSE, AND IN THAT ORDER. The state is already cleared by the time this
+    /// runs; a keyboard that cannot be removed is a cosmetic residue, and it must never take the
+    /// owner's message down with it. The edit is attempted first because it removes the keyboard as
+    /// a side effect — Edit_MessageText_Async deliberately sends no reply_markup — and a failed edit
+    /// falls back to removing the buttons alone, exactly as the tap path does: the record is nice, a
+    /// live keyboard on an answered question is a bug.
+    ///
+    /// The TAPPED question is not in this list: <see cref="Handle_CallbackTap_Async"/> removes its
+    /// own entry before routing, and consumes its own group. What this closes on that path is any
+    /// OTHER question still open in the same orchestration, which is the same rule the state clear
+    /// has always applied — any owner message answers whatever was pending.
+    /// </summary>
+    async Task Close_AnsweredQuestions_Async(string orchId, string answerText, CancellationToken cancellationToken)
+    {
+        var answered = Clear_OpenQuestions(orchId);
+
+        if (answered.Count == 0)
+            return;
+
+        lock (_buttonLock)
+        {
+            List<string> staleTickets = [.. _buttonOptions
+                .Where(pair => answered.Any(question => question.ButtonGroupId == pair.Value.GroupId))
+                .Select(pair => pair.Key)];
+
+            foreach (var ticket in staleTickets)
+                _buttonOptions.Remove(ticket);
+        }
+
+        if (_telegramClient == null)
+            return;
+
+        foreach (var question in answered)
+            await Record_AnsweredQuestion_BestEffort_Async(question, answerText, cancellationToken);
+    }
+
+    async Task Record_AnsweredQuestion_BestEffort_Async(
+        (long MessageId, long ButtonGroupId, string QuestionText) question,
+        string answerText,
+        CancellationToken cancellationToken)
+    {
+        var client = _telegramClient;
+
+        if (client == null)
+            return;
+
+        // The question is already out of _openQuestions by the time this runs, so its text comes
+        // from what the clear handed back — there is nothing left to look up.
+        var questionText = question.QuestionText;
+
+        if (questionText.Length == 0)
+        {
+            await Remove_Buttons_BestEffort_Async(client, question.MessageId, cancellationToken);
+            return;
+        }
+
+        try
+        {
+            await client.Edit_MessageText_Async(
+                question.MessageId,
+                QuestionPrompt_Builder.Build_AnsweredByMessageText(questionText, answerText),
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Answered-question edit failed: {ex.Message}");
+
+            await Remove_Buttons_BestEffort_Async(client, question.MessageId, cancellationToken);
         }
     }
 
@@ -8164,8 +8377,10 @@ internal sealed class BridgeEngineModel(
             await Exit_AwayMode_Async(cancellationToken);
 
         // ...and it answers whatever was asked, whether or not it answers it. The conversation
-        // unfreezes and everything the supervisor queued behind the question flows now.
-        Clear_OpenQuestions(orchId);
+        // unfreezes and everything the supervisor queued behind the question flows now — and the
+        // keyboard comes down with it, so a question answered IN WRITING is as closed on the phone as
+        // one answered by tapping.
+        await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
         Clear_AwaitingAnswerFlag(orchId);
 
         // The owner is engaged, so nothing is deadlocked — a suppressed entry from before must not

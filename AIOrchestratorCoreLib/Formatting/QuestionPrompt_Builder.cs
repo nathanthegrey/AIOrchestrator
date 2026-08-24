@@ -86,4 +86,43 @@ public static class QuestionPrompt_Builder
     {
         return $"{questionText}\n\n✅ {chosenLabel}";
     }
+
+    /// <summary>Beyond this the owner's reply is a paragraph, and the record becomes the message.</summary>
+    public const int MAX_ANSWER_PREVIEW_LENGTH = 80;
+
+    /// <summary>When they answered with something that leaves no usable preview — a photo, a sticker.</summary>
+    public const string ANSWERED_IN_WRITING = "answered by message";
+
+    /// <summary>
+    /// The same record, for an answer the owner TYPED instead of tapping.
+    ///
+    /// Without it a question answered in writing kept no trace of having been answered: the tap path
+    /// stamped its choice here and the typed path stamped nothing, so the owner scrolled back to a
+    /// question that still read as open. Their words, 2026-08-24, after answering one by message
+    /// because the reply needed more than a label: *"The unanswered question — or rather, the one I
+    /// answered with a message instead of a tap — dated back further."*
+    ///
+    /// IT SAYS "answered", NOT the label of a choice, because no choice was made. The preview is
+    /// their own first line, truncated: a typed answer can be a pasted conversation, and the record
+    /// has to stay a record rather than become a second copy of the message.
+    /// </summary>
+    public static string Build_AnsweredByMessageText(string questionText, string ownerText)
+    {
+        return $"{questionText}\n\n✅ answered: {Preview_OrDefault(ownerText)}";
+    }
+
+    static string Preview_OrDefault(string ownerText)
+    {
+        var firstLine = (ownerText ?? "")
+            .Split('\n')
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.Length > 0);
+
+        if (string.IsNullOrEmpty(firstLine))
+            return ANSWERED_IN_WRITING;
+
+        return firstLine.Length <= MAX_ANSWER_PREVIEW_LENGTH
+            ? firstLine
+            : $"{firstLine[..MAX_ANSWER_PREVIEW_LENGTH]}…";
+    }
 }
