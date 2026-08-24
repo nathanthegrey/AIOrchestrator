@@ -23,7 +23,7 @@ public class TopicCommandButtonsTests
     [Fact]
     public void TheCommands_AreTheFourTheOwnerAskedFor_InDisplayOrder()
     {
-        Assert.Equal(new[] { "show", "merge", "test", "screen" }, TopicCommandButtons.Commands);
+        Assert.Equal(new[] { "screen", "show", "merge", "test" }, TopicCommandButtons.Commands);
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public class TopicCommandButtonsTests
     {
         var built = TopicCommandButtons.Build_ForTopic(messageThreadId);
 
-        Assert.Equal(("show", messageThreadId), TopicCommandButtons.Parse_OrNull(built[0].Data));
+        Assert.Equal(("screen", messageThreadId), TopicCommandButtons.Parse_OrNull(built[0].Data));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -135,8 +135,8 @@ public class TopicCommandButtonsTests
         var rows = TopicCommandButtons.Build_ReplyKeyboardRows();
 
         Assert.Equal(2, rows.Count);
-        Assert.Equal(new[] { "/show", "/merge" }, rows[0]);
-        Assert.Equal(new[] { "/test", "/screen" }, rows[1]);
+        Assert.Equal(new[] { "/screen", "/show" }, rows[0]);
+        Assert.Equal(new[] { "/merge", "/test" }, rows[1]);
     }
 
     /// <summary>

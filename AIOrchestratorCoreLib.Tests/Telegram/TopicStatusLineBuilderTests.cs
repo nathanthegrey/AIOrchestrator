@@ -17,35 +17,42 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// would sit in front of them permanently. So NO MTIME appears here — every word comes from parsed
 /// channel state and the ledger, which is why these tests can build a line from entries alone with
 /// no filesystem at all. If a future change makes that impossible, that is the signal.
+///
+/// THE TOPIC NAME IS NOT IN IT ANY MORE (owner, 2026-08-24): *"the name of the topic is not needed,
+/// I already know where I am, and if I don't I have it at the top of the screen."* The opening field
+/// is now the literal word PULSE, and what it is FOR is telling the two recurring messages apart at
+/// a glance — this one, edited constantly and never notifying, against the half-hourly digest that
+/// opens with STATUS. That is why every expectation below reads `PULSE · …` where it used to name a
+/// topic, and why the builder no longer takes a title at all.
 /// </summary>
 public class TopicStatusLineBuilderTests
 {
     static readonly DateTime NOW = new(2026, 8, 12, 12, 30, 0);
 
     [Fact]
-    public void TheTitleLineCarriesTheLedgerCountAndPercent()
+    public void TheLeadLineCarriesTheLedgerCountAndPercent()
     {
-        var line = TopicStatusLine_Builder.Build("Telegram UX + limits", Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false);
+        var line = TopicStatusLine_Builder.Build(Progress(72, 113), [], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Equal("Telegram UX + limits · 72/113 · 63%", line);
+        Assert.Equal("PULSE · 72/113 · 63%", line);
     }
 
     /// <summary>
     /// NOTHING TO SAY MEANS SAY NOTHING. With no ledger, no live member and no history, the line
-    /// would have been the topic's own title repeated back at the owner — a message whose entire
-    /// content is what they are already looking at. Item 15.
+    /// would have been a lead word and nothing else — a message that tells the owner nothing they
+    /// are not already looking at. Item 15.
     /// </summary>
     [Fact]
     public void AnOrchestrationWithNothingToReportEmitsNothing()
     {
-        Assert.Equal("", TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW, aMessageIsAlreadyPosted: false));
+        Assert.Equal("", TopicStatusLine_Builder.Build(null, [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
-    /// <summary>But a title with a REAL ledger is substance, and it still stands alone.</summary>
+    /// <summary>But a lead line with a REAL ledger is substance, and it still stands alone.</summary>
     [Fact]
-    public void ATitleWithALedgerIsWorthWriting()
+    public void ALeadLineWithALedgerIsWorthWriting()
     {
-        Assert.Equal("CRM invoice crash · 3/4 · 75%", TopicStatusLine_Builder.Build("CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false));
+        Assert.Equal("PULSE · 3/4 · 75%", TopicStatusLine_Builder.Build(Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
@@ -53,29 +60,29 @@ public class TopicStatusLineBuilderTests
     /// a delta: it refreshes constantly, so a difference "would go back to 0" (2026-08-19).
     /// </summary>
     [Fact]
-    public void TheTitleSaysHowLongTheFiguresHaveNotMoved()
+    public void TheLeadLineSaysHowLongTheFiguresHaveNotMoved()
     {
         Assert.Equal(
-            "CRM invoice crash · 3/4 · 75% · unchanged 25 min",
+            "PULSE · 3/4 · 75% · unchanged 25 min",
             TopicStatusLine_Builder.Build(
-                "CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+                Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
                 figuresUnchangedFor: TimeSpan.FromMinutes(27)));
     }
 
     /// <summary>Figures that JUST moved say nothing — and neither does an unknown span.</summary>
     [Fact]
-    public void TheTitleSaysNothingWhileTheFiguresAreStillMoving()
+    public void TheLeadLineSaysNothingWhileTheFiguresAreStillMoving()
     {
         Assert.Equal(
-            "CRM invoice crash · 3/4 · 75%",
+            "PULSE · 3/4 · 75%",
             TopicStatusLine_Builder.Build(
-                "CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+                Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
                 figuresUnchangedFor: TimeSpan.FromMinutes(2)));
 
         Assert.Equal(
-            "CRM invoice crash · 3/4 · 75%",
+            "PULSE · 3/4 · 75%",
             TopicStatusLine_Builder.Build(
-                "CRM invoice crash", Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
+                Progress(3, 4), [], null, NOW, aMessageIsAlreadyPosted: false,
                 figuresUnchangedFor: null));
     }
 
@@ -87,7 +94,7 @@ public class TopicStatusLineBuilderTests
     public void AnOrchestrationWhoseOnlyMemberIsClosedEmitsNothing()
     {
         var line = TopicStatusLine_Builder.Build(
-            "orch", null, [Member("imp-1", Brief("the old task", "2026-08-12 09:00"), isClosed: true)], null, NOW, aMessageIsAlreadyPosted: false);
+            null, [Member("imp-1", Brief("the old task", "2026-08-12 09:00"), isClosed: true)], null, NOW, aMessageIsAlreadyPosted: false);
 
         Assert.Equal("", line);
     }
@@ -100,34 +107,36 @@ public class TopicStatusLineBuilderTests
     [Fact]
     public void ALedgerOfNothingButDroppedLinesHasNothingToSay()
     {
-        Assert.Equal("", TopicStatusLine_Builder.Build("orch", Progress(0, 0), [], null, NOW, aMessageIsAlreadyPosted: false));
+        Assert.Equal("", TopicStatusLine_Builder.Build(Progress(0, 0), [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
     /// The FALLBACK lives in the builder, so the decider sees the text that is actually sent. With a
-    /// message already up, nothing-to-say is the bare title — leaving silence would freeze the last
-    /// row it printed, with a running duration for a member that has been closed.
+    /// message already up, nothing-to-say is the BARE LEAD WORD — leaving silence would freeze the
+    /// last row it printed, with a running duration for a member that has been closed.
+    ///
+    /// It used to be the bare TITLE. Since the topic name left the line (owner, 2026-08-24) the
+    /// fallback is the literal `PULSE`, which is the one thing this line always has to say.
     /// </summary>
     [Fact]
-    public void WithAMessageAlreadyPostedNothingToSayIsTheBareTitle()
+    public void WithAMessageAlreadyPostedNothingToSayIsTheBareLeadWord()
     {
         Assert.Equal(
-            "CRM invoice crash",
-            TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW, aMessageIsAlreadyPosted: true));
+            "PULSE",
+            TopicStatusLine_Builder.Build(null, [], null, NOW, aMessageIsAlreadyPosted: true));
     }
 
     /// <summary>And with nothing posted it is still silence — the two are decided in one place.</summary>
     [Fact]
     public void WithNoMessagePostedNothingToSayIsStillSilence()
     {
-        Assert.Equal("", TopicStatusLine_Builder.Build("CRM invoice crash", null, [], null, NOW, aMessageIsAlreadyPosted: false));
+        Assert.Equal("", TopicStatusLine_Builder.Build(null, [], null, NOW, aMessageIsAlreadyPosted: false));
     }
 
     [Fact]
     public void AMemberRowIsWhoWhatAndHowLong()
     {
         var line = TopicStatusLine_Builder.Build(
-            "orch",
             null,
             [Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26"))],
             null,
@@ -159,7 +168,7 @@ public class TopicStatusLineBuilderTests
             Entry(2, ChannelAuthors.Reviewer, "STANDING BY — nothing owed, nothing running", "2026-08-12 12:00"),
         };
 
-        var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
+        var line = TopicStatusLine_Builder.Build(null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
         Assert.Contains("• rev-3 · standing by", line);
         Assert.DoesNotContain("hold — nothing queued", line);
@@ -186,7 +195,7 @@ public class TopicStatusLineBuilderTests
             Entry(3, ChannelAuthors.Reviewer, "STANDING BY", "2026-08-12 12:01"),
         };
 
-        var line = TopicStatusLine_Builder.Build("orch", null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
+        var line = TopicStatusLine_Builder.Build(null, [Member("rev-3", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
         // Asserted POSITIVELY as well, on the whole row: "does not contain idle" is also satisfied by
         // a row that does not exist, so on its own it would survive the member vanishing entirely.
@@ -207,7 +216,7 @@ public class TopicStatusLineBuilderTests
             Entry(2, ChannelAuthors.Implementer, "done, 565 tests pass", "2026-08-12 12:20"),
         };
 
-        var line = TopicStatusLine_Builder.Build("orch", null, [Member("imp-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
+        var line = TopicStatusLine_Builder.Build(null, [Member("imp-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
         Assert.DoesNotContain("standing by", line);
         Assert.Contains("fix the ledger", line);
@@ -218,7 +227,6 @@ public class TopicStatusLineBuilderTests
     public void ANeverBriefedMemberReadsStandingBy()
     {
         var line = TopicStatusLine_Builder.Build(
-            "orch",
             null,
             [Member("rev-1", [Entry(1, ChannelAuthors.Reviewer, "rev-1 online", "2026-08-12 12:00")])],
             null,
@@ -234,7 +242,6 @@ public class TopicStatusLineBuilderTests
         var brief = Brief("the old task", "2026-08-12 09:00");
 
         var line = TopicStatusLine_Builder.Build(
-            "orch",
             null,
             [Member("imp-1", brief, isClosed: true), Member("imp-2", Brief("the live task", "2026-08-12 12:25"))],
             null,
@@ -253,7 +260,6 @@ public class TopicStatusLineBuilderTests
     public void AFutureStampShowsTheTaskWithoutADuration()
     {
         var line = TopicStatusLine_Builder.Build(
-            "orch",
             null,
             [Member("imp-1", Brief("the task", "2026-08-13 23:00"))],
             null,
@@ -267,9 +273,9 @@ public class TopicStatusLineBuilderTests
     [Fact]
     public void TheLastLineIsAddedOnlyWhenThereIsSomethingToSay()
     {
-        Assert.Contains("last", TopicStatusLine_Builder.Build("orch", null, [], "gate cleared on 34e5515", NOW, aMessageIsAlreadyPosted: false));
-        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build("orch", null, [], null, NOW, aMessageIsAlreadyPosted: false));
-        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build("orch", null, [], "   ", NOW, aMessageIsAlreadyPosted: false));
+        Assert.Contains("last", TopicStatusLine_Builder.Build(null, [], "gate cleared on 34e5515", NOW, aMessageIsAlreadyPosted: false));
+        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build(null, [], null, NOW, aMessageIsAlreadyPosted: false));
+        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build(null, [], "   ", NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
@@ -289,7 +295,6 @@ public class TopicStatusLineBuilderTests
     public void TheApprovedShape()
     {
         var line = TopicStatusLine_Builder.Build(
-            "Telegram UX + limits",
             Progress(72, 113),
             [
                 Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26")),
@@ -302,7 +307,7 @@ public class TopicStatusLineBuilderTests
         var lines = line.Split('\n');
 
         Assert.Equal(5, lines.Length);
-        Assert.Equal("Telegram UX + limits · 72/113 · 63%", lines[0]);
+        Assert.Equal("PULSE · 72/113 · 63%", lines[0]);
         Assert.Equal("• imp-1 · committing the marker fix · 4 min", lines[1]);
         Assert.Equal("• rev-2 · reviewing the hooks branch · 12 min", lines[2]);
         Assert.Equal("• rev-3 · standing by", lines[3]);
@@ -329,7 +334,6 @@ public class TopicStatusLineBuilderTests
         const string sevenWords = "migrate every supervisor session onto worktree isolation";
 
         var lines = TopicStatusLine_Builder.Build(
-            "orch",
             null,
             [Member("imp-9", Brief(sevenWords, "2026-08-12 12:26"))],
             sevenWords,
@@ -352,7 +356,6 @@ public class TopicStatusLineBuilderTests
     public void NoRowIsPaddedWithASpaceRun()
     {
         var line = TopicStatusLine_Builder.Build(
-            "Telegram UX + limits",
             Progress(72, 113),
             [
                 Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26")),
@@ -374,7 +377,6 @@ public class TopicStatusLineBuilderTests
     public void EveryMemberRowOpensWithABulletAndTheLastRowDoesNot()
     {
         var lines = TopicStatusLine_Builder.Build(
-            "orch",
             null,
             [
                 Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26")),
@@ -398,7 +400,6 @@ public class TopicStatusLineBuilderTests
     public void TheWideDividerIsGone()
     {
         var line = TopicStatusLine_Builder.Build(
-            "orch",
             Progress(3, 4),
             [Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26"))],
             "gate cleared on 34e5515",
@@ -421,6 +422,88 @@ public class TopicStatusLineBuilderTests
 
         // The skew tolerance survives: a stamp a minute ahead is a minute-rounded clock, not a lie.
         Assert.True(SessionDuration_Formatter.Try_ReadTrustedStamp("2026-08-12 12:31", NOW, out _));
+    }
+
+    /// <summary>
+    /// A SOLO'S ROW MUST NOT CLAIM "standing by" WHILE IT IS MID-WORK — the owner sent this back on
+    /// 2026-08-24, the app's own busy line reading "still at it — running a command" directly above
+    /// "solo-1 · standing by".
+    ///
+    /// It was not a race and not a stale read: Find_LastBrief_OrNull looks for a `FROM supervisor`
+    /// entry, a basic orchestration HAS no supervisor, and a solo's member channel is the owner
+    /// channel — which carries only `FROM solo`, `FROM owner` and `FROM app`. So the brief was
+    /// structurally always null and the row printed "standing by" 100% of the time, for every solo,
+    /// in every state. This test builds exactly that channel shape.
+    ///
+    /// WHAT THE ROW SHOWS INSTEAD IS THE SOLO'S OWN LAST ENTRY, not a state word: a solo is never
+    /// briefed and never will be, so its own last subject is the only answer to "what is this member
+    /// working on" — summarised to the same MEMBER_TASK_WORDS budget every other member row uses, and
+    /// dated from the same stamp. Asserted as the WHOLE ROW rather than as "contains the subject",
+    /// because the duration now dates from that entry too and a Contains check cannot see it.
+    /// </summary>
+    [Fact]
+    public void ASolosRow_WithNoSupervisorToBriefIt_ShowsItsOwnLastEntryInsteadOfStandingBy()
+    {
+        // A solo's own channel. No supervisor entry exists here and none ever will — that is what a
+        // basic orchestration IS.
+        IReadOnlyList<IChannelEntry> entries =
+        [
+            Entry(1, ChannelAuthors.Owner, "go", "2026-08-12 12:20"),
+            Entry(2, ChannelAuthors.Solo, "tab shifting fix", "2026-08-12 12:26"),
+        ];
+
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [Member("solo-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
+
+        Assert.Equal("• solo-1 · tab shifting fix · 4 min", line.Split('\n')[1]);
+        Assert.DoesNotContain("standing by", line);
+    }
+
+    /// <summary>
+    /// THE FALLBACK IS SOLO-ONLY, and this is the pair that pins it. An implementer or a reviewer with
+    /// no brief is genuinely waiting to be told what to do, so "standing by" is a true and useful
+    /// statement about it — see ANeverBriefedMemberReadsStandingBy (rev-1) and TheApprovedShape
+    /// (rev-3), both of which own the other side of this rule and neither of which may move.
+    ///
+    /// Reading a member's own last entry as its task there would trade one wrong answer for another:
+    /// a reviewer's last word is what it SAID, not what it was asked to do.
+    /// </summary>
+    [Fact]
+    public void AnImplementersRow_WithNoBrief_StillSaysStandingBy()
+    {
+        IReadOnlyList<IChannelEntry> entries =
+        [
+            Entry(1, ChannelAuthors.Implementer, "imp-1 online", "2026-08-12 12:00"),
+            Entry(2, ChannelAuthors.Implementer, "poked at the parser while waiting", "2026-08-12 12:26"),
+        ];
+
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [Member("imp-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
+
+        Assert.Contains("• imp-1 · standing by", line);
+        Assert.DoesNotContain("poked at the parser", line);
+    }
+
+    /// <summary>
+    /// The other half of the solo's row: when the state really IS idle, "standing by" is still what it
+    /// should say. Without this, the fix above could be "never say standing by", which would trade
+    /// one wrong answer for another.
+    ///
+    /// The declaration is what makes it idle, and the row is asserted WHOLE: a bare Contains would
+    /// also be satisfied by some other member's row, and this line has only one member on it.
+    /// </summary>
+    [Fact]
+    public void ASolosRow_WithNothingDeclared_StillSaysStandingBy()
+    {
+        IReadOnlyList<IChannelEntry> entries =
+        [
+            Entry(1, ChannelAuthors.Solo, "STANDING BY", "2026-08-12 12:00"),
+        ];
+
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [Member("solo-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
+
+        Assert.Equal("• solo-1 · standing by", line.Split('\n')[1]);
     }
 
     static IPlanProgress Progress(int done, int total)

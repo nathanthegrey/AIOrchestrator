@@ -70,10 +70,14 @@ public static class TopicCommandButtons
     /// </summary>
     static readonly (string Command, string Label)[] BUTTONS =
     [
+        // /screen LEADS, on the owner's call: "the /screen command is crucial, it should be among
+        // the main commands always available" (2026-08-24). It was already in all three surfaces —
+        // this bar, the reply keyboard and the "/" menu — but it sat last, in the second row of a
+        // two-by-two, which is the least reachable of the four on a phone.
+        ("screen", "📸 /screen"),
         ("show",   "👁 /show"),
         ("merge",  "🔀 /merge"),
         ("test",   "🧪 /test"),
-        ("screen", "📸 /screen"),
     ];
 
     /// <summary>The commands offered, in display order: "show", "merge", "test", "screen".</summary>

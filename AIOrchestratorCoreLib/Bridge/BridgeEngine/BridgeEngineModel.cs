@@ -6905,8 +6905,12 @@ internal sealed class BridgeEngineModel(
             // own parse would be a third reading of one file per tick.
             await Tell_LedgerMovement_Async(session, ledger, cancellationToken);
 
+            // NO TITLE ANY MORE. The line used to open with the orchestration's name and the owner
+            // had it removed on 2026-08-24: "the name of the topic is not needed, I already know
+            // where I am, and if I don't I have it at the top of the screen." It opens with PULSE
+            // instead, which is the part that was actually missing — telling this constantly-edited
+            // line apart from the half-hourly STATUS digest.
             var plan = Telegram.TopicStatusLine_Planner.Plan(
-                session.DisplayName ?? session.OrchId,
                 ledger,
                 members,
                 DateTime.Now,
@@ -7399,7 +7403,7 @@ internal sealed class BridgeEngineModel(
                 ? $" · {Formatting.ContextUsage_Formatter.Describe_OrNull(memberContext)}"
                 : "";
 
-            memberLines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
+            memberLines.Add($"- {member.MemberId}: {MemberState_Descriptor.Describe_ForOwner(declared, workingNow, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
         }
 
         // The header carries the ledger counts, so "who is doing what" and "how far along are we"
@@ -7441,20 +7445,19 @@ internal sealed class BridgeEngineModel(
         return SessionActivity_Probe.Is_MidTurn(usageFilePath) ? "working now" : idleText;
     }
 
-    static string Describe_DeclaredState(MemberStates declared, bool workingNow, bool ownerOwesReply)
-    {
-        // ONE copy, in a project the test suite compiles. This switch used to be a duplicate of the
-        // card builder's — item 12 — and the pair is why adding a state left three consumers
-        // throwing on the happy path with 484 tests green.
-        var declaredText = MemberState_Descriptor.Describe(declared);
-
-        if (workingNow)
-            return $"working now (channel says: {declaredText})";
-
-        // The third state the owner asked for: a session that has spoken and is waiting on them is
-        // not idle. Same question the stall alert asks, so the two cannot disagree.
-        return ownerOwesReply ? MemberState_Descriptor.WAITING_ON_OWNER : declaredText;
-    }
+    // Describe_DeclaredState USED TO LIVE HERE and it is gone, not moved. It took the same three
+    // arguments as MemberState_Descriptor.Describe_ForOwner and answered the same question, so it
+    // was item 12's second copy wearing the comment that warns about second copies — and the copies
+    // had already drifted where it mattered most. Its working-now branch printed
+    // "working now (channel says: {declared})", which for an open writing window interpolated the
+    // descriptor's OTHER wording, "idle — writing window left open", producing the single line the
+    // owner sent back on 2026-08-24:
+    //
+    //     solo-1: working now (channel says: idle — writing window left open)
+    //
+    // One session, one instant, both words. Describe_ForOwner has always resolved that pair
+    // correctly — "working now (writing window open)" — because it treats working-now as outranking
+    // the declaration instead of quoting the declaration verbatim beside it.
 
     /// <summary>
     /// /clear — empties the TELEGRAM view, never the sessions: no terminal is touched, no channel

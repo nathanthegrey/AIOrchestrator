@@ -106,9 +106,12 @@ public class TopicStatusLinePlannerTests
     [Fact]
     public void TheMessageIdDecidesWhatNothingToSayMeans()
     {
-        // Nothing to report at all: silence with no message, the bare title with one.
+        // Nothing to report at all: silence with no message, the bare LEAD WORD with one. It
+        // used to be the bare topic title; the topic name left the line on 2026-08-24 and the
+        // opening field is now the literal `PULSE`, which is what tells this constantly-edited
+        // message apart from the half-hourly digest that opens with STATUS.
         Assert.Equal("", Plan(members: []).Text);
-        Assert.Equal("orch", Plan(members: [], existingMessageId: 4242, lastWrittenText: "old row").Text);
+        Assert.Equal("PULSE", Plan(members: [], existingMessageId: 4242, lastWrittenText: "old row").Text);
     }
 
     /// <summary>
@@ -474,20 +477,27 @@ public class TopicStatusLinePlannerTests
     /// engine a delete followed by a sendMessage with an empty body, which Telegram rejects outright.
     /// The topic would lose the status line it had and get a 400 in exchange.
     ///
-    /// Reached through a topic whose display name is blank with nothing else to report: the builder's
-    /// bare-title fallback is then a bare NOTHING.
+    /// THE ROUTE TO AN EMPTY REPOST IS NOW CLOSED BY CONSTRUCTION, which is what this pins instead
+    /// of the old blank-title case. It used to be reached through a topic whose display name was
+    /// blank with nothing else to report — the bare-title fallback was then a bare NOTHING. Since
+    /// 2026-08-24 the opening field is the LITERAL word `PULSE` rather than the topic's name, and a
+    /// repost needs an existing message id to be due at all, which is the same id that makes the
+    /// builder fall back to that word. So the text handed to a repost can no longer be empty, and
+    /// the emptiness guard in the planner is the belt behind these braces rather than the only one.
+    ///
+    /// Asserted on the TEXT as well as the action: "it reposts" alone would still be true of a
+    /// planner that had gone back to sending nothing, and the body is the half Telegram rejects.
     /// </summary>
     [Fact]
-    public void ARepostIsNotAttemptedWithNothingToSend()
+    public void ARepostAlwaysHasSomethingToSend()
     {
         var plan = Plan(
-            title: "",
             members: [],
             existingMessageId: STATUS_ID,
             newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2)));
 
-        Assert.Equal("", plan.Text);
-        Assert.Equal(TopicStatusActions.None, plan.Action);
+        Assert.Equal("PULSE", plan.Text);
+        Assert.Equal(TopicStatusActions.Repost, plan.Action);
     }
 
     /// <summary>
@@ -566,11 +576,9 @@ public class TopicStatusLinePlannerTests
         TelegramDeliveryModes mode = TelegramDeliveryModes.Normal,
         DateTime? lastFailedAttemptAt = null,
         TopicStatusLine_Planner.TopicNewestMessage? newestTopicMessage = null,
-        string title = "orch",
         bool repostIsImpossible = false)
     {
         return TopicStatusLine_Planner.Plan(
-            title,
             progress,
             members ?? [Member("imp-1", "fix the parser", "2026-08-12 14:50")],
             NOW,
