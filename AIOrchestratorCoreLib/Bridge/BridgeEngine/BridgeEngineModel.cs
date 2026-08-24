@@ -5818,11 +5818,21 @@ internal sealed class BridgeEngineModel(
             Raise_OrchestrationActivity(session.OrchId);
 
             // BEFORE the new mode takes hold on the next tick, so the confirmation itself gets through.
+            //
+            // THE "CLEARED" REPLY MUST NOT LEAD WITH THE TICK. Both replies used to open with ✅, so
+            // on a phone the message undoing the mark looked exactly like the message making it —
+            // and /done is a SILENT TOGGLE, so a second press is the natural thing to do when the
+            // topic list has not visibly changed yet. The owner did precisely that on 2026-08-24,
+            // 17 seconds apart, and reported the tick "not being added" when it had been added and
+            // then removed. It had happened twice before on other topics, the same way.
+            //
+            // So the off reply says the state it leaves behind, in words, with a glyph that cannot be
+            // mistaken for success; and the on reply now says that repeating the command undoes it.
             await Send_DirectReply_BestEffort_Async(
                 client, messageThreadId,
                 turningOn
-                    ? "✅ marked finished — muted, and the topic stays open. Text here whenever you want it back; that alone wakes it up."
-                    : "✅ cleared — this topic is back to normal.",
+                    ? "✅ marked finished — muted, and the topic stays open. Text here whenever you want it back; that alone wakes it up. Sending /done again clears the mark."
+                    : "↩️ NOT finished any more — the tick is off this topic and it is back to normal.",
                 cancellationToken);
 
             await Sync_TopicNames_BestEffort_Async(cancellationToken);

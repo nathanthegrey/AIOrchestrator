@@ -336,10 +336,22 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
             return string.Join(",", _editedMessageIds);
     }
 
+    readonly List<string> _sentTexts = [];
+
+    public IReadOnlyList<string> SentTexts()
+    {
+        lock (_lock)
+            return [.. _sentTexts];
+    }
+
     public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
     {
         lock (_lock)
+        {
+            _sentTexts.Add(text);
+
             return Task.FromResult<long?>(_nextMessageId++);
+        }
     }
 
     public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
