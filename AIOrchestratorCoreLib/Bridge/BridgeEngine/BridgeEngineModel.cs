@@ -3709,8 +3709,15 @@ internal sealed class BridgeEngineModel(
 
                 if (readiness == Sessions.PromotionReadiness.AlreadyACrew || readiness == Sessions.PromotionReadiness.NothingToPromote)
                 {
+                    // AGENT, NOT OWNER. Every one of these four notices is addressed to the SOLO —
+                    // the method's own summary says "TWO REFUSALS BEFORE THE OWNER IS EVER INVOLVED,
+                    // and both go to the SOLO rather than to them", and solo.md promises the same:
+                    // "it refuses it to YOU rather than bothering the owner with it". The audience
+                    // argument said Owner, so every refusal, and the HELD notice, put a push on the
+                    // owner's phone about a conversation between the app and a session — including
+                    // one whose whole text is "The owner has NOT been asked".
                     Append_OrchestrationAppEntry(
-                        request.OrchId, AppEntryAudiences.Owner,
+                        request.OrchId, AppEntryAudiences.Agent,
                         readiness == Sessions.PromotionReadiness.AlreadyACrew
                             ? "promotion REFUSED — this orchestration already has a supervisor"
                             : "promotion REFUSED — there is no solo session here to promote",
@@ -3725,7 +3732,7 @@ internal sealed class BridgeEngineModel(
                 if (!HandoverEntry_Detector.Has_HandoverEntry(Read_OwnerChannelEntries(request.OrchId)))
                 {
                     Append_OrchestrationAppEntry(
-                        request.OrchId, AppEntryAudiences.Owner,
+                        request.OrchId, AppEntryAudiences.Agent,
                         "promotion REFUSED — file your HANDOVER entry first, then ask again",
                         "Your session ENDS when a promotion happens, and everything you know that is not in this channel dies with it. The supervisor that replaces you inherits this file and nothing else.\n\n"
                         + $"So append an entry whose SUBJECT carries `{HandoverEntry_Detector.HANDOVER_MARKER}` — where the work really stands, what you tried that did not work, what is half-done and in which files, and the traps — and then drop the request again.\n\n"
@@ -3740,7 +3747,7 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Info(request.OrchId, $"promote-orchestration held for the owner's confirmation ({parkedPath})");
 
                 Append_OrchestrationAppEntry(
-                    request.OrchId, AppEntryAudiences.Owner,
+                    request.OrchId, AppEntryAudiences.Agent,
                     "promotion HELD — the owner confirms this with a tap",
                     $"Nothing has changed yet and you are still the session here. The owner has been asked.\n\n"
                     + $"Reason relayed: {request.Reason}\n\n"
@@ -3752,7 +3759,7 @@ internal sealed class BridgeEngineModel(
                 _log.Log_Error(request.OrchId, "promote-orchestration could not be held for confirmation — NOT promoted", ex);
 
                 Append_OrchestrationAppEntry(
-                    request.OrchId, AppEntryAudiences.Owner,
+                    request.OrchId, AppEntryAudiences.Agent,
                     "promotion NOT held — nothing was changed",
                     $"Your promotion request could not be held for the owner's confirmation ({ex.Message}), so it was not acted on and you are still the session here. Ask again if it is still wanted.");
 
@@ -4186,8 +4193,36 @@ internal sealed class BridgeEngineModel(
 
         // No way to ask means no way to confirm, and this guard fails CLOSED: it keeps waiting and
         // eventually lapses. Nothing is closed on a machine that cannot reach the owner.
+        //
+        // BUT IT SAYS SO, ONCE. This returned in total silence — no log line, no channel entry —
+        // every tick until the request lapsed twelve hours later. Decision 21: a component that
+        // cannot evaluate its predicate SAYS SO rather than granting silent consent. It is also the
+        // likeliest explanation for the owner's *"it was reasoning for like 5 minutes and then
+        // nothing happened"*: a basic orchestration only gets a Telegram topic on its first MIRRORED
+        // entry, so a solo whose entries were all agent-tagged or suppressed sits here for ever with
+        // its request parked and nobody told.
         if (_telegramClient == null || session.TelegramTopicId == null)
+        {
+            if (_confirmationsUnaskable.Add(session.OrchId))
+            {
+                _log.Log_Warning(session.OrchId, _telegramClient == null
+                    ? "A parked request cannot be put to the owner — Telegram is not configured. It waits, and will lapse."
+                    : "A parked request cannot be put to the owner — this orchestration has no Telegram topic yet. It waits, and will lapse.");
+
+                Append_OrchestrationAppEntry(
+                    session.OrchId, AppEntryAudiences.Agent,
+                    "your parked request cannot be put to the owner yet",
+                    _telegramClient == null
+                        ? "Telegram is not configured on this machine, so the confirmation cannot be asked for. Your request is HELD and will lapse. Ask the owner directly."
+                        : "This orchestration has no Telegram topic yet, so the confirmation cannot be asked for — a topic appears on the first entry of yours that reaches the owner's phone. Your request is HELD until then and lapses after that.");
+            }
+
             return;
+        }
+
+        // Askable again — re-arm the notice, so a later spell of the same fault is reported rather
+        // than swallowed as already-said.
+        _confirmationsUnaskable.Remove(session.OrchId);
 
         // What is being ended mid-flight, named at the moment they decide. It does NOT block the
         // close: a ledger that can refuse to let an orchestration end is the tail wagging the dog,
@@ -6098,6 +6133,14 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>Orchestrations where one `/switch` has been seen and is waiting for its repeat.</summary>
     readonly Dictionary<string, DateTime> _switchArmedUtc = [];
+
+    /// <summary>
+    /// Orchestrations already told that their parked request cannot be put to the owner. A set rather
+    /// than a flag per request because the fault is a property of the ORCHESTRATION (no topic, or no
+    /// Telegram at all), and the notice must be said once rather than every two seconds until it
+    /// lapses.
+    /// </summary>
+    readonly HashSet<string> _confirmationsUnaskable = [];
 
     /// <summary>
     /// ONE COMMAND, BOTH DIRECTIONS — the owner's ask, 2026-08-25: *"there needs to be a command that

@@ -445,8 +445,17 @@ Your session ends, and a supervisor starts on THIS channel with your whole histo
 An implementer spawns empty beside it, and the supervisor briefs it from what it reads here. The
 Telegram topic does not change — the owner keeps reading the same thread.
 
-**Treat it as one-way.** There is no demotion: if a crew turns out to be too much, the answer is to
-close the orchestration and start a basic one, which loses this channel.
+**It is no longer one-way** (2026-08-25). If a crew turns out to be too much, the owner sends
+`/switch` in the topic and it comes back to a single session on this same channel — the supervisor
+and every member end, a solo takes over, and nothing moves. Say so if a crew is proving to be more
+apparatus than the work needs; it is their call and it costs them one command, not a lost channel.
+
+**`/switch` is THEIRS, not yours.** It is the owner's bidirectional command — one verb, direction
+read off the current shape, confirmed by sending it twice. Your route is still the
+`promote-orchestration` request above. What you should know is that it exists and that it demands
+the same thing of you either way: **a `HANDOVER` entry before anything switches.** If the owner
+sends `/switch` and you have not written one, the app will tell you to, in this channel, and nothing
+happens until you do.
 
 
 ## RUN TO THE END — the default is never to stop (owner directive, 2026-08-20)

@@ -258,7 +258,7 @@ public static class CloseConfirmationPrompt_Builder
             + $"Reason: {request.Reason}\n\n"
             + "This spends a supervisor AND an implementer from now on, instead of the one session you have. "
             + "That session ends — but this conversation, this topic and everything already said carry over to the supervisor untouched. "
-            + "Treat it as one-way: there is no going back to a single session without closing the orchestration. Nothing happens unless you tap.";
+            + "You can send /switch in this topic later to take it back to one session. Nothing happens unless you tap.";
     }
 
     /// <summary>
