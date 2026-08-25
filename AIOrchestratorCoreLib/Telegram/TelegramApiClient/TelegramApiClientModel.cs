@@ -364,6 +364,30 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("setMyCommands", Build_CommandsPayload(commands, "all_chat_administrators"), cancellationToken);
     }
 
+    /// <summary>
+    /// THE `/` BUTTON IS A SEPARATE FACT FROM THE COMMANDS, and that is what made it intermittent.
+    ///
+    /// setMyCommands says WHAT the menu contains; the chat's menu button says WHETHER the client
+    /// offers one. Left unset it is `default`, and each client then decides for itself — so the
+    /// owner saw the `/` in some topics and not others, with the command list correct in all of
+    /// them. Their report, 2026-08-25, of a screenshot pointing straight at it: *"This is not always
+    /// present. Only sometimes. It's very convenient, can't you make it ALWAYS present?"*
+    ///
+    /// Set WITHOUT a chat_id on purpose: that writes the account-wide default for this bot, so it
+    /// covers the supergroup, every topic inside it, and any private chat, and it does not have to
+    /// be re-applied per topic as new orchestrations create them. A per-chat call would fix the
+    /// topics that exist today and leave tomorrow's back on the client default.
+    /// </summary>
+    public async Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["menu_button"] = new JsonObject { ["type"] = "commands" },
+        };
+
+        await Post_Async("setChatMenuButton", payload, cancellationToken);
+    }
+
     static JsonObject Build_CommandsPayload(IReadOnlyList<(string Command, string Description)> commands, string? scopeType)
     {
         var commandsArray = new JsonArray();

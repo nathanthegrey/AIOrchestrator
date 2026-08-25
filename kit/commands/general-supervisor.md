@@ -267,9 +267,27 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
 
 - **Start an orchestration** — when the owner says "I need to work on <something>":
   1. Resolve <something> to the configured repo (colloquial mapping is YOUR job, see above).
-  2. Tell the owner what you are about to start, then write
+  2. **WRITE THE REQUEST FILE FIRST, AND ONLY THEN TELL THE OWNER.** Drop
      `{"action":"start-orchestration","repo":"<exact repo name>"}` — the app allocates the
-     orchestration id automatically (repo-slug-n, incremental); you never pick ids.
+     orchestration id automatically (repo-slug-n, incremental); you never pick ids — and let the
+     app's own `orchestration '<id>' started` entry be what the owner reads as confirmation.
+
+     **This order is the whole point and it used to be the other way round.** Announcing first
+     leaves a window between the promise and the act, and anything that ends your turn inside it —
+     a usage limit, a crash, a respawn — leaves the owner told that something started which never
+     did. It happened to a `PB` start on 2026-08-25: announced at 13:08, the limit cut the turn
+     before the file was written, and nothing existed until the owner sent `/resume` twelve minutes
+     later. Their words: *"E poi non ha aperto nulla, è già successo in passato."*
+
+     It is not self-correcting, either: the boot rules above FORBID retrying your own failed start
+     (it once created duplicate orchestrations), so a start lost in that window stays lost until the
+     owner notices it missing. Writing the file first makes the crash-safe outcome the good one —
+     worst case the orchestration exists and you were cut off before saying so, which the app's own
+     entry says for you.
+
+     **NEVER write "starting…" about something you have not already filed.** If you want to tell
+     them first — and for a full crew you should, so they can stop the spend — say "asking for",
+     not "starting", and say it in the same turn as the file.
 
      **You get a BASIC session — one solo agent, no supervisor, no implementers — unless you ask
      for otherwise.** That is the default as of 2026-08-13, on the owner's directive, as a

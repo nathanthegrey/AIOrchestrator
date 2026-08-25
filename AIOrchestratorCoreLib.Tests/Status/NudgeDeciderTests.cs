@@ -192,13 +192,22 @@ public class NudgeDeciderTests
     /// The app's own nudge still counts as inbound. Deliberate: orphan-recovery is the only proof a
     /// monitor is dead, and it can only run on a member that has already been nudged. Pinned so that
     /// a future "stop nudging about nudges" change has to face the escalation path it would break.
+    ///
+    /// IT CAUGHT ONE, 2026-08-25 — the change that stopped the app's half-hourly STATUS counting as
+    /// unanswered traffic. Skipping ALL app entries kills that loop and kills escalation with it.
+    ///
+    /// THE FIXTURE NOW CARRIES THE TAG, because production does and this did not. `Build` synthesises
+    /// a subject, so the nudge here had no `[agent]` prefix while every real one is written through
+    /// `Append_AppEntry(..., AppEntryAudiences.Agent, ...)`, which prepends it. The tag is what now
+    /// separates an entry written TO the session from one written to the OWNER, so a fixture without
+    /// it was testing a shape the app never appends.
     /// </summary>
     [Fact]
     public void AnAppEntryStillCountsAsInbound_BecauseEscalationDependsOnIt()
     {
-        var entries = Build(
-            (ChannelAuthors.Implementer, "report filed"),
-            (ChannelAuthors.App, "unread traffic — you have not answered"));
+        var entries = BuildTitled(
+            (ChannelAuthors.Implementer, "report filed", "report filed"),
+            (ChannelAuthors.App, "[agent] unread traffic — you have not answered", "Entry [1] has been waiting."));
 
         Assert.True(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
     }
@@ -865,5 +874,94 @@ public class NudgeDeciderTests
         }
 
         return built;
+    }
+
+    /// <summary>
+    /// THE APP IS NOT INBOUND TRAFFIC — the loop the owner asked to have killed, 2026-08-25.
+    ///
+    /// The predicate read the LAST entry, so the app's own half-hourly STATUS counted as something
+    /// the member had failed to answer. A session that had answered everything and gone correctly
+    /// quiet got nudged; the nudge is itself an app entry; the next STATUS re-armed it. One wake
+    /// every thirty minutes for as long as the orchestration stayed open, each a full context reload
+    /// spent to learn nothing had happened — and the nudge's own "reply STANDING BY once and these
+    /// stop" could not be true. This session proved that five times in one afternoon.
+    /// </summary>
+    [Fact]
+    public void TheAppsOwnStatus_IsNotTrafficTheMemberOwesAnAnswerTo()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Solo, "window closed", "WRITING WINDOW CLOSED — 1634 green, branch ready"),
+            (ChannelAuthors.App, "STATUS", "AI-Orch: 18/19 done"));
+
+        Assert.False(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
+    }
+
+    /// <summary>
+    /// THE NUDGE ITSELF STILL COUNTS, and this case exists because the obvious fix breaks it.
+    ///
+    /// Skipping ALL app entries kills the loop and also kills ESCALATION: orphan recovery is the only
+    /// proof a monitor is dead, and it can only run on a member that has already been nudged. The
+    /// gate sits above that check, so a member whose nudge stopped counting would be nudged once and
+    /// then never respawned. `AnAppEntryStillCountsAsInbound_BecauseEscalationDependsOnIt` is the
+    /// tripwire that caught exactly that during this change.
+    ///
+    /// So the tag decides: `[agent]`-tagged app entries are written TO the session and count;
+    /// owner-facing ones have already reached the owner's phone and do not.
+    /// </summary>
+    [Fact]
+    public void TheAgentTaggedNudge_StillCounts_SoEscalationSurvives()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Solo, "standing by", "STANDING BY — nothing running"),
+            (ChannelAuthors.App, "STATUS", "AI-Orch: 18/19 done"),
+            (ChannelAuthors.App, "[agent] unread traffic — you have not answered", "Entry [2] has been waiting."));
+
+        Assert.True(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
+    }
+
+    /// <summary>
+    /// REAL TRAFFIC STILL COUNTS THROUGH APP NOISE. The supervisor briefs, the app then writes a
+    /// status on its own schedule, and the member has still not answered the brief — skipping app
+    /// entries must not become "skip everything above them".
+    /// </summary>
+    [Fact]
+    public void ASupervisorsBriefBuriedUnderAppEntries_StillCounts()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Implementer, "standing by", "STANDING BY — waiting for a brief"),
+            (ChannelAuthors.Supervisor, "new task", "fix the ledger denominator"),
+            (ChannelAuthors.App, "STATUS", "AI-Orch: 18/19 done"));
+
+        Assert.True(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
+    }
+
+    /// <summary>
+    /// THE OWNER STILL COUNTS, obviously, and this is the case that would hurt most if the fix went
+    /// too far: an owner message followed by a status must leave the session owing a reply.
+    /// </summary>
+    [Fact]
+    public void AnOwnerMessageUnderAStatus_StillCounts()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.Solo, "done", "done, branch ready"),
+            (ChannelAuthors.Owner, "via Telegram", "can you also check the splash timing"),
+            (ChannelAuthors.App, "STATUS", "AI-Orch: 18/19 done"));
+
+        Assert.True(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
+    }
+
+    /// <summary>
+    /// AN APP-ONLY CHANNEL STILL EARNS ITS ONE NUDGE. A `/resume` broadcast is an app entry a
+    /// respawned member is genuinely supposed to act on and may be the only thing telling it to
+    /// start — the 2026-08-13 ruling. NO_CONVERSATION_YET is what stops that one becoming forever,
+    /// and this fix must not quietly take the wake away instead.
+    /// </summary>
+    [Fact]
+    public void AChannelWithNothingButAppEntries_StillEarnsItsNudge()
+    {
+        var entries = BuildTitled(
+            (ChannelAuthors.App, "[agent] GO AHEAD — resume", "The owner sent /resume."));
+
+        Assert.True(Nudge_Decider.Has_UnansweredInboundTraffic(entries));
     }
 }

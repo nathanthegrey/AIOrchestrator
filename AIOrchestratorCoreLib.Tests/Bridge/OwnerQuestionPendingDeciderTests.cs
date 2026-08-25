@@ -47,13 +47,85 @@ public class OwnerQuestionPendingDeciderTests
         ]));
     }
 
-    /// <summary>Asked in prose, without the markers — still a question the owner has to answer.</summary>
+    /// <summary>
+    /// PROSE NO LONGER LIGHTS THE GLYPH — this case is inverted from what it used to assert.
+    ///
+    /// The owner's ruling, 2026-08-25: *"The question mark in the topic name should be assigned when
+    /// there's an intention from the sup/solo to ask a question. It's not that it should be
+    /// interpreted indirectly based on the presence of a ? here and there that could mean anything."*
+    ///
+    /// THE TRADE IS REAL AND WORTH IT. A session that asks in prose and never writes `QUESTION:` now
+    /// gets no glyph — but the question still reaches the owner's PHONE, because
+    /// OwnerPush_Policy.Asks_InProse is unchanged and the push is deliberately biased the other way.
+    /// What is lost is a mark on the topic list; what is bought is that the mark never lies.
+    /// </summary>
     [Fact]
-    public void AProseQuestionIsAQuestion()
+    public void AProseQuestion_DoesNotLightTheGlyph_ItIsNotDeclared()
+    {
+        Assert.False(OwnerQuestionPending_Decider.Decide(
+        [
+            Entry(1, ChannelAuthors.Supervisor, "should I drop the legacy path while I am in here?"),
+        ]));
+    }
+
+    /// <summary>
+    /// THE OWNER'S OWN CASE, and the one that made this unavoidable. `supervisor.md` tells a
+    /// supervisor to open its reply by quoting them (`Owner: &lt;their text&gt;`), so the instant the owner
+    /// asked anything, the supervisor's next entry carried a line ending in `?` and lit the glyph.
+    /// Their words: *"Even when I'm the one asking the question"*.
+    /// </summary>
+    [Fact]
+    public void TheSupervisorQuotingTheOwnersQuestion_DoesNotLightTheGlyph()
+    {
+        Assert.False(OwnerQuestionPending_Decider.Decide(
+        [
+            Entry(1, ChannelAuthors.Supervisor, "Owner: can you also check the splash timing?\nOn it — reading the launch path now."),
+        ]));
+    }
+
+    /// <summary>
+    /// BLOCKED ON OWNER is a declaration too, and the strongest one — it says the work has STOPPED.
+    /// It lights the glyph without needing a `QUESTION:` line beside it.
+    /// </summary>
+    [Fact]
+    public void BlockedOnOwner_LightsTheGlyph_WithoutAQuestionMarker()
     {
         Assert.True(OwnerQuestionPending_Decider.Decide(
         [
-            Entry(1, ChannelAuthors.Supervisor, "should I drop the legacy path while I am in here?"),
+            Entry(1, ChannelAuthors.Supervisor, "BLOCKED ON OWNER: I need the API token before I can go on."),
+        ]));
+    }
+
+    /// <summary>
+    /// THE OTHER HALF OF THE OWNER'S ASK: *"when they receive it, regardless of how, they modify the
+    /// status as 'info received' one more time in some unequivocal way."*
+    ///
+    /// An answer does not always arrive as a `FROM owner` entry — a tapped button, a reply in the
+    /// terminal, an answer given in another topic — so the session can clear the glyph by SAYING so,
+    /// instead of the glyph outliving a question that is already settled.
+    /// </summary>
+    [Fact]
+    public void AnAnsweredMarker_ClearsTheGlyph_EvenWithNoOwnerEntry()
+    {
+        Assert.False(OwnerQuestionPending_Decider.Decide(
+        [
+            Entry(1, ChannelAuthors.Solo, "QUESTION: merge now or hold?\nOPTION: merge\nOPTION: hold"),
+            Entry(2, ChannelAuthors.Solo, "ANSWERED — they tapped merge; landing it now."),
+        ]));
+    }
+
+    /// <summary>
+    /// And the marker is read the way every marker here is — a whole token in the SUBJECT or at the
+    /// START of a body line. Discussing the word mid-sentence must not clear a live question, which
+    /// is the same class of mistake the `?` inference was.
+    /// </summary>
+    [Fact]
+    public void TheWordAnsweredMidSentence_DoesNotClearTheGlyph()
+    {
+        Assert.True(OwnerQuestionPending_Decider.Decide(
+        [
+            Entry(1, ChannelAuthors.Solo, "QUESTION: merge now or hold?\nOPTION: merge\nOPTION: hold"),
+            Entry(2, ChannelAuthors.Solo, "still waiting — nothing has been answered yet on my side."),
         ]));
     }
 
@@ -162,13 +234,14 @@ public class OwnerQuestionPendingDeciderTests
     }
 
     /// <summary>
-    /// The boundary from the other side: the SAME entry with a real question appended still lights
-    /// the glyph, so tightening the reader did not cost the case it exists for.
+    /// The same entry, now correctly SILENT: ledger prose plus a prose question is still nothing the
+    /// session DECLARED. Under the old reader this lit the glyph on the trailing `?` alone. If it
+    /// genuinely wants an answer it writes `QUESTION:`, which the case above pins.
     /// </summary>
     [Fact]
-    public void ARealQuestionAfterProseAboutTheMarkerStillLightsTheGlyph()
+    public void ProseAboutTheLedgerMarker_StillDoesNotLightTheGlyph()
     {
-        Assert.True(OwnerQuestionPending_Decider.Decide(
+        Assert.False(OwnerQuestionPending_Decider.Decide(
         [
             Entry(1, ChannelAuthors.Solo,
                 "Ledger line sits at [?] until they answer.\nShould I take it off your plate?"),

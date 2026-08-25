@@ -97,6 +97,14 @@ public class NudgeAppWriteDelayProbeTests : IDisposable
     /// <summary>
     /// Twenty minutes of owed answer, then a FROM app entry a minute ago — and the file stamp set to
     /// now, as the app's write would leave it.
+    ///
+    /// THE `[agent]` TAG IS PART OF THE FIXTURE because it is part of what the app writes: the resume
+    /// broadcast goes out through `Append_AppEntry(..., AppEntryAudiences.Agent, ...)` at both of its
+    /// call sites, which prepends it, and every resume entry in the field carries it. Without it this
+    /// fixture was a shape the app never appends — and once the nudge gate started distinguishing
+    /// entries written TO a session from ones written to the OWNER (2026-08-25), an untagged resume
+    /// read as owner-facing noise and the nudge this case exists to demand stopped firing. The clock
+    /// property under test is unchanged; only the fixture's faithfulness is.
     /// </summary>
     string Start_WithStalledMember_ThenAnAppWrite()
     {
@@ -106,7 +114,7 @@ public class NudgeAppWriteDelayProbeTests : IDisposable
         return Start_WithChannel(
             $"## [1] FROM supervisor — {stalled} — brief\nimplement the parser\n\n"
             + $"## [2] FROM implementer — {stalled} — WRITING WINDOW OPEN — Parser.cs\nstarting now\n\n"
-            + $"## [3] FROM app — {justNow} — GO AHEAD — resume\npick up where you left off\n");
+            + $"## [3] FROM app — {justNow} — [agent] GO AHEAD — resume\npick up where you left off\n");
     }
 
     string Start_WithMemberWhoJustSpoke()
