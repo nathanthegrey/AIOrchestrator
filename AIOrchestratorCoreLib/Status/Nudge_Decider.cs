@@ -368,7 +368,40 @@ public static class Nudge_Decider
         if (entries.Count == 0)
             return false;
 
-        return !ChannelAuthor_Kinds.Is_Member(entries[entries.Count - 1].Author);
+        // AN APP ENTRY THE OWNER IS READING IS NOT TRAFFIC THE MEMBER OWES AN ANSWER TO.
+        //
+        // This read the LAST entry and asked only "not a member?", so the half-hourly STATUS — which
+        // is addressed to the OWNER and reaches their phone — counted as something the member had
+        // failed to answer. A session that had answered everything and gone correctly quiet was
+        // nudged; the nudge is itself an app entry; the next STATUS re-armed it. One wake every
+        // thirty minutes for as long as the orchestration stayed open, each a full context reload
+        // spent to learn nothing had happened, and the nudge's own "reply STANDING BY once and these
+        // stop" could not be true. This session proved that five times in one afternoon before the
+        // owner asked for it (2026-08-25).
+        //
+        // THE AGENT TAG IS THE DISCRIMINATOR, and it already exists for exactly this distinction: an
+        // `[agent]`-tagged app entry is written TO the session and is never mirrored, while an
+        // untagged one is owner-facing and has already reached their phone. Skipping only the
+        // owner-facing ones is what keeps the ESCALATION path alive — orphan recovery is the only
+        // proof a monitor is dead and can only run on a member that has already been nudged, so the
+        // app's own nudge must go on counting. `AnAppEntryStillCountsAsInbound_BecauseEscalationDependsOnIt`
+        // is the case that says so, and it was left as a tripwire for precisely this change.
+        //
+        // WALKING BACK RATHER THAN TESTING THE LAST ENTRY: a brief buried under a status is still
+        // unanswered, so the scan skips owner-facing app noise and stops at the first thing that is
+        // either a real participant or an entry addressed to this member.
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            var entry = entries[index];
+
+            if (entry.Author == ChannelAuthors.App && !AppEntryAudience_Tag.Is_AgentTagged(entry.Subject))
+                continue;
+
+            return !ChannelAuthor_Kinds.Is_Member(entry.Author);
+        }
+
+        // Nothing but owner-facing app entries. Nobody has asked this member anything.
+        return false;
     }
 
     /// <summary>
