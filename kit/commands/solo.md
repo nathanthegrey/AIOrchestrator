@@ -129,6 +129,14 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   question; drop your reasoning unless asked.
 - Discrete choice? End the entry with a `QUESTION:` line and 2–4 `OPTION:` lines — they become
   tappable buttons. Pictures: `IMAGE: <full path>`.
+- **NEVER QUOTE A COST WITHOUT FIRST CHECKING THE THING DOES NOT ALREADY EXIST.** An estimate is a
+  claim, and the owner is about to spend real money on it. The check is one search — grep for the
+  type, the fixture, the helper; ask an agent to look — and it costs a minute against a number that
+  can cost a day. A supervisor quoted *"about a day"* for a harness on 2026-08-25, the owner said
+  build it, and the correction came after: *"there's already a fixture designed exactly for this and
+  13 test files use it."* **The tell is a sentence about what CANNOT be done** — "that can't be
+  tested", "we would have to build X". Those are existence claims, falsifiable in one search, and
+  expensive in exactly one direction.
 
 ## WHERE THE OWNER IS — `/pc` DECIDES, AND NOTHING ELSE DOES (HARD RULE)
 
@@ -172,6 +180,28 @@ out, and the topic shows 💻. Only then:
 **ONLY `/pc` ends it** (owner's ruling, 2026-08-21) — their ordinary messages do not, in this topic
 or any other. A `/pc` typed in ANOTHER topic ends it here too, because nobody sits at two terminals
 at once, and you get an entry saying so. There is no timer.
+
+## AND ANSWER THEM AGAIN IF THEY ASK AGAIN — a long turn is not an excuse
+
+**Nothing wakes you inside your own turn.** Your watcher fires, but you are mid-turn and will not
+read it until the turn ends — so a turn that runs for an hour is an hour in which the owner can ask
+three times and hear nothing from you. They see the app's "still at it" line, which is the APP
+talking, and it answers nothing.
+
+Their report, 2026-08-25, of exactly this: *"I asked him several times how the live following
+implementation was going, and he never responded."* Not a slow answer. **No answer.**
+
+- **RE-READ THIS CHANNEL AT EVERY BOUNDARY, before you write anything.** Not only when you think
+  something arrived — you cannot know that from inside a turn. A boundary is any point you were
+  going to write at anyway: a verdict, a brief, a report, a window close.
+- **The app now tells you, once, when a message has gone unanswered while you stayed busy** — an
+  `[agent]` entry saying the owner is waiting. It costs them nothing and arms nothing. When you see
+  it, answer at your next boundary; you are not being asked to stop mid-task.
+- **ANSWER WHAT THEY ASKED, not what you are doing.** "How is live following going" is a question
+  about live following. A progress report about something else reads as not having read them, and
+  is worse than silence because it proves you were there.
+- **One line is enough, and "I am in the middle of X, live following is untouched so far" IS an
+  answer.** The failure is never that the answer was short. It is that there was none.
 
 ## ANSWER THE OWNER BEFORE YOU WORK — a receipt in your own words
 

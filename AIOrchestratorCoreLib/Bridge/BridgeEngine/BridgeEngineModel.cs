@@ -634,6 +634,13 @@ internal sealed class BridgeEngineModel(
         public bool TurnEndAnnounced;
 
         /// <summary>
+        /// Whether the SESSION has been told the owner is waiting while it stayed mid-turn. One per
+        /// pending reply, and deliberately not <see cref="Nudged"/>: that one arms orphan recovery,
+        /// which would kill a healthy busy session.
+        /// </summary>
+        public bool BusyNoticeWritten;
+
+        /// <summary>
         /// The session has written back, so the owner is no longer UNANSWERED — but the work they
         /// asked for is very likely still running, so the tracker stays alive to catch the turn
         /// ending. Before this the first reply DELETED the tracker, which is why a small job
@@ -10938,6 +10945,38 @@ internal sealed class BridgeEngineModel(
             if (supervisorBusy)
             {
                 await Narrate_BusySupervisor_Async(orchId, pending, supervisorUsageFile, cancellationToken);
+
+                // AND TELL THE SESSION, not only the owner. This `continue` used to skip everything
+                // below it, including the one channel entry that says "the owner is still waiting for
+                // your reply" — so for exactly as long as a session stayed busy, the owner was
+                // narrated at and the session was told NOTHING. A session that works for hours (an
+                // Arb Studio supervisor does) therefore never learned a question had arrived, and the
+                // owner watched "still at it" answer nothing.
+                //
+                // Their report, 2026-08-25: *"I asked him several times how the live following
+                // implementation was going, and he never responded."* Not a slow answer. No answer.
+                //
+                // IT IS NOT THE NUDGE, deliberately. That one sets `Nudged`, which starts the ORPHAN
+                // CLOCK — a member that does not wake within ORPHAN_CONFIRM_MINUTES is killed and
+                // respawned. Arming that against a session whose only offence is being MID-TURN would
+                // destroy healthy work for failing to answer inside a window it was never idle in.
+                // This is a lighter thing: one agent-tagged entry, once, that costs the owner nothing
+                // and arms nothing.
+                //
+                // The append is itself what delivers it: the session's watcher fires on the channel
+                // changing, so the entry is waiting to be read at the end of the turn it is currently
+                // inside — which is the first moment it could act on it anyway.
+                if (!pending.BusyNoticeWritten
+                    && (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds >= OWNER_REPLY_GRACE_SECONDS)
+                {
+                    pending.BusyNoticeWritten = ChannelAppender.Append_AppEntry(
+                        ownerChannel, AppEntryAudiences.Agent,
+                        "the owner is waiting on you — answer them at your next boundary",
+                        "A message from the owner above is still unanswered and you have been mid-turn since it arrived, so nothing has told you until now.\n\n"
+                        + "You are NOT being asked to stop what you are doing. Answer at your next boundary — one line is enough, and saying what you are in the middle of counts as an answer. If they asked something your current work does not touch, answer THAT rather than reporting progress they did not ask for.",
+                        DateTime.Now);
+                }
+
                 continue;
             }
 
