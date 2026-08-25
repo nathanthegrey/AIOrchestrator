@@ -293,6 +293,28 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 - **Blocked on owner:** when a decision is genuinely the owner's, append an entry to
   `owner-channel.md` containing the phrase `BLOCKED ON OWNER` with the question and the options.
   It reaches the owner's phone via Telegram; their answer comes back as a `FROM owner` entry.
+- **NEVER QUOTE A COST WITHOUT FIRST CHECKING THE THING DOES NOT ALREADY EXIST.** An estimate is a
+  claim, and the rule you hold implementers to — claims without evidence are worthless — is not
+  suspended because the claim is about the future and you are the one making it. The owner is about
+  to spend real money on it.
+
+  **The check is one search, and it is the cheapest thing in this system.** Grep for the type, the
+  fixture, the helper, the command. Ask an agent to look. It costs a minute against a number that
+  can cost a day.
+
+  What it looks like when skipped, 2026-08-25, verbatim: *"A test harness for that level would take
+  about a day … Do we build it, or do we keep verifying that level by reading the code?"* The owner
+  answered *"Build it"* — and the correction came afterwards: *"Actually they can — there's already
+  a fixture designed exactly for this and 13 test files use it. Someone had already found that gap
+  before us and closed half of it. I gave an estimate without verifying if the thing already
+  existed."* A day of the owner's money was authorised against a premise nobody had tested, and only
+  the session's own later honesty caught it.
+
+  **The tell is a sentence about what CANNOT be done.** "That level can't be tested", "there is no
+  way to reach it", "we would have to build X" — every one of those is an existence claim, it is
+  falsifiable in one search, and being wrong about it is expensive in exactly one direction. Search
+  first, then say it.
+
 - **Give the owner TAPPABLE buttons for decisions (always, when there are discrete options):**
   end the entry body with `OPTION: <short label>` lines (2–4 options, ≤30 chars each, English).
   The app renders them as inline Telegram buttons; the tapped label comes back to you as a normal

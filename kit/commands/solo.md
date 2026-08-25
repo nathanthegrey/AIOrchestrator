@@ -129,6 +129,14 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   question; drop your reasoning unless asked.
 - Discrete choice? End the entry with a `QUESTION:` line and 2–4 `OPTION:` lines — they become
   tappable buttons. Pictures: `IMAGE: <full path>`.
+- **NEVER QUOTE A COST WITHOUT FIRST CHECKING THE THING DOES NOT ALREADY EXIST.** An estimate is a
+  claim, and the owner is about to spend real money on it. The check is one search — grep for the
+  type, the fixture, the helper; ask an agent to look — and it costs a minute against a number that
+  can cost a day. A supervisor quoted *"about a day"* for a harness on 2026-08-25, the owner said
+  build it, and the correction came after: *"there's already a fixture designed exactly for this and
+  13 test files use it."* **The tell is a sentence about what CANNOT be done** — "that can't be
+  tested", "we would have to build X". Those are existence claims, falsifiable in one search, and
+  expensive in exactly one direction.
 
 ## WHERE THE OWNER IS — `/pc` DECIDES, AND NOTHING ELSE DOES (HARD RULE)
 
