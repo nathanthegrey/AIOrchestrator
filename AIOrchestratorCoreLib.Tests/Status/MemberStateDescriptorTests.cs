@@ -15,6 +15,27 @@ namespace AIOrchestratorCoreLib.Tests.Status;
 /// </summary>
 public class MemberStateDescriptorTests
 {
+    /// <summary>
+    /// THE CONTRADICTION THE OWNER SENT BACK, 2026-08-24, as one line about one session at one
+    /// instant: "solo-1: working now (channel says: idle — writing window left open)".
+    ///
+    /// It came from a SECOND copy of this class's job in BridgeEngineModel, which printed
+    /// "working now (channel says: {declared})" and interpolated the not-working wording of the very
+    /// same state. That copy is deleted; this asserts the surviving one cannot say both words at
+    /// once, so a future re-introduction fails here rather than on the owner's phone.
+    /// </summary>
+    [Fact]
+    public void AWorkingSession_IsNeverAlsoDescribedAsIdle()
+    {
+        foreach (var state in Enum.GetValues<MemberStates>())
+        {
+            var described = MemberState_Descriptor.Describe_ForOwner(state, isWorkingNow: true, ownerOwesReply: false);
+
+            Assert.StartsWith("working now", described);
+            Assert.DoesNotContain("idle", described);
+        }
+    }
+
     [Fact]
     public void EveryStateHasAWording()
     {

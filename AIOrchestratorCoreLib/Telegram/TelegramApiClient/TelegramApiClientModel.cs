@@ -51,6 +51,20 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("editForumTopic", payload, cancellationToken);
     }
 
+    public async Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken)
+    {
+        // A DIFFERENT METHOD, not editForumTopic with a special id. Telegram's General topic has no
+        // message_thread_id at all — that absence is how the whole app recognises it — so the only
+        // way to rename it is the dedicated call.
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["name"] = newName,
+        };
+
+        await Post_Async("editGeneralForumTopic", payload, cancellationToken);
+    }
+
     public async Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
@@ -146,28 +160,59 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     /// button has to CHANGE from ⏸ Wait to ▶ GO as the state changes. Two methods rather than an
     /// optional argument, so neither behaviour can be reached by accident.
     /// </summary>
-    public async Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
-        var keyboardRows = new JsonArray();
+        return Edit_MessageTextWithButtonRows_Async(messageId, text, Wrap_OneButtonPerRow(buttons), cancellationToken);
+    }
 
-        foreach (var button in buttons)
-        {
-            keyboardRows.Add(new JsonArray(new JsonObject
-            {
-                ["text"] = button.Label,
-                ["callback_data"] = button.Data,
-            }));
-        }
-
+    public async Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    {
         var payload = new JsonObject
         {
             ["chat_id"] = _supergroupChatId,
             ["message_id"] = messageId,
             ["text"] = text,
-            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = keyboardRows },
+            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(buttonRows) },
         };
 
         await Post_Async("editMessageText", payload, cancellationToken);
+    }
+
+    /// <summary>
+    /// One button per row — the shape every DECISION keyboard wants, because an option's label is a
+    /// sentence and two of them side by side are each half-readable.
+    /// </summary>
+    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Wrap_OneButtonPerRow(IReadOnlyList<(string Data, string Label)> buttons)
+    {
+        return [.. buttons.Select(button => (IReadOnlyList<(string Data, string Label)>)[button])];
+    }
+
+    /// <summary>
+    /// THE ONE PLACE the inline-keyboard markup is built. It was written out twice — once in the
+    /// edit and once in the send — and a third copy was about to be added for the status line's
+    /// command bar; two copies of a formatter is how they drift.
+    /// </summary>
+    static JsonArray Build_InlineKeyboard(IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows)
+    {
+        var keyboardRows = new JsonArray();
+
+        foreach (var row in buttonRows)
+        {
+            var buttons = new JsonArray();
+
+            foreach (var button in row)
+            {
+                buttons.Add(new JsonObject
+                {
+                    ["text"] = button.Label,
+                    ["callback_data"] = button.Data,
+                });
+            }
+
+            keyboardRows.Add(buttons);
+        }
+
+        return keyboardRows;
     }
 
     static long? Read_MessageId_OrNull(string responseJson)
@@ -187,30 +232,64 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         }
     }
 
-    public async Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
-        var keyboardRows = new JsonArray();
+        return Send_MessageWithButtonRows_Async(messageThreadId, text, Wrap_OneButtonPerRow(buttons), cancellationToken);
+    }
 
-        foreach (var button in buttons)
-        {
-            keyboardRows.Add(new JsonArray(new JsonObject
-            {
-                ["text"] = button.Label,
-                ["callback_data"] = button.Data,
-            }));
-        }
-
+    public async Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    {
         var payload = new JsonObject
         {
             ["chat_id"] = _supergroupChatId,
             ["text"] = text,
-            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = keyboardRows },
+            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(buttonRows) },
         };
 
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
         // The id is needed later: on a tap this message is rewritten to show the chosen option.
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken));
+    }
+
+    public async Task<long?> Send_MessageWithReplyKeyboard_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<string>> keyboardRows, CancellationToken cancellationToken)
+    {
+        var rows = new JsonArray();
+
+        foreach (var row in keyboardRows)
+        {
+            var buttons = new JsonArray();
+
+            foreach (var label in row)
+                buttons.Add(new JsonObject { ["text"] = label });
+
+            rows.Add(buttons);
+        }
+
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["text"] = text,
+            ["reply_markup"] = new JsonObject
+            {
+                ["keyboard"] = rows,
+                // is_persistent keeps the bar up instead of collapsing it behind the little keyboard
+                // icon after one use, which is the whole point of asking for a PERMANENT bar.
+                ["is_persistent"] = true,
+                // Without this the bar renders at full standard-keyboard height — four buttons in a
+                // half-screen slab, sitting on top of the conversation the owner is reading.
+                ["resize_keyboard"] = true,
+                ["selective"] = false,
+            },
+        };
+
+        if (messageThreadId != null)
+            payload["message_thread_id"] = messageThreadId.Value;
+
+        // The id comes back so the PREVIOUS installer message can be deleted on the next startup:
+        // the keyboard is chat-level state that outlives its carrier message, but the carrier itself
+        // is a message like any other and would otherwise pile up one per app launch.
         return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken));
     }
 
@@ -267,11 +346,22 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
 
     public async Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken)
     {
-        // Registered under BOTH the default scope and all_group_chats: group chats sit at the
-        // BOTTOM of Telegram's scope fallback chain, and some clients only surface the command
-        // menu in a group when a group-applicable scope explicitly carries commands.
+        // REGISTERED UNDER EVERY SCOPE, and the admin one is the whole reason (owner, 2026-08-24:
+        // "add the native command menu / in every chat").
+        //
+        // Telegram resolves a user's command menu down a fallback chain, most specific first:
+        // chat_member → chat_administrators → chat → all_chat_administrators → all_group_chats →
+        // default. The owner is an ADMINISTRATOR of their own supergroup, so in the topics they
+        // actually live in, `all_chat_administrators` is consulted BEFORE `all_group_chats` — and
+        // the two scopes we used to set were the two that an admin reaches last, or not at all.
+        //
+        // The same list goes to all four on purpose: the chain stops at the first scope that carries
+        // commands, so a scope set to a DIFFERENT (or empty) list does not merge with the ones below
+        // it, it replaces them.
         await Post_Async("setMyCommands", Build_CommandsPayload(commands, null), cancellationToken);
+        await Post_Async("setMyCommands", Build_CommandsPayload(commands, "all_private_chats"), cancellationToken);
         await Post_Async("setMyCommands", Build_CommandsPayload(commands, "all_group_chats"), cancellationToken);
+        await Post_Async("setMyCommands", Build_CommandsPayload(commands, "all_chat_administrators"), cancellationToken);
     }
 
     static JsonObject Build_CommandsPayload(IReadOnlyList<(string Command, string Description)> commands, string? scopeType)

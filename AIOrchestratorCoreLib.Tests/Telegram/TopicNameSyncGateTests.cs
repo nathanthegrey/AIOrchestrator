@@ -92,6 +92,56 @@ public class TopicNameSyncGateTests
             TopicNameSync_Gate.Classify_Failure(new TelegramApiException(400, "Bad Request: TOPIC_NAME_INVALID")));
     }
 
+    /// <summary>
+    /// THE CASE THE ENUM DOCUMENTED AND THE CLASSIFIER NEVER RETURNED. `Applied` described
+    /// TOPIC_NOT_MODIFIED from the day it was written, while the only code that recognised it was a
+    /// private filter inside the engine wired to ONE of the two topic-name syncs. The other one — the
+    /// General topic — logged "Could not rename the General topic" on every tick from app start,
+    /// because the memo that stops the retry was only ever written on the success path.
+    ///
+    /// The message is the one Telegram actually sent, copied from the owner's activity log, so this
+    /// pins the classification against the real response body rather than against a tidied version.
+    /// </summary>
+    [Fact]
+    public void TopicNotModifiedIsAppliedRatherThanAFailure()
+    {
+        Assert.Equal(
+            TopicNameAttemptOutcomes.Applied,
+            TopicNameSync_Gate.Classify_Failure(new TelegramApiException(
+                400,
+                "Telegram 'editGeneralForumTopic' failed with HTTP 400: {\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: TOPIC_NOT_MODIFIED\"}")));
+    }
+
+    /// <summary>
+    /// AND THROUGH THE UNTYPED PATH TOO. Not every failure reaching this classifier is a
+    /// <see cref="TelegramApiException"/> — the engine hands it whatever the client threw, and a plain
+    /// <see cref="Exception"/> carrying the same slug must classify the same way. Asserted apart from
+    /// the typed case so a fix applied to only one branch cannot pass.
+    /// </summary>
+    [Fact]
+    public void TopicNotModifiedIsAppliedEvenWithoutTheStatusCode()
+    {
+        Assert.Equal(
+            TopicNameAttemptOutcomes.Applied,
+            TopicNameSync_Gate.Classify_Failure(new Exception("Bad Request: TOPIC_NOT_MODIFIED")));
+    }
+
+    /// <summary>
+    /// THE GUARD ON THE NEW BRANCH, and the one a regression would take. `Applied` is the outcome that
+    /// suppresses retries FOR EVER, so it must never be reachable from a failure where Telegram did not
+    /// answer at all: a transport failure says the round trip did not complete, never that the name
+    /// already holds. Without this the slug test could be hoisted above the transport test — which reads
+    /// like a harmless simplification and would turn a dropped connection into a permanently stale topic
+    /// name, the exact defect `OutcomeUnknown` was introduced to end.
+    /// </summary>
+    [Fact]
+    public void ATransportFailureIsNeverReadAsAlreadyNamed()
+    {
+        Assert.Equal(
+            TopicNameAttemptOutcomes.OutcomeUnknown,
+            TopicNameSync_Gate.Classify_Failure(new HttpRequestException("connection reset — TOPIC_NOT_MODIFIED")));
+    }
+
     /// <summary>Nothing holding it back is the ordinary case and must not need a stamp to proceed.</summary>
     [Fact]
     public void WithNoStampAnAttemptIsAlwaysDue()

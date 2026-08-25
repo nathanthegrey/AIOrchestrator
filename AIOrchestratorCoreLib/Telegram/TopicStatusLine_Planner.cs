@@ -48,11 +48,27 @@ public static class TopicStatusLine_Planner
     /// owner stated the rule on 2026-08-13. It is what bounds the repost to at most one notification
     /// per quiet period: every message resets it, so a conversation in progress is never interrupted,
     /// and the line moves once the exchange is over.
+    ///
+    /// TEN SECONDS, NOT TWO MINUTES (owner directive 2026-08-24): *"the topic status message should
+    /// arrive immediately, not after 2 minutes, but more like after 10 seconds"*. At 120 the line was
+    /// correct and invisible — the owner opened the topic, found their own last message above it and
+    /// had to scroll for the state, which is the exact defect the repost was built to remove. Ten is
+    /// long enough to still be a PAUSE: the owner's own multi-message burst, and an agent's mirrored
+    /// entries arriving in chunks, both keep resetting it.
+    ///
+    /// WHAT KEEPS A SHORT WINDOW FROM BEING A WATERFALL IS NOT THIS NUMBER. The status line's own
+    /// message is never recorded as topic traffic (`_newestTopicMessageByThread` in
+    /// `BridgeEngineModel` is written only by `Remember_TopicMessage`, which the status-line refresh
+    /// deliberately does not call), so a fresh post carries a HIGHER id than the newest message the
+    /// app knows of and `Is_RepostDue` reads the line as un-buried from the very next tick. That
+    /// bounds it at ONE repost per burst of real traffic at any window value — shortening the window
+    /// changes WHEN the move happens, never how often it can repeat. The cost of 10 over 120 is
+    /// therefore paid only in a topic that keeps talking with pauses in between: a delete plus a send
+    /// where an edit would have done, once per pause.
     /// </summary>
-    public const int REPOST_AFTER_QUIET_SECONDS = 120;
+    public const int REPOST_AFTER_QUIET_SECONDS = 10;
 
     public static TopicStatusPlan Plan(
-        string title,
         IPlanProgress? progress,
         IReadOnlyList<ITopicStatusMember> members,
         DateTime now,
@@ -71,7 +87,7 @@ public static class TopicStatusLine_Planner
         // The `last` line is chosen HERE, not handed in. Gate C — the trusted reading of an
         // agent-written stamp — was the one gate that never left the engine, so it could be reverted
         // to a raw parse with 630 tests staying green.
-        var text = TopicStatusLine_Builder.Build(title, progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null, figuresUnchangedFor, supervisorContext);
+        var text = TopicStatusLine_Builder.Build(progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null, figuresUnchangedFor, supervisorContext);
 
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 
@@ -79,7 +95,7 @@ public static class TopicStatusLine_Planner
         // a quiet orchestration says the same thing minute after minute — and the identical-text rule
         // answers None to exactly that. Behind that rule the repost would fire only for a topic that
         // happened to change something in the same tick, which is never the quiet topic it was asked
-        // for. Emptiness is still refused: the builder emits the bare title whenever a message is up,
+        // for. Emptiness is still refused: the builder emits the bare lead word whenever a message is up,
         // so blank text here would mean sending nothing at all.
         // THE LATCH COMES FIRST, and it is a fallback rather than a failure. Telegram REFUSES some
         // deletes permanently — a message past its 48-hour window, or a bot without

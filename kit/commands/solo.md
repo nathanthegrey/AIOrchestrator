@@ -115,6 +115,39 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 - Discrete choice? End the entry with a `QUESTION:` line and 2–4 `OPTION:` lines — they become
   tappable buttons. Pictures: `IMAGE: <full path>`.
 
+## ANSWER THE OWNER BEFORE YOU WORK — a receipt in your own words
+
+**The moment you pick up an owner message, and BEFORE you start on it, append a short entry saying
+what you took it to mean and what you are about to do about it.** One to three lines. It is not a
+report and it is not a plan — it is *"I have this, and here is what happens next"*.
+
+Their words, 2026-08-24: *"I don't know what is going on. I see the permanent status message
+changing the tasks count, which tells me that something is happening, but it's a bit frustrating to
+have 0 feedback. The session should tell me something about my message, with a short message in
+response to mine telling me that my message was written and what it's going to do about it, and if
+it gains some information about what I wrote well maybe let me know."*
+
+**The `✓✓` they already get is the APP's word, not yours.** It says the message reached the channel —
+the postman's receipt. It cannot say what you understood, because the app does not know. That gap is
+the entire complaint, and you are the only one who can close it.
+
+- **Say what you understood, not THAT you understood.** "Got it, will do" is the same silence with a
+  tick on it. Name the thing: *"Renaming it to Service and going headless — starting with the csproj
+  and the host wiring."*
+- **If it changed your plan, say what changed.** They are usually writing precisely because they want
+  something other than what you are doing.
+- **If their message tells you something THEY would want to know, put it in the same entry** — it is
+  already done, it contradicts what they asked for an hour ago, it is blocked on something else. That
+  is the *"if it gains some information about what I wrote"* half, and it is the part that saves them
+  a round trip.
+- **ONE per pickup, never one per message and never one per turn.** If three of their messages are
+  waiting, answer all three in a single entry. Three receipts for one pickup is the waterfall this
+  system exists to prevent.
+- **Never for `FROM app` entries.** That is the app talking, and an untagged one has already reached
+  their phone.
+- **Then carry straight on in the same turn.** The receipt is a note in passing, never a turn
+  boundary — see RUN TO THE END.
+
 ## How you work
 
 - **You are the whole team here**, so the repo's quality bar is yours to hold alone: read what its

@@ -66,6 +66,7 @@ public partial class SettingsWindow : Window
             ownerId,
             Null_IfEmpty(BotTokenTextBox.Text),
             ItalianLayerCheckBox.IsChecked == true,
+            _config.TelegramStatusScreenshots,
             _config.VoiceTranscribeCommand,
             _config.OrchestrationTokenBudget);
 

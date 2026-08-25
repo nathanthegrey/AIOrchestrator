@@ -367,9 +367,20 @@ public static class MemberState_Resolver
     /// </summary>
     public static IChannelEntry? Find_LastBrief_OrNull(IReadOnlyList<IChannelEntry> entries)
     {
+        return Find_LastEntryBy_OrNull(entries, ChannelAuthors.Supervisor);
+    }
+
+    /// <summary>
+    /// The last entry a given author wrote, or null. Split out of <see cref="Find_LastBrief_OrNull"/>
+    /// rather than copied beside it, because a SOLO has no brief and never will — there is no
+    /// supervisor in a basic orchestration to write one — so the surface that shows "what is this
+    /// member working on" has to be able to ask the same question of the solo's OWN entries.
+    /// </summary>
+    public static IChannelEntry? Find_LastEntryBy_OrNull(IReadOnlyList<IChannelEntry> entries, ChannelAuthors author)
+    {
         for (var index = entries.Count - 1; index >= 0; index--)
         {
-            if (entries[index].Author == ChannelAuthors.Supervisor)
+            if (entries[index].Author == author)
                 return entries[index];
         }
 

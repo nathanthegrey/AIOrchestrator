@@ -56,8 +56,20 @@ public static class TopicStatusLine_Builder
     const string FIELD_SEPARATOR = " · ";
 
     /// <summary>
+    /// What this line calls itself. The owner chose the word on 2026-08-24 from three offered.
+    ///
+    /// IT REPLACES THE TOPIC NAME, which used to open the line and which they asked to have removed:
+    /// *"the name of the topic is not needed, I already know where I am, and if I don't I have it at
+    /// the top of the screen."* What the opening field is FOR is telling the two recurring messages
+    /// apart at a glance — this one, edited constantly and never notifying, against the half-hourly
+    /// digest that opens with STATUS. Their constraint, verbatim: *"it cannot be STATUS, because that
+    /// is the 30m message, it must be something else."*
+    /// </summary>
+    const string LEAD_WORD = "PULSE";
+
+    /// <summary>
     /// <paramref name="aMessageIsAlreadyPosted"/> decides what NOTHING TO SAY means. With no
-    /// message up it means silence; with one up it means the BARE TITLE, because saying nothing
+    /// message up it means silence; with one up it means the BARE LEAD WORD, because saying nothing
     /// would leave the last row standing — a running duration for a member that has been closed.
     ///
     /// REQUIRED, with no default, because `false` is the dangerous value: a caller who omitted it
@@ -67,12 +79,11 @@ public static class TopicStatusLine_Builder
     ///
     /// The fallback lives HERE, not at the call site, because the decider must see the text that
     /// is actually sent. Substituting it after the decision made the decider compare an empty
-    /// string against a cached title forever: same title, same message, a rejected edit every two
+    /// string against a cached lead line forever: same text, same message, a rejected edit every two
     /// seconds for as long as the app ran. A decider that does not see what goes out cannot be
     /// trusted about anything.
     /// </summary>
     public static string Build(
-        string title,
         IPlanProgress? progress,
         IReadOnlyList<ITopicStatusMember> members,
         string? lastSubject,
@@ -92,18 +103,18 @@ public static class TopicStatusLine_Builder
         }
 
         // NOTHING TO SAY MEANS SAY NOTHING. With no ledger, no live member and no history, the line
-        // would have been the topic's own title repeated back at the owner — a message whose entire
-        // content is what they are already looking at. Item 15: if they cannot act on it and it tells
-        // them nothing, it does not get written.
+        // would have been the lead word and nothing else — a message whose entire content is that a
+        // status line exists. Item 15: if they cannot act on it and it tells them nothing, it does not
+        // get written.
         // Total > 0 rather than progress != null: a PLAN.md of nothing but struck-out `- [-]`
-        // lines parses to a NON-NULL progress with Total 0, and printing "0/0" beside a topic
-        // title is the say-nothing message again.
+        // lines parses to a NON-NULL progress with Total 0, and printing "0/0" beside the lead word
+        // is the say-nothing message again.
         var hasSubstance = lines.Count > 0 || (progress != null && progress.Total > 0) || !string.IsNullOrWhiteSpace(lastSubject);
 
         if (!hasSubstance)
-            return aMessageIsAlreadyPosted ? title : "";
+            return aMessageIsAlreadyPosted ? LEAD_WORD : "";
 
-        lines.Insert(0, Build_TitleLine(title, progress, figuresUnchangedFor, supervisorContext));
+        lines.Insert(0, Build_LeadLine(progress, figuresUnchangedFor, supervisorContext));
 
         // NO BULLET on this one, deliberately: it is not a member, and a `• last · …` row reads like
         // one more session called "last". Not having the bullet is what separates it now that the
@@ -131,13 +142,13 @@ public static class TopicStatusLine_Builder
     /// 10 seconds it would go back to 0."*
     /// </summary>
     /// <summary>
-    /// THE SUPERVISOR'S CONTEXT RIDES ON THE TITLE, not on a row of its own, because it has no row
+    /// THE SUPERVISOR'S CONTEXT RIDES ON THE LEAD LINE, not on a row of its own, because it has no row
     /// here — this line lists MEMBERS, and a crew's supervisor is not one. Giving it a row would
     /// invent a session called "supervisor" that stands beside imp-1 with no task and no duration.
     /// A basic orchestration has no supervisor at all, so nothing is added there and its solo
     /// carries the figure on its own member row instead.
     /// </summary>
-    static string Build_TitleLine(string title, IPlanProgress? progress, TimeSpan? figuresUnchangedFor, ISessionContextUsage? supervisorContext)
+    static string Build_LeadLine(IPlanProgress? progress, TimeSpan? figuresUnchangedFor, ISessionContextUsage? supervisorContext)
     {
         // Describe_OrNull rather than the bang operator: the policy and the formatter each answer
         // the null question for themselves, so neither this line nor the reader has to assert what
@@ -150,12 +161,11 @@ public static class TopicStatusLine_Builder
             ? ""
             : $"{FIELD_SEPARATOR}sup {supervisorContextField}";
 
-        // THE TITLE STILL COMES BACK BARE WHEN THERE IS NO LEDGER, and the context part goes with
-        // it. This return is the "nothing to say" shape the whole class is built around: a topic
-        // with no ledger shows its own name and nothing else, and hanging a figure off it would be
-        // the say-nothing message the class doc refuses.
+        // THE LEAD WORD STILL COMES BACK BARE WHEN THERE IS NO LEDGER, and the context part goes
+        // with it. This return is the "nothing to say" shape the whole class is built around, and
+        // hanging a figure off it would be the say-nothing message the class doc refuses.
         if (progress == null || progress.Total <= 0)
-            return title;
+            return LEAD_WORD;
 
         var unchanged = figuresUnchangedFor == null
             ? null
@@ -163,7 +173,7 @@ public static class TopicStatusLine_Builder
 
         var unchangedPart = unchanged == null ? "" : $"{FIELD_SEPARATOR}{unchanged}";
 
-        return $"{title}{FIELD_SEPARATOR}{progress.Done}/{progress.Total}{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)}%{unchangedPart}{supervisorContextPart}";
+        return $"{LEAD_WORD}{FIELD_SEPARATOR}{progress.Done}/{progress.Total}{FIELD_SEPARATOR}{PlanProgress_Formatter.Percent(progress)}%{unchangedPart}{supervisorContextPart}";
     }
 
     /// <summary>
@@ -199,7 +209,7 @@ public static class TopicStatusLine_Builder
         // the ternary shape needed eight spellings of the same row — and the doc on Build_Row below
         // records what happens when one row is spelled more than once: the copies drift, and a
         // separator ends up different in one branch from another.
-        var brief = Is_Idle(state) ? null : MemberState_Resolver.Find_LastBrief_OrNull(member.Entries);
+        var brief = Is_Idle(state) ? null : Find_CurrentTask_OrNull(member, state);
 
         List<string> fields = [];
 
@@ -246,6 +256,33 @@ public static class TopicStatusLine_Builder
     /// Note what is NOT idle: awaiting a verdict. That member is waiting on the SUPERVISOR, and the
     /// owner seeing it as idle would hide the one queue they can actually unblock.
     /// </summary>
+    /// <summary>
+    /// What this member is working on: its supervisor's last brief — except for a SOLO, which is
+    /// never briefed and never will be, so its own last entry is the answer.
+    ///
+    /// A SOLO'S ROW READ "standing by" 100% OF THE TIME before this existed, and it was structural
+    /// rather than a stale read: Find_LastBrief_OrNull looks for a `FROM supervisor` entry, a basic
+    /// orchestration HAS no supervisor, and a solo's member channel is the owner channel, which
+    /// carries only `FROM solo`, `FROM owner` and `FROM app`. The row therefore said "standing by"
+    /// while mid-turn, inside a Bash call, and while blocked on the owner alike. The owner caught it
+    /// against the app's own busy line — "still at it — running a command" printed directly above
+    /// "solo-1 · standing by" — and told this session to resolve it (2026-08-24).
+    ///
+    /// THE FALLBACK IS SOLO-ONLY, and that is the whole care in it. For an implementer or a reviewer
+    /// "no brief yet" is a true and useful statement — they are waiting to be told what to do, and
+    /// ANeverBriefedMemberReadsStandingBy pins exactly that. Widening this to every member would
+    /// trade a wrong answer for a different wrong answer.
+    /// </summary>
+    static IChannelEntry? Find_CurrentTask_OrNull(ITopicStatusMember member, MemberStates state)
+    {
+        var brief = MemberState_Resolver.Find_LastBrief_OrNull(member.Entries);
+
+        if (brief != null || MemberKind_Ids.Resolve_Kind(member.MemberId) != MemberKinds.Solo)
+            return brief;
+
+        return MemberState_Resolver.Find_LastEntryBy_OrNull(member.Entries, ChannelAuthors.Solo);
+    }
+
     static bool Is_Idle(MemberStates state)
     {
         return state == MemberStates.StandingBy || state == MemberStates.NewNoTraffic;

@@ -11,6 +11,9 @@ public static class OrchestratorConfig_Factory
     public const string DEFAULT_COMMUNICATOR_MODEL = "sonnet";
     public const bool DEFAULT_TELEGRAM_ITALIAN_LAYER = true;
 
+    /// <summary>Opt-in: a screenshot raises a real window, so an absent key must read as OFF.</summary>
+    public const bool DEFAULT_TELEGRAM_STATUS_SCREENSHOTS = false;
+
     public static IOrchestratorConfig Create(
         IReadOnlyList<IRepoEntry> repos,
         string? supervisorModel,
@@ -21,6 +24,7 @@ public static class OrchestratorConfig_Factory
         long? telegramOwnerUserId,
         string? telegramBotToken,
         bool? telegramItalianLayer,
+        bool? telegramStatusScreenshots,
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget)
     {
@@ -34,13 +38,14 @@ public static class OrchestratorConfig_Factory
             telegramOwnerUserId,
             telegramBotToken,
             telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER,
+            telegramStatusScreenshots ?? DEFAULT_TELEGRAM_STATUS_SCREENSHOTS,
             voiceTranscribeCommand,
             orchestrationTokenBudget);
     }
 
     public static IOrchestratorConfig Create_Empty()
     {
-        return Create([], null, null, null, null, null, null, null, null, null, null);
+        return Create([], null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /// <summary>
@@ -59,6 +64,29 @@ public static class OrchestratorConfig_Factory
             source.TelegramOwnerUserId,
             source.TelegramBotToken,
             telegramItalianLayer,
+            source.TelegramStatusScreenshots,
+            source.VoiceTranscribeCommand,
+            source.OrchestrationTokenBudget);
+    }
+
+    /// <summary>
+    /// The same config with only the status-screenshot flag changed — the /screenshots command
+    /// flips it live from the phone, and like the Italian toggle it must not have to restate every
+    /// other field just to move one bool.
+    /// </summary>
+    public static IOrchestratorConfig Create_WithStatusScreenshots(IOrchestratorConfig source, bool telegramStatusScreenshots)
+    {
+        return Create(
+            source.Repos,
+            source.SupervisorModel,
+            source.ImplementerModel,
+            source.GeneralSupervisorModel,
+            source.CommunicatorModel,
+            source.TelegramSupergroupChatId,
+            source.TelegramOwnerUserId,
+            source.TelegramBotToken,
+            source.TelegramItalianLayer,
+            telegramStatusScreenshots,
             source.VoiceTranscribeCommand,
             source.OrchestrationTokenBudget);
     }

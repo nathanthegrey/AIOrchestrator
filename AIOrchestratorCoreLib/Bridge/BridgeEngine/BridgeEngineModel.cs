@@ -654,6 +654,25 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// Turns the periodic status's screenshots on or off, APP-WIDE and persisted — the owner asked
+    /// for it to "work app wise, independently from where I place the command", so it lives in
+    /// config.json beside the Italian layer rather than on any one orchestration.
+    /// </summary>
+    public void Set_StatusScreenshots(bool enabled)
+    {
+        var current = _configProvider.Get_Current();
+
+        if (current.TelegramStatusScreenshots == enabled)
+            return;
+
+        OrchestratorConfig_Loader.Save(OrchestratorConfig_Factory.Create_WithStatusScreenshots(current, enabled), _paths);
+
+        _log.Log_Info(GLOBAL_ORCH_ID, enabled
+            ? "Status screenshots ON — the periodic status carries a picture of each session's terminal"
+            : "Status screenshots OFF — the periodic status is text only");
+    }
+
     public void Set_SilenceAllTopics(bool silenced)
     {
         if (_silenceAllTopics == silenced)
@@ -996,6 +1015,12 @@ internal sealed class BridgeEngineModel(
         await Check_AwayMode_Async(cancellationToken);
         await Push_PeriodicStatus_Async(cancellationToken);
         await Push_GeneralDashboard_Async(cancellationToken);
+
+        // Cheap: guarded by a remembered name, so it is an API call only when the desired name
+        // actually changes. Here as well as on the /screens reply so an app restart, or a config
+        // edited on disk, puts the camera back rather than leaving the topic list lying.
+        if (_telegramClient != null)
+            await Sync_GeneralTopicName_BestEffort_Async(_telegramClient, cancellationToken);
 
         Compact_LongChannels();
         Persist_BridgeState();
@@ -3085,9 +3110,18 @@ internal sealed class BridgeEngineModel(
         if (_configProvider.Get_Current().TelegramItalianLayer && channel.IsOwnerChannel)
             prompt = await _translator.Translate_ToItalian_Async(prompt, cancellationToken);
 
-        var buttons = Register_Buttons(threadId, optionLabels, prompt, out var buttonGroupId);
+        // THE OPTIONS MOVE INTO THE MESSAGE WHEN THEY ARE TOO LONG TO READ ON A BUTTON. The owner,
+        // 2026-08-24: "buttons don't wrap, so when a session asks me a question I often can't read all
+        // the button text." Telegram truncates a long label with an ellipsis and there is no markup
+        // that changes that, so the only place the full wording can live is the message itself — and
+        // the button then carries a number pointing at the line they can read. Short options are left
+        // exactly as they were: numbering two-word choices would be worse than the problem.
+        var layout = Telegram.OptionButtons_Layout.Build(optionLabels);
+        var promptWithOptions = layout.OptionListText == null ? prompt : $"{prompt}\n\n{layout.OptionListText}";
 
-        var messageId = await client.Send_MessageWithButtons_Async(threadId, prompt, buttons, cancellationToken);
+        var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithOptions, out var buttonGroupId);
+
+        var messageId = await client.Send_MessageWithButtons_Async(threadId, promptWithOptions, buttons, cancellationToken);
 
         Remember_TopicMessage(threadId, messageId);
 
@@ -3101,7 +3135,7 @@ internal sealed class BridgeEngineModel(
                 _openQuestions[messageId.Value] = new OpenQuestion
                 {
                     OrchId = channel.OrchId,
-                    Text = prompt,
+                    Text = promptWithOptions,
                     AskedUtc = DateTime.UtcNow,
                     ButtonGroupId = buttonGroupId,
                 };
@@ -3120,8 +3154,18 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionLabels, string questionText, out long groupId)
+    /// <summary>
+    /// <paramref name="optionTexts"/> is what the SESSION receives when a button is tapped;
+    /// <paramref name="buttonLabels"/> is what the OWNER sees on it. They are parallel lists, matched
+    /// by index, and they were one list until the owner reported that a long option is unreadable on
+    /// a phone button — the label may now be shortened and numbered, while the text handed back to
+    /// the session stays whole.
+    /// </summary>
+    IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionTexts, IReadOnlyList<string> buttonLabels, string questionText, out long groupId)
     {
+        if (buttonLabels.Count != optionTexts.Count)
+            throw new Exception($"Register_Buttons got {buttonLabels.Count} labels for {optionTexts.Count} options — they are matched by index");
+
         List<(string Data, string Label)> buttons = [];
 
         lock (_buttonLock)
@@ -3130,14 +3174,14 @@ internal sealed class BridgeEngineModel(
             _buttonGroupSequence++;
             groupId = _buttonGroupSequence;
 
-            foreach (var label in optionLabels)
+            for (var index = 0; index < optionTexts.Count; index++)
             {
                 _buttonSequence++;
                 var data = $"opt-{_buttonSequence}";
 
-                _buttonOptions[data] = (threadId, label, _buttonGroupSequence, questionText);
+                _buttonOptions[data] = (threadId, optionTexts[index], _buttonGroupSequence, questionText);
                 _buttonOrder.Enqueue(data);
-                buttons.Add((data, label));
+                buttons.Add((data, buttonLabels[index]));
             }
 
             // Every question also offers a way to ASK BACK. The button's label is short; the text
@@ -4783,6 +4827,7 @@ internal sealed class BridgeEngineModel(
         var backoffMilliseconds = INBOUND_ERROR_BACKOFF_START_MILLISECONDS;
 
         await Register_BotCommands_BestEffort_Async(client, cancellationToken);
+        await Install_CommandKeyboard_BestEffort_Async(client, cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -4877,6 +4922,14 @@ internal sealed class BridgeEngineModel(
                     else if (command == "show")
                     {
                         await Show_SessionWindow_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "screen")
+                    {
+                        await Send_SessionScreenshot_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "screens")
+                    {
+                        await Toggle_StatusScreenshots_Async(client, message.MessageThreadId, cancellationToken);
                     }
                     else if (command == "organize")
                     {
@@ -5008,6 +5061,56 @@ internal sealed class BridgeEngineModel(
     /// change exists to prevent, arriving by a different door. A menu that failed to register is
     /// worth a warning, never the owner's phone line.
     /// </summary>
+    /// <summary>
+    /// The text of the message that carries the keyboard. It is deleted immediately, so this is only
+    /// ever seen if the delete fails.
+    /// </summary>
+    const string COMMAND_KEYBOARD_CARRIER_TEXT = "⌨️ shortcuts ready";
+
+    /// <summary>
+    /// Installs the owner's standing command bar above their input box — the second of the two homes
+    /// they asked for on 2026-08-24 ("both"), the other being the buttons on each topic's status line.
+    ///
+    /// IT IS A REPLY KEYBOARD, NOT AN INLINE ONE, and the difference is the whole design. A reply
+    /// button sends its own TEXT, so a tap on /show reaches the bridge indistinguishable from the
+    /// owner typing it, in whatever topic they are sitting in — which is why ONE chat-wide bar serves
+    /// every topic and needs no handler, no callback data and no per-topic minting. An inline keyboard
+    /// could do none of that, and cannot sit above the input box at all.
+    ///
+    /// THE CARRIER MESSAGE IS DELETED. The keyboard is CHAT-level state that outlives the message that
+    /// delivered it, so that message has done its entire job the moment Telegram has accepted it;
+    /// keeping it would leave one "shortcuts ready" line in General per app launch, for ever.
+    ///
+    /// NEEDS LIVE VERIFICATION ON THE OWNER'S PHONE: that the bar appears at all, and that it survives
+    /// its carrier being deleted. Both are Bot API behaviour this repo has never exercised before.
+    /// </summary>
+    async Task Install_CommandKeyboard_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var messageId = await client.Send_MessageWithReplyKeyboard_Async(
+                null,
+                COMMAND_KEYBOARD_CARRIER_TEXT,
+                Telegram.TopicCommandButtons.Build_ReplyKeyboardRows(),
+                cancellationToken);
+
+            if (messageId != null)
+                await client.Delete_Message_Async(messageId.Value, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Filtered for the same reason the command menu beside it is: this runs OUTSIDE the poll
+            // loop's guarded catch, so an unfiltered rethrow here takes the inbound loop down with it.
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // Best-effort, like the command menu: a missing shortcut bar costs the owner a few taps,
+            // and must never be the reason their phone stops receiving anything at all.
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not install the command keyboard: {exception.Message}");
+        }
+    }
+
     async Task Register_BotCommands_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
     {
         try
@@ -5036,6 +5139,8 @@ internal sealed class BridgeEngineModel(
                     // full the ACCOUNT is, the other how full each SESSION's window is.
                     ("context", "How full each session's context window is"),
                     ("show", "Bring this orchestration's session window to the front"),
+                    ("screen", "Photograph this orchestration's terminal and send it here"),
+                    ("screens", "Toggle 📸 — the half-hourly status carries a picture of the terminal"),
                     ("organize", "Tile this orchestration's terminals across the screen"),
                     ("organize_mains", "Tile EVERY orchestration's main terminal — each sup and solo, once"),
                     ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
@@ -5556,6 +5661,34 @@ internal sealed class BridgeEngineModel(
     /// /italian — flips the translation layer from the phone. The confirmation is written in the
     /// language the layer is being switched TO, so the toggle demonstrates itself.
     /// </summary>
+    /// <summary>
+    /// /screens — the app-wide switch for the periodic status's screenshots. A toggle rather than
+    /// two commands, the same shape as /italian and /test, and it ignores which topic it was sent
+    /// from: the owner asked for one that works "independently from where I place the command".
+    /// </summary>
+    async Task Toggle_StatusScreenshots_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var enabled = !_configProvider.Get_Current().TelegramStatusScreenshots;
+        Set_StatusScreenshots(enabled);
+
+        // The camera on the General topic is the AMBIENT reminder that it is on, so it is pushed with
+        // the reply rather than waiting for the next tick — the owner asked for the two together.
+        //
+        // AN EXPLICIT OWNER ACTION OUTRANKS A PENDING BACKOFF, exactly as Forget_AppliedTopicName_Async
+        // says for the per-orchestration topics. The stamp is there to stop a tick-rate spin, not to
+        // make the owner wait up to 30 s for the toggle they just sent — and the desired name has
+        // changed, so this attempt is a different one from whatever failed.
+        _generalTopicNameRetryAfterUtc = null;
+
+        await Sync_GeneralTopicName_BestEffort_Async(client, cancellationToken);
+
+        var text = enabled
+            ? "📸 Status screenshots ON — every half-hourly status carries a picture of the session's terminal, taken only while you are away from the PC."
+            : "📸 Status screenshots OFF — the half-hourly status is text only from here on.";
+
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
+    }
+
     async Task Toggle_ItalianLayer_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var enabled = !_configProvider.Get_Current().TelegramItalianLayer;
@@ -5643,6 +5776,86 @@ internal sealed class BridgeEngineModel(
         // Windows refuses SetForegroundWindow in ordinary situations, so a real window can fail to
         // raise. Telling them beats a silent no-op in front of an unchanged screen.
         await Send_DirectReply_BestEffort_Async(client, messageThreadId, "Found the window but Windows would not raise it — click its taskbar icon.", cancellationToken);
+    }
+
+    /// <summary>
+    /// Two buttons per row. Four commands stacked one-per-row — the shape every other keyboard here
+    /// uses — would put a slab of buttons under the one message in the topic the owner reads all day.
+    /// </summary>
+    const int COMMAND_BUTTONS_PER_ROW = 2;
+
+    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_CommandButtonRows(long messageThreadId)
+    {
+        var buttons = Telegram.TopicCommandButtons.Build_ForTopic(messageThreadId);
+        List<IReadOnlyList<(string Data, string Label)>> rows = [];
+
+        for (var index = 0; index < buttons.Count; index += COMMAND_BUTTONS_PER_ROW)
+            rows.Add([.. buttons.Skip(index).Take(COMMAND_BUTTONS_PER_ROW)]);
+
+        return rows;
+    }
+
+    /// <summary>
+    /// Photographs the session window and sends the picture to the topic — the owner asked to be able
+    /// to SEE a session from their phone, not just be told about it.
+    ///
+    /// It resolves the same window /show does, deliberately: the two commands would be a trap if
+    /// "the session" meant one thing when raising it and another when photographing it.
+    /// </summary>
+    async Task Send_SessionScreenshot_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "/screen works inside an orchestration's own topic.", cancellationToken);
+            return;
+        }
+
+        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+
+        if (window == null)
+        {
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, "No terminal window for this orchestration is on screen.", cancellationToken);
+            return;
+        }
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+        var mediaFolder = Path.Combine(Path.GetDirectoryName(channelFile)
+            ?? throw new Exception($"Channel file '{channelFile}' has no parent folder"), "media");
+
+        // Named from the channel's own clock so two screenshots a second apart cannot collide, and so
+        // the file itself says when it was taken when the owner goes looking later.
+        var imagePath = Path.Combine(mediaFolder, $"screen-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+
+        var failureReason = await WindowFocus.TerminalWindow_Capturer.Try_CaptureSessionWindow_Async(window, imagePath, cancellationToken);
+
+        if (failureReason != null)
+        {
+            // SAID, NOT SWALLOWED, exactly as /show does it: the owner is holding a phone that showed
+            // them nothing, and a reason is something they can act on.
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, failureReason, cancellationToken);
+            return;
+        }
+
+        _log.Log_Info(session.OrchId, $"/screen — captured '{window}' to {imagePath}");
+
+        try
+        {
+            await client.Send_Photo_Async(messageThreadId, imagePath, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // NOT best-effort here, unlike an IMAGE: line in a channel entry. That one is a decoration
+            // on an entry that arrived anyway; this one IS the answer to the command, so failing it
+            // silently would leave the owner watching a topic where /screen did nothing at all.
+            _log.Log_Warning(session.OrchId, $"/screen — capture succeeded but the upload failed: {exception.Message}");
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, $"Took the picture but could not send it: {exception.Message}", cancellationToken);
+        }
     }
 
     /// <summary>
@@ -6358,9 +6571,15 @@ internal sealed class BridgeEngineModel(
     /// the desired state already holds — so it must be treated as a success or the sync retries it
     /// on every tick.
     /// </summary>
+    /// <remarks>
+    /// ASKED THROUGH THE CLASSIFIER RATHER THAN SPELT AGAIN. This used to hold its own copy of the
+    /// TOPIC_NOT_MODIFIED test, which made it invisible to the suite and — worse — available to only
+    /// whichever call site remembered it existed. The General-topic sync did not, and spun.
+    /// Decision 12: one implementation, and it lives where a test can reach it.
+    /// </remarks>
     static bool Is_TopicAlreadyNamed(Exception exception)
     {
-        return exception.Message.Contains("TOPIC_NOT_MODIFIED", StringComparison.OrdinalIgnoreCase);
+        return TopicNameSync_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.Applied;
     }
 
     async Task Sync_TopicNames_BestEffort_Async(CancellationToken cancellationToken)
@@ -6651,7 +6870,8 @@ internal sealed class BridgeEngineModel(
     ///     call and, against the 429 limit we already have open on the ledger, a real cost;
     ///   - a RESTART edits the existing message rather than posting a second one — the id is read
     ///     from session.json, not from memory;
-    ///   - a line BURIED by later traffic, in a topic that has since been quiet for two minutes, is
+    ///   - a line BURIED by later traffic, in a topic that has since been quiet for
+    ///     TopicStatusLine_Planner.REPOST_AFTER_QUIET_SECONDS, is
     ///     deleted and written again at the bottom. Telegram cannot move a message, so this is the
     ///     only way to put the current state where the owner is looking when they enter the chat.
     ///
@@ -6698,8 +6918,12 @@ internal sealed class BridgeEngineModel(
             // own parse would be a third reading of one file per tick.
             await Tell_LedgerMovement_Async(session, ledger, cancellationToken);
 
+            // NO TITLE ANY MORE. The line used to open with the orchestration's name and the owner
+            // had it removed on 2026-08-24: "the name of the topic is not needed, I already know
+            // where I am, and if I don't I have it at the top of the screen." It opens with PULSE
+            // instead, which is the part that was actually missing — telling this constantly-edited
+            // line apart from the half-hourly STATUS digest.
             var plan = Telegram.TopicStatusLine_Planner.Plan(
-                session.DisplayName ?? session.OrchId,
                 ledger,
                 members,
                 DateTime.Now,
@@ -6735,13 +6959,24 @@ internal sealed class BridgeEngineModel(
             // session.json is discovered dead by the first edit after the restart.
             var oldStatusMessageDeleted = false;
 
+            // THE OWNER'S STANDING COMMAND BAR RIDES ON THE STATUS LINE, and that is why it is here
+            // rather than on a message of its own. This is the single message per topic that the app
+            // already keeps current and already keeps near the bottom (it reposts when buried), so
+            // the buttons are always within reach. A message of its own would need either a pin —
+            // which the owner has refused — or a repost policy of its own, which is this one again.
+            IReadOnlyList<IReadOnlyList<(string Data, string Label)>> commandButtonRows =
+                session.TelegramTopicId == null ? [] : Build_CommandButtonRows(session.TelegramTopicId.Value);
+
             try
             {
                 // The id re-checked rather than asserted through .Value: the decider guarantees it,
                 // but a guarantee that lives in another file is not one the compiler can see.
                 if (action == Telegram.TopicStatusActions.Edit && session.StatusLineMessageId != null)
                 {
-                    await _telegramClient.Edit_MessageText_Async(session.StatusLineMessageId.Value, text, cancellationToken);
+                    // THE ROW-AWARE EDIT, NOT THE PLAIN ONE. The plain edit sends no reply_markup and
+                    // Telegram reads that as "remove the keyboard" — so editing this message the old
+                    // way would strip the command bar off it two seconds after it was posted.
+                    await _telegramClient.Edit_MessageTextWithButtonRows_Async(session.StatusLineMessageId.Value, text, commandButtonRows, cancellationToken);
                 }
                 else
                 {
@@ -6792,7 +7027,7 @@ internal sealed class BridgeEngineModel(
                         oldStatusMessageDeleted = true;
                     }
 
-                    var messageId = await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
+                    var messageId = await _telegramClient.Send_MessageWithButtonRows_Async(session.TelegramTopicId, text, commandButtonRows, cancellationToken);
 
                     if (messageId == null)
                     {
@@ -7181,7 +7416,7 @@ internal sealed class BridgeEngineModel(
                 ? $" · {Formatting.ContextUsage_Formatter.Describe_OrNull(memberContext)}"
                 : "";
 
-            memberLines.Add($"- {member.MemberId}: {Describe_DeclaredState(declared, workingNow, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
+            memberLines.Add($"- {member.MemberId}: {MemberState_Descriptor.Describe_ForOwner(declared, workingNow, memberOwesTheOwner)}{memberContextSuffix}{lastWrite}");
         }
 
         // The header carries the ledger counts, so "who is doing what" and "how far along are we"
@@ -7223,20 +7458,19 @@ internal sealed class BridgeEngineModel(
         return SessionActivity_Probe.Is_MidTurn(usageFilePath) ? "working now" : idleText;
     }
 
-    static string Describe_DeclaredState(MemberStates declared, bool workingNow, bool ownerOwesReply)
-    {
-        // ONE copy, in a project the test suite compiles. This switch used to be a duplicate of the
-        // card builder's — item 12 — and the pair is why adding a state left three consumers
-        // throwing on the happy path with 484 tests green.
-        var declaredText = MemberState_Descriptor.Describe(declared);
-
-        if (workingNow)
-            return $"working now (channel says: {declaredText})";
-
-        // The third state the owner asked for: a session that has spoken and is waiting on them is
-        // not idle. Same question the stall alert asks, so the two cannot disagree.
-        return ownerOwesReply ? MemberState_Descriptor.WAITING_ON_OWNER : declaredText;
-    }
+    // Describe_DeclaredState USED TO LIVE HERE and it is gone, not moved. It took the same three
+    // arguments as MemberState_Descriptor.Describe_ForOwner and answered the same question, so it
+    // was item 12's second copy wearing the comment that warns about second copies — and the copies
+    // had already drifted where it mattered most. Its working-now branch printed
+    // "working now (channel says: {declared})", which for an open writing window interpolated the
+    // descriptor's OTHER wording, "idle — writing window left open", producing the single line the
+    // owner sent back on 2026-08-24:
+    //
+    //     solo-1: working now (channel says: idle — writing window left open)
+    //
+    // One session, one instant, both words. Describe_ForOwner has always resolved that pair
+    // correctly — "working now (writing window open)" — because it treats working-now as outranking
+    // the declaration instead of quoting the declaration verbatim beside it.
 
     /// <summary>
     /// /clear — empties the TELEGRAM view, never the sessions: no terminal is touched, no channel
@@ -7445,6 +7679,12 @@ internal sealed class BridgeEngineModel(
         // The hold button, for the same reason: it is a control the APP owns, not an answer to
         // forward to a session.
         if (await Try_HandleHoldTap_Async(client, tap, cancellationToken))
+            return;
+
+        // The topic's standing command bar, for the same reason again — and it must come BEFORE the
+        // generic path below, which does not recognise the data and would answer the owner "expired"
+        // for a button that is meant to work every time they press it.
+        if (await Try_HandleTopicCommandTap_Async(client, tap, cancellationToken))
             return;
 
         (long? ThreadId, string OptionText, long GroupId, string QuestionText) registered;
@@ -8214,6 +8454,57 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// A tap on the topic's standing command bar. Returns false when the data is not ours, so an
+    /// unrecognised tap falls through to the handlers below exactly as it always has.
+    ///
+    /// It calls the SAME method the typed command calls. A second implementation of /show that only
+    /// buttons could reach is precisely how a button and the command it names come to mean different
+    /// things — the hazard this repo has already paid for once with /progress and /left.
+    /// </summary>
+    async Task<bool> Try_HandleTopicCommandTap_Async(ITelegramApiClient client, ITelegramCallbackTap tap, CancellationToken cancellationToken)
+    {
+        var parsed = Telegram.TopicCommandButtons.Parse_OrNull(tap.Data);
+
+        if (parsed == null)
+            return false;
+
+        // ANSWERED BEFORE THE WORK, not after. /screen maximises a window, waits for it to paint and
+        // uploads a picture — the better part of a second — and an unanswered callback leaves the
+        // button spinning on the owner's phone for the whole of it.
+        await Answer_CallbackTap_BestEffort_Async(client, tap.CallbackQueryId, "✓", cancellationToken);
+
+        // The id encoded in the button is the topic the bar was drawn FOR; the tap's own is the
+        // fallback for a button minted before that was carried.
+        var threadId = parsed.Value.MessageThreadId != 0 ? parsed.Value.MessageThreadId : tap.MessageThreadId;
+
+        switch (parsed.Value.Command)
+        {
+            case "show":
+                await Show_SessionWindow_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "screen":
+                await Send_SessionScreenshot_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "merge":
+                await Ask_SessionToMerge_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "test":
+                await Toggle_AwaitingTest_Async(client, threadId, cancellationToken);
+                return true;
+
+            default:
+                // Our prefix, a command this build does not render: a bar left on a message by an
+                // older build. Swallowing it silently would be a button that does nothing forever.
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"Topic command button '{parsed.Value.Command}' is not one this build offers — ignored.");
+                await Send_DirectReply_BestEffort_Async(client, threadId, $"That button (/{parsed.Value.Command}) is from an older version of the app — send the command instead.", cancellationToken);
+                return true;
+        }
+    }
+
     async Task Answer_CallbackTap_BestEffort_Async(
         ITelegramApiClient client, string callbackQueryId, string text, CancellationToken cancellationToken)
     {
@@ -8881,7 +9172,13 @@ internal sealed class BridgeEngineModel(
                 // REMEMBERED ONLY ON A CONFIRMED WRITE. Recording it first would let a channel that
                 // stayed locked for the whole budget count as a delivery, and because an unchanged
                 // digest is never re-sent, that away spell would go silent entirely.
-                if (Post_StatusEntry(session.OrchId, digest, session.OwnerPresence))
+                //
+                // THE PICTURE IS APPENDED AFTER THE DECISION AND IS NOT REMEMBERED WITH IT. Deciding
+                // on the digest TEXT and storing the digest TEXT is what keeps the no-change rule
+                // above intact: a fresh timestamped IMAGE: path differs on every single pass, so
+                // folding it into either side would make every digest look changed and restart the
+                // exact 30-minute limit cycle that rule exists to break.
+                if (Post_StatusEntry(session.OrchId, digest + await Build_StatusScreenshotMarker_OrEmpty_Async(session, cancellationToken), session.OwnerPresence))
                     Remember_AwayDigest(session.OrchId, digest);
 
                 continue;
@@ -8895,11 +9192,170 @@ internal sealed class BridgeEngineModel(
 
             var baseline = Last_PostedProgress_OrNull(session.OrchId);
 
-            if (Post_StatusEntry(session.OrchId, Build_PeriodicStatusText(session, baseline), session.OwnerPresence))
+            // THE PICTURE RIDES THE ENTRY, as an IMAGE: line. The mirror already turns those into a
+            // real photo in the topic and strips the line from the text, so the half-hourly status
+            // needs no upload path of its own — and it inherits that path's behaviour on failure.
+            var statusText = Build_PeriodicStatusText(session, baseline)
+                + await Build_StatusScreenshotMarker_OrEmpty_Async(session, cancellationToken);
+
+            if (Post_StatusEntry(session.OrchId, statusText, session.OwnerPresence))
                 Remember_PostedProgress(session.OrchId);
         }
+    }
 
-        await Task.CompletedTask;
+    /// <summary>
+    /// The picture of the session's terminal that rides the periodic status (owner, 2026-08-24), so
+    /// the half-hourly update SHOWS what is happening as well as saying it. Returns the IMAGE: line
+    /// to append, or an empty string when there is nothing to show.
+    ///
+    /// THE QUEUEING THE OWNER ASKED FOR IS NOT HERE — it is in <see cref="WindowFocus.TerminalWindow_Capturer"/>,
+    /// which serialises every capture process-wide. This sweep is sequential already; the reason the
+    /// gate cannot live in this loop is /screen, which arrives from the phone on the inbound loop and
+    /// would otherwise raise a second window into the middle of this one's photograph.
+    ///
+    /// ONLY WHILE THE OWNER IS AWAY FROM THE MACHINE — their call, 2026-08-24, asked as a choice and
+    /// answered "only take the periodic screenshot when I am away from the PC". A capture is not a
+    /// passive read: it raises and maximises a real window, so taking one while they are working
+    /// steals the foreground from whatever they are doing, every half hour, once per topic.
+    ///
+    /// The per-session skip further up does NOT already cover this. It suppresses the status for the
+    /// orchestration whose terminal they are sitting in; every OTHER topic would still fire, and it
+    /// is those windows flashing over their work that they were being asked about.
+    /// </summary>
+    async Task<string> Build_StatusScreenshotMarker_OrEmpty_Async(IOrchestrationSession session, CancellationToken cancellationToken)
+    {
+        // OFF UNTIL THEY TURN IT ON (/screens). Their words: "there should be a command that starts
+        // adding screenshots to the status messages so that I can enable it" — so the default is no
+        // pictures, and nothing here happens until the persisted flag says otherwise.
+        if (!_configProvider.Get_Current().TelegramStatusScreenshots)
+            return string.Empty;
+
+        if (Is_OwnerAtThePc())
+            return string.Empty;
+
+        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+
+        if (window == null)
+            return string.Empty;
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+        var directory = Path.GetDirectoryName(channelFile);
+
+        if (directory == null)
+            return string.Empty;
+
+        var imagePath = Path.Combine(directory, "media", $"status-{DateTime.Now:yyyyMMdd-HHmm}.png");
+
+        var failureReason = await WindowFocus.TerminalWindow_Capturer.Try_CaptureSessionWindow_Async(window, imagePath, cancellationToken);
+
+        if (failureReason == null)
+            return $"\nIMAGE: {imagePath}";
+
+        // BEST-EFFORT, unlike /screen. There the picture IS the answer, so failing it silently would
+        // leave the owner with nothing; here it accompanies a status that must still arrive, so the
+        // reason goes to the log and the status goes out without it.
+        _log.Log_Warning(session.OrchId, $"Periodic status screenshot skipped: {failureReason}");
+
+        return string.Empty;
+    }
+
+    /// <summary>What the General topic is called when nothing is decorating it.</summary>
+    const string GENERAL_TOPIC_BASE_NAME = "General";
+
+    /// <summary>The camera that says status screenshots are on, read straight off the topic list.</summary>
+    const string STATUS_SCREENSHOTS_GLYPH = "📸";
+
+    /// <summary>
+    /// The last General-topic name this process actually pushed. Null until the first push, which is
+    /// deliberate: a restart then re-asserts the name once, so a flag edited on disk while the app
+    /// was down cannot leave the topic list contradicting the config.
+    /// </summary>
+    string? _appliedGeneralTopicName;
+
+    /// <summary>
+    /// When a General-topic rename whose outcome we could NOT learn may be tried again. The sibling of
+    /// <see cref="_topicNameRetryAfterUtc"/>, and here for the same reason: an unknown outcome must
+    /// suppress retries for a while and then retry, rather than for ever or for two seconds.
+    /// </summary>
+    DateTime? _generalTopicNameRetryAfterUtc;
+
+    /// <summary>
+    /// Puts the camera on the GENERAL topic's name while status screenshots are on, and takes it off
+    /// again (owner, 2026-08-24). The topic list is the one surface visible without opening anything,
+    /// so it answers "is this on?" without them having to remember or ask.
+    ///
+    /// THE BASE NAME IS ASSUMED TO BE "General", and this WRITES A KNOWN PAIR rather than decorating
+    /// whatever is currently there. Telegram offers no cheap read of the General topic's name, and a
+    /// decorate-in-place that cannot read the previous name is how an emoji ends up applied twice.
+    /// The cost of the assumption is that a General topic the owner renamed by hand gets overwritten.
+    ///
+    /// Guarded by the remembered name, so it is one API call per actual change, not one per tick.
+    /// </summary>
+    async Task Sync_GeneralTopicName_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        var desired = _configProvider.Get_Current().TelegramStatusScreenshots
+            ? $"{STATUS_SCREENSHOTS_GLYPH} {GENERAL_TOPIC_BASE_NAME}"
+            : GENERAL_TOPIC_BASE_NAME;
+
+        if (_appliedGeneralTopicName == desired)
+            return;
+
+        if (!TopicNameSync_Gate.Is_AttemptDue(_generalTopicNameRetryAfterUtc, DateTime.UtcNow))
+            return;
+
+        try
+        {
+            await client.Edit_GeneralForumTopic_Async(desired, cancellationToken);
+            _appliedGeneralTopicName = desired;
+            _generalTopicNameRetryAfterUtc = null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (Is_TopicAlreadyNamed(ex))
+        {
+            // THE ORDINARY CASE AT EVERY APP START, AND IT IS NOT AN ERROR. The memo begins null while
+            // Telegram already holds the right name, so the first push is always the one Telegram
+            // refuses with TOPIC_NOT_MODIFIED. Not remembering it meant trying again on the next tick,
+            // for ever: the owner reported this as "I get this error many many times in the activity
+            // log", which is the same spin Sync_TopicNames_Inside_Gate_Async was fixed for and this
+            // copy never was. Nothing is logged — the name is what we want, which is success.
+            _appliedGeneralTopicName = desired;
+            _generalTopicNameRetryAfterUtc = null;
+        }
+        catch (Exception exception)
+        {
+            // Cosmetic, and never the reason a toggle looks like it failed — the flag is saved before
+            // this runs.
+            //
+            // THE SAME THREE BUCKETS AS THE PER-ORCHESTRATION SYNC, for the same reasons, decided in the
+            // same place. An outcome we could not learn (a timeout, a dropped connection, a 429, a 5xx)
+            // is stamped and retried after the backoff; a genuine refusal is remembered as applied so it
+            // is retried when the wanted name CHANGES rather than on the next tick. Writing the memo on
+            // a refusal is the same honest-behaviour/dishonest-map trade documented at the sibling site:
+            // an invalid name will not become valid by being sent again two seconds later.
+            if (TopicNameSync_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.OutcomeUnknown)
+                _generalTopicNameRetryAfterUtc = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, MIRROR_RETRY_BACKOFF_SECONDS);
+            else
+                _appliedGeneralTopicName = desired;
+
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not rename the General topic: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Is the owner AT THE MACHINE, anywhere? Terminal presence is per orchestration and at most one
+    /// can hold it — a /pc ends every other topic's — so this is "does any live session have them".
+    ///
+    /// It asks through <see cref="OwnerPresence_Policy.Suppresses_SupervisorAttention"/> rather than
+    /// comparing the enum again: that predicate already IS "the owner is in this orchestration's
+    /// terminal", and a second spelling of it here is how the two would answer differently later.
+    /// </summary>
+    bool Is_OwnerAtThePc()
+    {
+        return _store.Load_All().Any(session =>
+            session.ClosedUtc == null && OwnerPresence_Policy.Suppresses_SupervisorAttention(session.OwnerPresence));
     }
 
     /// <summary>The slot this orchestration last spent, or null when it has never been seen.</summary>
