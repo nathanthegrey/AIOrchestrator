@@ -117,16 +117,26 @@ public class DoneMarksTheTopicProbeTests : IDisposable
     }
 
     /// <summary>
-    /// THE SECOND PRESS MUST NOT LOOK LIKE THE FIRST. /done is a silent toggle, so pressing it again
-    /// is the natural response to a topic list that has not visibly changed yet — and both replies
-    /// used to open with ✅, which made the undo indistinguishable from the mark on a phone.
+    /// A SECOND /done MUST NOT UNDO THE FIRST — the command is no longer a toggle.
     ///
-    /// Owner, 2026-08-24, having done exactly that 17 seconds apart: *"The check emoji is not being
-    /// added to the topic name"*. It had been added, and then removed by their own second press.
+    /// It was one, and it never survived contact with the owner. Every use of it in this machine's
+    /// history was undone within seconds of being set: 2026-08-21 14:21:48 marked, 14:22:05 cleared;
+    /// 2026-08-24 08:53:45 / 08:54:02; 2026-08-24 21:48:32 / 21:48:55. A forum rename takes a moment
+    /// to surface in Telegram's topic list, so a second press is the natural response to seeing
+    /// nothing — and it silently removed the mark.
+    ///
+    /// Owner, 2026-08-25, after all three: *"the /done command still doesn't put the check in the
+    /// topic name. It simply doesn't happen — it sends a confirmation message that starts with the
+    /// check, but doesn't change the topic name."* It had been added, three times, and removed by
+    /// their own second press each time.
+    ///
+    /// Making the two replies distinguishable was the previous fix and it did not hold: the second
+    /// press happens before the first reply is read. Repeating the command is now simply harmless.
+    /// Un-finishing keeps its own route — writing in the topic — which the test above pins.
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task PressingDoneTwice_ClearsTheTick_AndSaysSoWithoutLookingLikeSuccess()
+    public async Task PressingDoneTwice_LeavesItFinished_AndNeverSaysItIsNot()
     {
         var orchId = await Start_WithChannelAlreadySeen_Async();
 
@@ -139,23 +149,47 @@ public class DoneMarksTheTopicProbeTests : IDisposable
         _telegram.Queue_OwnerMessage(Build_OwnerMessageJson(2002, "/done"));
 
         Assert.True(
-            await Run_Until_Async(() => !Last_NameHasTick(), 20_000),
-            $"the second /done did not clear the tick. names: {_telegram.Dump_TopicNames()}");
+            await Run_Until_Async(() => _telegram.SentTexts().Count(text => text.Contains("marked finished", StringComparison.Ordinal)) >= 2, 20_000),
+            $"the second /done was never acknowledged.{Environment.NewLine}{_log.Dump()}");
 
-        var clearedReply = _telegram.SentTexts()
-            .LastOrDefault(text => text.Contains("NOT finished", StringComparison.Ordinal));
-
-        _out.WriteLine($"replies sent: {string.Join(" || ", _telegram.SentTexts())}");
+        // THE POINT OF THE WHOLE TEST. Give the old toggle every chance to fire before asserting.
+        await Run_Until_Async(() => !Last_NameHasTick(), 3_000);
 
         Assert.True(
-            clearedReply != null,
-            "the reply undoing the mark never said the topic is not finished, so the owner has only "
-            + $"the topic list to tell them what happened.{Environment.NewLine}"
-            + $"replies: {string.Join(" || ", _telegram.SentTexts())}");
+            Last_NameHasTick(),
+            $"a second /done took the tick back off — it is a toggle again. names: {_telegram.Dump_TopicNames()}");
 
-        Assert.False(
-            clearedReply!.TrimStart().StartsWith(TelegramDeliveryMode_Glyphs.DONE, StringComparison.Ordinal),
-            $"the reply that UNDOES the finished mark still opens with the finished tick: {clearedReply}");
+        Assert.DoesNotContain(
+            _telegram.SentTexts(),
+            text => text.Contains("NOT finished", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The confirmation must QUOTE the name it just set. The owner's report was that the reply and
+    /// the topic list disagreed, and they had no way to tell which was right without going to hunt
+    /// for the topic — so the reply now carries the answer.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheConfirmation_QuotesTheTopicNameItJustSet()
+    {
+        var orchId = await Start_WithChannelAlreadySeen_Async();
+
+        _telegram.Queue_OwnerMessage(Build_OwnerMessageJson(2101, "/done"));
+
+        Assert.True(
+            await Run_Until_Async(() => Last_NameHasTick(), 20_000),
+            $"/done never marked it.{Environment.NewLine}{_log.Dump()}");
+
+        var appliedName = _telegram.Last_TopicName_OrNull();
+
+        Assert.True(
+            await Run_Until_Async(
+                () => _telegram.SentTexts().Any(text => appliedName != null && text.Contains(appliedName, StringComparison.Ordinal)),
+                10_000),
+            "the confirmation never quoted the topic name it set, so the owner still has to go and "
+            + $"look.{Environment.NewLine}name: {appliedName}{Environment.NewLine}"
+            + $"replies: {string.Join(" || ", _telegram.SentTexts())}");
     }
 
     bool Last_NameHasTick()

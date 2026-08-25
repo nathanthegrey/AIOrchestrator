@@ -143,6 +143,19 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    /// <summary>
+    /// Clears the supervisor stamp and pid, taking the orchestration back to BASIC. The one write
+    /// that can undo a promotion — see OrchestrationSession_Factory.CreateFrom_Existing_WithoutSupervisor.
+    /// </summary>
+    public void Clear_Supervisor(string orchId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithoutSupervisor(session));
+        }
+    }
+
     public void Stamp_CommunicatorSpawned(string orchId)
     {
         lock (_writeLock)

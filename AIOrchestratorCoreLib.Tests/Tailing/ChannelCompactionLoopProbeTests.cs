@@ -114,18 +114,22 @@ public class ChannelCompactionLoopProbeTests : IDisposable
     }
 
     /// <summary>
-    /// THIS PINS A DEFECT, NOT A DESIRED BEHAVIOUR — F5, reported 2026-08-13 and not fixed.
-    /// <see cref="ChannelDiscovery"/> matches the folder prefix `imp-` only, while member ids may be
-    /// `rev-` or `solo-`. So a reviewer's channel is never compacted — and, through the same
-    /// discovery, never shape-checked and never mirrored to the phone. A reviewer that fills its
-    /// channel grows it without bound and speaks to the owner not at all.
+    /// F5 IS FIXED, AND THIS IS THE INVERTED ASSERTION IT ASKED FOR.
     ///
-    /// WHEN F5 IS FIXED THIS ASSERTION MUST BE INVERTED, and that is the point of writing it: the
-    /// behaviour is currently invisible, so it can be changed by accident. A green test asserting a
-    /// defect is only honest if it says it is doing that, which this one does.
+    /// It used to pin the defect: <see cref="ChannelDiscovery"/> matched the folder prefix `imp-`
+    /// only, so a reviewer's channel was never discovered — never compacted, never shape-checked and
+    /// never mirrored. Its doc comment said "WHEN F5 IS FIXED THIS ASSERTION MUST BE INVERTED", and
+    /// this is that inversion: discovery now takes both spoke prefixes from MemberKind_Ids.
+    ///
+    /// What fixing it was FOR is the owner's, 2026-08-25: *"I also want Rev1 Online."* A reviewer had
+    /// never said a word to them, because the file it says it in was not being read. Compaction is
+    /// the half that proves discovery reaches the whole pipeline and not just the mirror.
+    ///
+    /// A solo is deliberately still not a spoke — it writes to owner-channel.md — which the
+    /// companion case below pins.
     /// </summary>
     [Fact]
-    public async Task AReviewerChannelIsNotCompacted_WhichIsTheDefectF5NotTheIntent()
+    public async Task AReviewerChannelIsCompacted_NowThatItIsDiscovered()
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
         var reviewerChannel = _paths.Get_ImplementerChannelFile(session.OrchId, Find_MemberId(session, MemberKinds.Reviewer));
@@ -134,8 +138,11 @@ public class ChannelCompactionLoopProbeTests : IDisposable
 
         await Tick_Once_Async();
 
-        Assert.Equal(ENTRIES_ABOVE_THRESHOLD, Count_Entries(reviewerChannel));
-        Assert.False(File.Exists(Channel_Compactor.Build_ArchiveFilePath(reviewerChannel)));
+        Assert.True(
+            Wait_Until(() => File.Exists(Channel_Compactor.Build_ArchiveFilePath(reviewerChannel))),
+            "the reviewer's channel was still not compacted, so discovery is not reaching it — F5 is back.");
+
+        Assert.True(Count_Entries(reviewerChannel) < ENTRIES_ABOVE_THRESHOLD);
     }
 
     /// <summary>

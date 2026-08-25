@@ -202,6 +202,89 @@ internal sealed class OrchestrationLauncherModel(
         return hasLiveImplementer ? _store.Get_Session(orchId) : Add_Implementer(orchId);
     }
 
+    /// <summary>
+    /// A full crew becomes one session again: the supervisor and every member end, and a solo takes
+    /// over the same owner-channel.
+    ///
+    /// THE WAY BACK, which did not exist until 2026-08-25. `SupervisorSpawnedUtc` is the shape and
+    /// nothing anywhere could clear it, so the promotion prompt, `solo.md` and three comments all
+    /// said "one-way" — accurately. The owner asked for one command that goes both ways, and this is
+    /// the half that was missing.
+    ///
+    /// NOTHING MOVES, exactly as on the way up. The supervisor has been writing `owner-channel.md`,
+    /// which is the file a solo owns, so the solo opens it and finds the whole conversation including
+    /// the supervisor's handover entry. The Telegram topic stays bound to the orchestration, so the
+    /// owner keeps reading one thread.
+    ///
+    /// THE ORDER IS THE MIRROR OF THE PROMOTION'S, chosen the same way — by what survives a failure:
+    ///
+    ///   1. CLEAR THE STAMP FIRST. From that instant the orchestration reads as basic, so the
+    ///      watchdog stops respawning the supervisor. Doing this last would let a tick in the middle
+    ///      of the work see a crew with a dead supervisor and spawn a replacement into an
+    ///      orchestration being dismantled — the mirror of the double-spawn the promotion's ordering
+    ///      protects against.
+    ///   2. THEN KILL the supervisor and the members. The stamp is already gone, so nothing revives
+    ///      them; and if this throws, the orchestration is basic with a stale crew still running,
+    ///      which the retry finishes (Incomplete).
+    ///   3. THE SOLO LAST, because it is the only step whose failure leaves a recoverable state: a
+    ///      basic orchestration with no live session is exactly what the watchdog respawns.
+    ///
+    /// The window between 2 and 3 has no session on the channel. That is the opposite trade from the
+    /// promotion's (two sessions briefly), and it is forced: a solo spawned before the supervisor
+    /// died would meet the supervisor's own turn still writing, and two sessions that both believe
+    /// they own the owner's phone line is worse than a few seconds of silence.
+    /// </summary>
+    public IOrchestrationSession Demote_ToBasic(string orchId)
+    {
+        var session = _store.Get_Session(orchId);
+
+        // ASKED AT THE MOMENT OF EFFECT, for the reason Promote_ToFullCrew states: a parked request
+        // can be twelve hours old and the shape may have moved under it.
+        var readiness = OrchestrationShape.Decide_DemotionReadiness(
+            session.SupervisorSpawnedUtc,
+            OrchestrationShape.Has_LiveSolo(session.Members));
+
+        if (!OrchestrationShape.Can_StillDemote(readiness))
+        {
+            _log.Log_Warning(orchId, $"Demotion skipped — {readiness}");
+            return session;
+        }
+
+        // THE REPO IS CHECKED BEFORE ANYTHING IS DESTROYED. The promotion learned this the hard way:
+        // it flipped the shape and then failed to spawn, against a repo folder that had been moved.
+        // Here the cost would be worse — the crew would be killed and no solo could replace it.
+        if (!Directory.Exists(session.RepoPath))
+            throw new Exception($"Repo path '{session.RepoPath}' for '{orchId}' does not exist — nothing was demoted");
+
+        _store.Clear_Supervisor(orchId);
+
+        Termination.SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_SupervisorPidFile(orchId));
+
+        _log.Log_Info(orchId, "Supervisor ended — demoting to one session");
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null || MemberKind_Ids.Resolve_Kind(member.MemberId) == MemberKinds.Solo)
+                continue;
+
+            _store.Close_Member(orchId, member.MemberId);
+            Termination.SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, member.MemberId));
+
+            _log.Log_Info(orchId, $"Member '{member.MemberId}' closed — demoted to one session");
+        }
+
+        // ONLY IF THERE IS NOT ONE ALREADY — the mirror of the promotion's implementer check, and
+        // needed for the same reason: finishing a half-done demotion must not put a second solo
+        // beside the live one. That is what Incomplete means here.
+        if (OrchestrationShape.Has_LiveSolo(_store.Get_Session(orchId).Members))
+        {
+            _log.Log_Info(orchId, "Finishing a demotion that stopped halfway — a solo is already running, so it is not spawned again");
+            return _store.Get_Session(orchId);
+        }
+
+        return Add_Member(orchId, MemberKinds.Solo);
+    }
+
     public void Respawn_Supervisor(string orchId)
     {
         var session = _store.Get_Session(orchId);

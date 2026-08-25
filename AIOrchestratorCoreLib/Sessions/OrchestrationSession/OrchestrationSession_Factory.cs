@@ -75,6 +75,30 @@ public static class OrchestrationSession_Factory
     }
 
     /// <summary>Also stamps SupervisorSpawnedUtc — the pid change IS a spawn (watchdog grace source).</summary>
+    /// <summary>
+    /// TAKES THE ORCHESTRATION BACK TO BASIC — the only thing in this system that can, and for most
+    /// of this repo's life nothing could.
+    ///
+    /// `SupervisorSpawnedUtc` IS the shape (OrchestrationShape.Is_BasicOrchestration), it is stamped
+    /// before a supervisor spawn is attempted, and no path cleared it — including every close path.
+    /// That is why the promotion prompt, the solo's role command and three code comments all called
+    /// promotion one-way. The owner asked for the way back on 2026-08-25: *"with the same command I
+    /// transform an orchestra into solo, and a solo into an orchestra."*
+    ///
+    /// The PID goes with the stamp, deliberately: leaving a supervisor pid behind on an orchestration
+    /// that now has no supervisor slot would leave the watchdog holding a pid it must never respawn
+    /// and the terminator holding one it has already killed.
+    /// </summary>
+    public static IOrchestrationSession CreateFrom_Existing_WithoutSupervisor(IOrchestrationSession existing)
+    {
+        return CreateFrom_Existing(
+            existing,
+            supervisorPid: null,
+            supervisorPidWasSet: true,
+            supervisorSpawnedUtc: null,
+            supervisorSpawnedUtcWasSet: true);
+    }
+
     public static IOrchestrationSession CreateFrom_Existing_WithSupervisorPid(IOrchestrationSession existing, int? pid)
     {
         return CreateFrom_Existing(existing, supervisorPid: pid, supervisorSpawnedUtc: DateTime.UtcNow, supervisorPidWasSet: true);
@@ -156,6 +180,11 @@ public static class OrchestrationSession_Factory
         int? supervisorPid = null,
         bool supervisorPidWasSet = false,
         DateTime? supervisorSpawnedUtc = null,
+
+        // The same wasSet dance the pid and the two bools use, and here it is load-bearing for the
+        // SHAPE: null must be able to mean "cleared — this is basic again" and not only "unchanged".
+        // Without it a demotion is unexpressible, which is precisely why there was no demotion.
+        bool supervisorSpawnedUtcWasSet = false,
         DateTime? communicatorSpawnedUtc = null,
         string? displayName = null,
         string? supervisorModelOverride = null,
@@ -186,7 +215,7 @@ public static class OrchestrationSession_Factory
             existing.CreatedUtc,
             telegramTopicId ?? existing.TelegramTopicId,
             supervisorPidWasSet ? supervisorPid : existing.SupervisorPid,
-            supervisorSpawnedUtc ?? existing.SupervisorSpawnedUtc,
+            supervisorSpawnedUtcWasSet ? supervisorSpawnedUtc : supervisorSpawnedUtc ?? existing.SupervisorSpawnedUtc,
             communicatorSpawnedUtc ?? existing.CommunicatorSpawnedUtc,
             displayName ?? existing.DisplayName,
             supervisorModelWasSet ? supervisorModelOverride : existing.SupervisorModelOverride,

@@ -146,3 +146,55 @@ public class OwnerPushPolicyTests
         Assert.False(OwnerPush_Policy.Carries_Question("I have a question about the design"));
     }
 }
+
+/// <summary>
+/// The boot greeting — the FOURTH thing the phone gets, added 2026-08-25.
+///
+/// The owner could not tell when a session was ready to be written to: *"At the start of a new
+/// session I don't receive a message from the sup/solo telling me it's online and ready, so I don't
+/// know when I can start writing. Absurdly I receive a message from the impl saying it's online …
+/// I should receive Sup Online, or Solo Online, and I also want Rev1 Online."*
+///
+/// A greeting is progress narration by shape, so the policy above killed it; a member's identical
+/// greeting only ever got through because a spoke channel never meets this policy at all.
+/// </summary>
+public class OnlineGreetingPushTests
+{
+    [Theory]
+    [InlineData("supervisor online — AIOrchestrator — repos\\AIOrchestrator")]
+    [InlineData("solo online — CRM — Projects\\Prova Amazon")]
+    [InlineData("imp-1 online")]
+    [InlineData("rev-1 online")]
+    [InlineData("general supervisor online")]
+    [InlineData("online")]
+    public void EveryRolesBootGreeting_IsPushed(string subject)
+    {
+        // EMPTY BODY IS THE NORMAL CASE and it is what made this unrescuable: supervisor.md and
+        // solo.md both mandate it, so there is not even a stray '?' for Asks_InProse to catch.
+        var entry = $"## [1] FROM supervisor — 2026-08-25 09:49 — {subject}";
+
+        Assert.True(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false, subject));
+    }
+
+    /// <summary>
+    /// The word in a SENTENCE is not a greeting. Matching the raw text would have pushed every
+    /// entry that happened to mention being online — narration again, wearing the exemption.
+    /// </summary>
+    [Theory]
+    [InlineData("the build is online again after the outage")]
+    [InlineData("checked whether imp-2 was online")]
+    [InlineData("brought the staging environment back online")]
+    public void TheWordInProse_IsNotAGreeting(string subject)
+    {
+        Assert.False(OwnerPush_Policy.Is_OnlineGreeting(subject));
+        Assert.False(OwnerPush_Policy.Should_Push($"## [8] FROM supervisor — d — {subject}\nnothing to decide here.", false, subject));
+    }
+
+    [Fact]
+    public void NoSubject_ChangesNothing_ForCallersThatDoNotPassOne()
+    {
+        Assert.False(OwnerPush_Policy.Is_OnlineGreeting(null));
+        Assert.False(OwnerPush_Policy.Is_OnlineGreeting("   "));
+        Assert.False(OwnerPush_Policy.Should_Push("## [12] FROM supervisor — d — s\nimp-1 is still pricing.", false));
+    }
+}

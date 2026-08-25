@@ -21,6 +21,35 @@ public enum PromotionReadiness
 }
 
 /// <summary>
+/// What a DEMOTION should do — the mirror of <see cref="PromotionReadiness"/>, and new on
+/// 2026-08-25 because until then the way back did not exist at all.
+///
+/// The owner asked for one command that goes both ways: *"This command must be bidirectional — with
+/// the same command I transform an orchestra into solo, and a solo into an orchestra."* Every piece
+/// of documentation in this repo said the promotion was one-way, and it was: nothing anywhere could
+/// clear `SupervisorSpawnedUtc`, which is the single field that decides the shape.
+/// </summary>
+public enum DemotionReadiness
+{
+    /// <summary>A crew — take it back to one session.</summary>
+    Ready,
+
+    /// <summary>
+    /// Already basic. The refusal that stops a second tap, exactly as AlreadyACrew does on the way
+    /// up: two parked requests both pass the park check, and the second must do nothing rather than
+    /// spawn a second solo beside the first.
+    /// </summary>
+    AlreadyBasic,
+
+    /// <summary>
+    /// Stamped as a crew and a solo is ALREADY running — a demotion that stopped halfway, the mirror
+    /// of Incomplete. Finish it: clear the stamp and close what is left of the crew, but do not
+    /// spawn a second solo on top of the live one.
+    /// </summary>
+    Incomplete,
+}
+
+/// <summary>
 /// Whether an orchestration has a SUPERVISOR SLOT — the only question anything actually asks about
 /// its shape, and the one the watchdog needs an answer to before it respawns anything.
 ///
@@ -153,6 +182,44 @@ public static class OrchestrationShape
     public static bool Can_StillPromote(PromotionReadiness readiness)
     {
         return readiness is PromotionReadiness.Ready or PromotionReadiness.Incomplete;
+    }
+
+    /// <summary>
+    /// The mirror of Decide_PromotionReadiness, asked at the moment of effect for the same reason:
+    /// a parked request can be twelve hours old, and the shape may have moved under it.
+    ///
+    /// Note the asymmetry with promotion, and that it is real rather than an oversight. Promotion
+    /// treats "basic with no live solo" as NOTHING TO PROMOTE, because there is no session to
+    /// replace. Demotion has no such case: a crew always has something to take down, whether or not
+    /// its supervisor is currently alive, and the result is a basic orchestration with a fresh solo.
+    /// </summary>
+    public static DemotionReadiness Decide_DemotionReadiness(DateTime? supervisorSpawnedUtc, bool hasLiveSolo)
+    {
+        if (Is_BasicOrchestration(supervisorSpawnedUtc))
+            return DemotionReadiness.AlreadyBasic;
+
+        return hasLiveSolo ? DemotionReadiness.Incomplete : DemotionReadiness.Ready;
+    }
+
+    /// <summary>
+    /// Whether a demotion can still DO anything — asked before the owner is shown a prompt, so a tap
+    /// that could only fail is never offered. Same contract as Can_StillPromote.
+    /// </summary>
+    public static bool Can_StillDemote(DemotionReadiness readiness)
+    {
+        return readiness is DemotionReadiness.Ready or DemotionReadiness.Incomplete;
+    }
+
+    /// <summary>
+    /// WHICH WAY WOULD ONE COMMAND GO? The whole point of the owner's bidirectional command: they
+    /// send one verb and the app works out the direction from the shape, rather than making them
+    /// remember which of two commands this topic needs.
+    ///
+    /// Returns true to promote (basic -> crew), false to demote (crew -> basic).
+    /// </summary>
+    public static bool Would_Promote(DateTime? supervisorSpawnedUtc)
+    {
+        return Is_BasicOrchestration(supervisorSpawnedUtc);
     }
 
     /// <summary>
