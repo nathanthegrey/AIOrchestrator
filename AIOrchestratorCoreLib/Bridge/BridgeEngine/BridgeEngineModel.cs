@@ -2068,7 +2068,14 @@ internal sealed class BridgeEngineModel(
 
         _nudgedMemberUtc[session.OrchId] = DateTime.UtcNow;
 
-        _log.Log_Warning(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
+        // INFO, NOT WARNING. Nothing has failed here: this is routine coaching aimed at a SESSION,
+        // and the app panel gives Warning the amber "awaiting review" brush with no textual level
+        // tag, so an advisory logged at Warning is indistinguishable from a fault at a glance. The
+        // owner counted them, 2026-08-25: *"the log is full of yellow messages"* — 92 of the 104
+        // that day were lines like this one. It is the same argument this file already accepts for
+        // Telegram a few lines below ("a ⚠️ for it reads like a fault report the owner must act
+        // on"), applied to the colour instead of the channel.
+        _log.Log_Info(session.OrchId, $"Supervisor had unanswered reports from {string.Join(", ", waitingMembers)} — nudged");
     }
 
     /// <summary>Returns whether the nudge was actually written — see the guard at the append.</summary>
@@ -2117,7 +2124,14 @@ internal sealed class BridgeEngineModel(
         }
 
         var reason = dormantMidWork ? "went dormant mid-task" : "had unread traffic";
-        _log.Log_Warning(session.OrchId, $"{memberId} {reason} for {Nudge_Wording.Describe_QuietFor(quietFor)} — nudged");
+        // INFO, NOT WARNING. Nothing has failed here: this is routine coaching aimed at a SESSION,
+        // and the app panel gives Warning the amber "awaiting review" brush with no textual level
+        // tag, so an advisory logged at Warning is indistinguishable from a fault at a glance. The
+        // owner counted them, 2026-08-25: *"the log is full of yellow messages"* — 92 of the 104
+        // that day were lines like this one. It is the same argument this file already accepts for
+        // Telegram a few lines below ("a ⚠️ for it reads like a fault report the owner must act
+        // on"), applied to the colour instead of the channel.
+        _log.Log_Info(session.OrchId, $"{memberId} {reason} for {Nudge_Wording.Describe_QuietFor(quietFor)} — nudged");
         Raise_OrchestrationActivity(session.OrchId);
 
         // The owner is NOT told. This is routine self-healing that already worked — the nudge is
@@ -2267,7 +2281,9 @@ internal sealed class BridgeEngineModel(
                     presence))
             {
                 _ledgerBehindReportedOrchIds.Add(session.OrchId);
-                _log.Log_Warning(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
+                // Info, not Warning: the flag IS the action and the turn-end hook enforces it. See the
+                // note on the nudge sites — the owner reads amber as a fault.
+                _log.Log_Info(session.OrchId, "Ledger is behind the supervisor's verdicts — flagged for the turn-end hook");
             }
 
             Report_LedgerShape(session);
@@ -2438,7 +2454,9 @@ internal sealed class BridgeEngineModel(
         // sent — the deadlock this file has already paid for once.
         _ledgerDebtSinceUtc[session.OrchId] = DateTime.UtcNow;
 
-        _log.Log_Warning(session.OrchId, unworked.Count > 0
+        // Info, not Warning — an advisory about ledger SHAPE, not a failure. Same reasoning as the
+        // nudge sites above.
+        _log.Log_Info(session.OrchId, unworked.Count > 0
             ? $"PLAN.md claims {unworked.Count} line(s) in progress while nothing is running — flagged for the turn-end hook"
             : $"PLAN.md has {byAge.Count} line(s) claiming [>] unchanged for over an hour — flagged for the turn-end hook");
     }
@@ -8329,7 +8347,10 @@ internal sealed class BridgeEngineModel(
                 _lastSuppressedEntry.Remove(session.OrchId);
             }
 
-            _log.Log_Warning(session.OrchId, "Everything went idle with an unsent supervisor entry — releasing it in case it was a question");
+            // Info: this is the safety net WORKING, not a failure. It fires by design whenever an
+            // orchestration goes quiet with a suppressed entry, and amber made successful recovery
+            // look like breakage.
+            _log.Log_Info(session.OrchId, "Everything went idle with an unsent supervisor entry — releasing it in case it was a question");
 
             await Send_AwayNotice_Async(
                 session,
