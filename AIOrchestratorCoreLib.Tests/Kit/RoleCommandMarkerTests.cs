@@ -67,6 +67,12 @@ public class RoleCommandMarkerTests
         // and this test could not see it, because it was the one role command that was never
         // version-controlled. The union was not wrong; it was reading five of the six roles.
         AIOrchestratorCoreLib.Mirroring.MirrorText_Formatter.STATUS_SUBJECT_PREFIX,
+
+        // ANSWERED, matched by OwnerQuestionPending_Decider — the third of this shape, and the guard
+        // fired on it too, within a minute of the role commands teaching it. It clears the ❓ glyph
+        // when the owner answered by a route the channel cannot see: a tapped button, the terminal,
+        // another topic.
+        AIOrchestratorCoreLib.Bridge.OwnerQuestionPending_Decider.ANSWERED_MARKER,
     ];
 
     /// <summary>

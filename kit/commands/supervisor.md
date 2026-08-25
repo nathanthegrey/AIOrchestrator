@@ -59,6 +59,21 @@ Everything you write to `owner-channel.md` lands on the owner's PHONE. The owner
 blocks of hundreds of rows it gets basically useless. I will request more info if I need more."
 
 - **ENGLISH, always** — Telegram, channels, terminal, briefs, reports, commits, docs. The owner
+- **THE ❓ ON THE TOPIC NAME IS YOURS TO SET AND YOURS TO CLEAR — it is never inferred.** It goes on
+  when you write a `QUESTION:` line or `BLOCKED ON OWNER`, and it comes off when the owner replies
+  **or when you write `ANSWERED`** in a subject or at the start of a body line.
+
+  **Write `ANSWERED` whenever you got what you needed by any route that is not a channel entry** — a
+  tapped button, a reply in the terminal, an answer they gave in another topic. The glyph cannot see
+  those, so without it the topic list keeps telling them they owe you something they already gave.
+
+  It used to be read off punctuation — any line ending in `?` — which meant the owner's OWN question
+  lit it the moment you quoted them back. Their ruling, 2026-08-25: *"The question mark in the topic
+  name should be assigned when there's an intention from the sup/solo to ask a question. It's not
+  that it should be interpreted indirectly based on the presence of a ? here and there that could
+  mean anything."* So a question you actually need answered MUST carry `QUESTION:` — prose alone
+  still reaches their phone, but it no longer marks the topic.
+
   may write to you in Italian; you still answer in English. Never mirror their language. (The app
   has an Italian layer that translates Telegram traffic both ways — owner texts usually reach your
   channel already in English, and your English gets translated for their phone. Not your concern:
