@@ -5,11 +5,29 @@ namespace AIOrchestratorCoreLib.Channels;
 
 /// <summary>
 /// Finds every channel file under the supervision root. An orchestration is any subfolder
-/// holding a session.json; its channels are owner-channel.md plus every imp-*/channel.md.
+/// holding a session.json; its channels are owner-channel.md plus every SPOKE channel —
+/// imp-*/channel.md and rev-*/channel.md.
+///
+/// REVIEWERS WERE MISSING HERE AND THE ABSENCE WAS INVISIBLE. The prefix test was `imp-` alone, so
+/// a rev-*/channel.md was never discovered, never tailed and never mirrored — while
+/// MirrorText_Formatter carried full reviewer support (its own green glyph) and a passing test for
+/// it, reached by nothing. The owner found it from the outside, 2026-08-25: *"I also want Rev1
+/// Online"* — they were receiving imp-1's boot greeting and no reviewer had ever said a word.
+///
+/// A solo is deliberately NOT here: it writes to owner-channel.md, not to a spoke of its own
+/// (MemberChannel_Locator), so its folder holds no channel file to find.
 /// </summary>
 public static class ChannelDiscovery
 {
-    const string IMPLEMENTER_FOLDER_PREFIX = "imp-";
+    /// <summary>
+    /// The spoke folder prefixes, taken from the one place that defines them rather than restated —
+    /// a second copy of "imp-" is how the reviewer went missing in the first place.
+    /// </summary>
+    static readonly string[] SPOKE_FOLDER_PREFIXES =
+    [
+        Sessions.MemberKind_Ids.IMPLEMENTER_PREFIX,
+        Sessions.MemberKind_Ids.REVIEWER_PREFIX,
+    ];
 
     /// <summary>Reserved orchestration id of the always-on general supervisor.</summary>
     public const string GENERAL_ORCH_ID = "general";
@@ -42,7 +60,7 @@ public static class ChannelDiscovery
             {
                 var memberId = Path.GetFileName(memberFolder);
 
-                if (!memberId.StartsWith(IMPLEMENTER_FOLDER_PREFIX, StringComparison.OrdinalIgnoreCase))
+                if (!SPOKE_FOLDER_PREFIXES.Any(prefix => memberId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
                     continue;
 
                 var channelFile = paths.Get_ImplementerChannelFile(orchId, memberId);

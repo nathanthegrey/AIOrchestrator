@@ -385,11 +385,16 @@ public static class OrchestrationRequests_Reader
                 }
                 default:
                 {
+                    // PROMOTE_ORCHESTRATION_ACTION WAS MISSING FROM THIS LIST while the case above
+                    // handled it perfectly. So a session that mistyped the action string was handed a
+                    // list of "known" actions that did not contain the one it wanted — actively
+                    // teaching it the feature does not exist, in the same message that told it its
+                    // request had failed. The list must be the switch, not a subset of it.
                     var known = string.Join(", ", new[]
                     {
                         START_ORCHESTRATION_ACTION, ADD_IMPLEMENTER_ACTION, ADD_REVIEWER_ACTION,
-                        CLOSE_IMPLEMENTER_ACTION, CLOSE_ORCHESTRATION_ACTION, SET_TELEGRAM_MUTED_ACTION,
-                        SET_ORCHESTRATION_NAME_ACTION, SET_MODEL_ACTION,
+                        CLOSE_IMPLEMENTER_ACTION, PROMOTE_ORCHESTRATION_ACTION, CLOSE_ORCHESTRATION_ACTION,
+                        SET_TELEGRAM_MUTED_ACTION, SET_ORCHESTRATION_NAME_ACTION, SET_MODEL_ACTION,
                     });
 
                     return $"unknown action '{action}' (known: {known}; retries must reuse the SAME action)";

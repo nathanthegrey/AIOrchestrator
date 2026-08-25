@@ -108,8 +108,9 @@ starts."
 ## Echo the owner in your terminal
 
 When the watcher wakes you with `FROM owner` entries, START your terminal reply by quoting them
-(`Owner: <their text>`) before acting — the owner watches the terminal at the PC and this shows
-the pipeline is working. (Their texts are aggregated: several messages sent in a row arrive as
+(`Owner: <their text>`) before acting — it shows the pipeline is working to anyone reading the
+terminal, and it costs a line. Do NOT read it as evidence that the owner is at the PC: that is
+`/pc`'s to say, and the echo is worth writing either way. (Their texts are aggregated: several messages sent in a row arrive as
 one entry, ~15 s after the last one.)
 
 ## Name the orchestration (do this at the FIRST task)
@@ -417,6 +418,24 @@ the entire complaint, and you are the only one who can close it.
 - **Then carry straight on in the same turn.** The receipt is a note in passing, never a turn
   boundary — see RUN TO THE END.
 
+## AND CLOSE IT WHEN THE JOB IS DONE — one line, before the turn ends
+
+**If the owner ASKED for something and you have finished it, say so before your turn ends.** Not a
+report, not a summary — one line saying the thing they asked for is done, with the number that
+proves it if there is one.
+
+They do not watch the terminal, and a finished job that is never announced reaches them as silence.
+Their words, 2026-08-25: *"If I say to do merge, it does it, then the terminal completes the
+operation and stops, and I haven't received anything telling me 'done'."*
+
+- **This is for the SMALL jobs.** A whole endeavour finishing is announced by the app off PLAN.md; a
+  one-turn job ("do the merge", "run the tests", "push it") never touches the ledger, so nothing
+  else will ever mention it.
+- **It pairs with the receipt you wrote when you picked the job up.** That one said what you were
+  about to do; this one says it is done. Between them the owner never has to ask.
+- **Not for work nobody asked for**, and not for a turn that ends mid-job — then say what you are
+  WAITING ON instead, which is a different sentence and the honest one.
+
 ## `GO AHEAD — resume` entries
 
 The owner can send `/resume` to wake every session at once — it exists for the usage-limit reset,
@@ -613,12 +632,13 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   `{"action":"set-telegram-muted","muted":true}` — this pauses ALL app→owner Telegram traffic
   suite-wide until the owner texts again (auto-unmute) or re-enables. Keep working normally:
   your channel entries queue up and reach the owner in one catch-up burst on unmute.
-- **Topic delivery modes are NOT yours to set.** The owner toggles them with `/mute` (🔕 — this
-  topic's messages are DROPPED because they are reading you in the terminal) and `/dnd` (🌙 — held
-  and replayed later because they are away), or the app's button. Nothing changes for you in
-  either case: keep writing your channel entries exactly as always — they are the record. And
-  never read 🔕 as "the owner is gone": that mode means the opposite, they are right there in
-  your terminal.
+- **Topic delivery modes are NOT yours to set, and they say NOTHING about where the owner is.**
+  The owner toggles them with `/mute` (🔕 — this topic's messages are DROPPED) and `/dnd` (🌙 — held
+  and replayed later), or the app's button. Nothing changes for you in either case: keep writing
+  your channel entries exactly as always — they are the record. **Never read a delivery mode as
+  presence, in either direction.** 🔕 does not mean they are at your terminal and 🌙 does not mean
+  they are gone; both are about what the app DOES WITH MESSAGES. Presence has exactly one source and
+  it is `/pc` — which the app tells you about explicitly when it changes.
 - **Model switch for THIS orchestration** — when the owner says "use fable for this" (or wants a
   different model for the implementers here), drop
   `{"action":"set-model","orchId":"$ARGUMENTS","role":"supervisor|implementer","model":"fable","reason":"<why>"}`.

@@ -39,9 +39,24 @@ public static class HandoverEntry_Detector
     /// </summary>
     public static bool Has_HandoverEntry(IReadOnlyList<IChannelEntry> entries)
     {
+        return Has_HandoverEntry(entries, ChannelAuthors.Solo);
+    }
+
+    /// <summary>
+    /// THE SAME REQUIREMENT, IN THE OTHER DIRECTION. A demotion ends the SUPERVISOR and spawns a solo
+    /// onto the same channel, so the entry that has to exist is the supervisor's — and everything the
+    /// summary above says about why applies unchanged, with the roles swapped.
+    ///
+    /// The author is a parameter rather than "any session" precisely because of the gate the summary
+    /// describes: the owner's own `FROM owner` messages live in this file, and so does the other
+    /// role's. Accepting any author would let a solo's old handover, written before a promotion,
+    /// satisfy the demotion that comes after it — a stale entry about a different session's state.
+    /// </summary>
+    public static bool Has_HandoverEntry(IReadOnlyList<IChannelEntry> entries, ChannelAuthors author)
+    {
         foreach (var entry in entries)
         {
-            if (entry.Author != ChannelAuthors.Solo)
+            if (entry.Author != author)
                 continue;
 
             if (MemberState_Resolver.Contains_Marker(entry, HANDOVER_MARKER))

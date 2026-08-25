@@ -19,6 +19,9 @@ public interface IOrchestrationLauncher
     /// <summary>A basic orchestration becomes a full crew: the solo ends, a supervisor takes over its channel, imp-1 spawns empty.</summary>
     IOrchestrationSession Promote_ToFullCrew(string orchId);
 
+    /// <summary>A full crew becomes one session: the supervisor and every member end, a solo takes over the channel.</summary>
+    IOrchestrationSession Demote_ToBasic(string orchId);
+
     /// <summary>Adds a member of the given kind — a reviewer spawns read-only, with no worktree.</summary>
     IOrchestrationSession Add_Member(string orchId, MemberKinds kind);
     void Respawn_Supervisor(string orchId);

@@ -20,10 +20,14 @@ public class TopicCommandButtonsTests
     /// <summary>A label wider than this stops being readable on a phone and starts wrapping.</summary>
     const int MAX_LABEL_LENGTH = 20;
 
+    /// <summary>
+    /// /refresh joined on the owner's call, 2026-08-25: *"It happens so often that the question mark
+    /// gets stuck that this command should be one of the main command buttons always present."*
+    /// </summary>
     [Fact]
-    public void TheCommands_AreTheFourTheOwnerAskedFor_InDisplayOrder()
+    public void TheCommands_AreTheOnesTheOwnerAskedFor_InDisplayOrder()
     {
-        Assert.Equal(new[] { "screen", "show", "merge", "test" }, TopicCommandButtons.Commands);
+        Assert.Equal(new[] { "screen", "show", "merge", "test", "refresh" }, TopicCommandButtons.Commands);
     }
 
     [Fact]
@@ -134,9 +138,13 @@ public class TopicCommandButtonsTests
     {
         var rows = TopicCommandButtons.Build_ReplyKeyboardRows();
 
-        Assert.Equal(2, rows.Count);
+        Assert.Equal(3, rows.Count);
         Assert.Equal(new[] { "/screen", "/show" }, rows[0]);
         Assert.Equal(new[] { "/merge", "/test" }, rows[1]);
+
+        // An odd count leaves a short last row rather than padding it — a blank button would be a
+        // tap target that does nothing.
+        Assert.Equal(new[] { "/refresh" }, rows[2]);
     }
 
     /// <summary>

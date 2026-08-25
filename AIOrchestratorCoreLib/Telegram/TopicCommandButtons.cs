@@ -78,6 +78,12 @@ public static class TopicCommandButtons
         ("show",   "👁 /show"),
         ("merge",  "🔀 /merge"),
         ("test",   "🧪 /test"),
+        // /refresh EARNS A STANDING BUTTON on the owner's call, 2026-08-25: *"It happens so often
+        // that the question mark gets stuck that this command should be one of the main command
+        // buttons always present."* It is the only button here that repairs the topic LIST rather
+        // than acting on the work, and it is wanted precisely at the moment the owner cannot trust
+        // what the list is telling them.
+        ("refresh", "♻ /refresh"),
     ];
 
     /// <summary>The commands offered, in display order: "show", "merge", "test", "screen".</summary>

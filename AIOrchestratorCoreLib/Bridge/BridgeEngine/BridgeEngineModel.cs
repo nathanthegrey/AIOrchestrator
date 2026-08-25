@@ -333,6 +333,28 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _appliedTopicNames = [];
 
     /// <summary>
+    /// When the belief above was last thrown away on purpose. It is a BELIEF and never an
+    /// observation — the sync skips any topic whose wanted name matches it, and nothing reads the
+    /// real name back from Telegram — so once it is wrong it is wrong for the life of the process.
+    /// There are at least three routes to that: a refused push that the sync's own catch records as
+    /// applied, a name the owner edits by hand in the client, and a topic recreated underneath us.
+    ///
+    /// The owner has been hitting the consequence often enough to ask for a manual escape
+    /// (2026-08-25, of a ❓ that survived their answer: *"It happens so often that the question mark
+    /// gets stuck"*). /refresh is that escape; this is the half that means they need it less. A
+    /// periodic forget costs one editForumTopic per topic per interval — Telegram answers
+    /// TOPIC_NOT_MODIFIED when the name is already right, which the gate already classifies as
+    /// Applied — and buys a divergence that repairs itself instead of lasting until a restart.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _topicNameRevalidatedUtc = [];
+
+    /// <summary>
+    /// Long enough that the steady state is one no-op call per topic per five minutes, short enough
+    /// that a stuck glyph corrects itself well before the owner has finished being annoyed by it.
+    /// </summary>
+    const int TOPIC_NAME_REVALIDATE_MINUTES = 5;
+
+    /// <summary>
     /// ONE TOPIC-NAME SYNC AT A TIME. The sync is reached from BOTH long-running loops — the mirror
     /// tick and the inbound command loop, started side by side under Task.WhenAll — and it is a
     /// read-compare-push-record sequence over a Dictionary nothing guarded. Interleave two of them
@@ -610,6 +632,18 @@ internal sealed class BridgeEngineModel(
 
         /// <summary>Said once, when the turn the owner was told about actually ends.</summary>
         public bool TurnEndAnnounced;
+
+        /// <summary>
+        /// The session has written back, so the owner is no longer UNANSWERED — but the work they
+        /// asked for is very likely still running, so the tracker stays alive to catch the turn
+        /// ending. Before this the first reply DELETED the tracker, which is why a small job
+        /// finished in silence: the role commands order a receipt BEFORE the work starts
+        /// ("ANSWER THE OWNER BEFORE YOU WORK"), so the tracker was always gone before the merge
+        /// had even begun. The owner, 2026-08-25: *"If I say to do merge, it does it, then the
+        /// terminal completes the operation and stops, and I haven't received anything telling me
+        /// 'done'."*
+        /// </summary>
+        public bool Answered;
     }
 
     long _lastUpdateId = initialLastUpdateId;
@@ -2312,7 +2346,16 @@ internal sealed class BridgeEngineModel(
             return;
 
         _reportedLedgerShapeByOrchId[session.OrchId] = fingerprint;
-        _log.Log_Warning(session.OrchId, $"PLAN.md shape problems: {complaints.Count}");
+
+        // INFO RATHER THAN WARNING, and deliberately the opposite call to the guard-not-in-force
+        // line below: nothing has FAILED here. The panel gives Warning the amber
+        // `StateAwaitingReview` brush and Error the red `StateBlocked` one, with no textual level
+        // tag — so an advisory logged at Warning is an amber line among white ones and reads as a
+        // fault. The owner read exactly that and reported it as "error messages about the format of
+        // Plan.md" (2026-08-25). The actionable copy is the `[agent]` channel entry above, which
+        // goes to the session that can split the line; this is only the app saying it sent one.
+        // Same shape, and the same level, as the idle-member advisory in Retirement_Advisor.
+        _log.Log_Info(session.OrchId, $"PLAN.md shape advisory sent to the supervisor — {complaints.Count} line(s) cannot show progress");
     }
 
     /// <summary>
@@ -2849,7 +2892,10 @@ internal sealed class BridgeEngineModel(
                     ownerIsWaiting = _ownerAwaitingAnswer.Contains(append.Channel.OrchId);
                 }
 
-                if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting))
+                // THE SUBJECT IS PASSED because the boot greeting lives there and nowhere else: the
+                // role commands mandate an EMPTY body for it, so RawText alone cannot tell a
+                // "solo online — <repo>" entry from any other piece of narration.
+                if (!OwnerPush_Policy.Should_Push(entry.RawText, ownerIsWaiting, entry.Subject))
                 {
                     // Remembered, not discarded. If the whole orchestration then falls silent, this
                     // was the last thing said and it gets released — see Break_SilentDeadlock_Async.
@@ -4955,6 +5001,14 @@ internal sealed class BridgeEngineModel(
                     {
                         await Toggle_Done_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command == "refresh")
+                    {
+                        await Refresh_TopicName_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    else if (command == "switch")
+                    {
+                        await Switch_OrchestrationShape_Async(client, message.MessageThreadId, cancellationToken);
+                    }
                     else if (command == "close")
                     {
                         await Request_Close_FromCommand_Async(client, message.MessageThreadId, cancellationToken);
@@ -5146,6 +5200,8 @@ internal sealed class BridgeEngineModel(
                     ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
                     ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
                     ("done", "Toggle ✅ — finished, muted, and kept open in case you come back"),
+                    ("refresh", "Re-sync this topic's NAME — use when a ❓ or a glyph is stuck on it"),
+                    ("switch", "Turn this into a full crew, or back into one session — send twice"),
                     ("close", "End THIS orchestration — you confirm with a tap"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
@@ -6014,6 +6070,224 @@ internal sealed class BridgeEngineModel(
     /// a persisted statement about the ENDEAVOUR that happens to mute the topic. /test says "I have
     /// not checked this yet", /done says "I have, and it is finished".
     /// </summary>
+    /// <summary>
+    /// RE-ASSERT THIS TOPIC'S NAME, whatever the app currently believes about it.
+    ///
+    /// `_appliedTopicNames` is a BELIEF, not an observation: the sync skips a topic whose wanted name
+    /// equals the name it thinks it last applied, and nothing ever checks that against Telegram. So
+    /// any divergence is permanent — a push that was refused but recorded as applied (the residual
+    /// the sync's own catch admits to), a name edited by hand in the Telegram client, a topic
+    /// restored from under the app. The glyph the owner sees then has no route back to the truth,
+    /// and the app is sincerely reporting that everything is fine.
+    ///
+    /// The owner, 2026-08-25, after a ❓ that stayed through their answer: *"It's incredibly
+    /// frustrating because I don't understand if I need to intervene or not. If you really can't fix
+    /// this thing that we've worked on so much, at least give me a command that lets me remove it
+    /// manually by my own choice."*
+    ///
+    /// This is that command, and it is deliberately dumber than a fix for any one cause: it drops the
+    /// belief and the backoff, recomputes from persisted state, and pushes. It therefore repairs a
+    /// stuck glyph WITHOUT needing to know which of the causes above produced it.
+    /// </summary>
+    /// <summary>
+    /// How long a `/switch` stays armed waiting for its confirming repeat. Long enough to read the
+    /// warning on a phone and think; short enough that a `/switch` sent an hour ago cannot be
+    /// completed by one sent now, when the owner has forgotten the first.
+    /// </summary>
+    const int SWITCH_CONFIRM_WINDOW_SECONDS = 120;
+
+    /// <summary>Orchestrations where one `/switch` has been seen and is waiting for its repeat.</summary>
+    readonly Dictionary<string, DateTime> _switchArmedUtc = [];
+
+    /// <summary>
+    /// ONE COMMAND, BOTH DIRECTIONS — the owner's ask, 2026-08-25: *"there needs to be a command that
+    /// imposes a standardized procedure, handoff writing and promotion to sup or solo. This command
+    /// must be bidirectional — with the same command I transform an orchestra into solo, and a solo
+    /// into an orchestra."*
+    ///
+    /// The direction is READ FROM THE SHAPE rather than typed, which is the whole point: the owner
+    /// sends one verb and never has to remember which of two commands this topic needs.
+    ///
+    /// WHY IT CONFIRMS BY REPEAT rather than by a tap. The agent-initiated promotion parks a request
+    /// and asks for a tap, and that is right — a SESSION is asking to spend the owner's money, so the
+    /// owner must agree. Here the owner is the one typing, so a button asking them to confirm their
+    /// own command is a hop, and hops are what broke the feature they are complaining about: *"it was
+    /// reasoning for like 5 minutes and then nothing happened."* The repeat is stated explicitly in
+    /// the first reply, with the count of sessions that will die, so it is the opposite of the silent
+    /// toggle `/done` was.
+    ///
+    /// THE HANDOVER GATE IS KEPT, in both directions, because it protects something a confirmation
+    /// cannot: whatever the outgoing session worked out and never wrote down dies with its terminal.
+    /// It is also the "standardized procedure" half of the ask — the app states the requirement and
+    /// tells the session to write it, instead of the session reasoning about the protocol itself.
+    /// </summary>
+    async Task Switch_OrchestrationShape_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/switch changes an orchestration between one session and a full crew — there is nothing here to switch.",
+                cancellationToken);
+
+            return;
+        }
+
+        var promoting = Sessions.OrchestrationShape.Would_Promote(session.SupervisorSpawnedUtc);
+
+        // ASKED AT THE MOMENT OF EFFECT, the rule both launcher methods already follow.
+        var canAct = promoting
+            ? Sessions.OrchestrationShape.Can_StillPromote(Sessions.OrchestrationShape.Decide_PromotionReadiness(
+                session.SupervisorSpawnedUtc, Sessions.OrchestrationShape.Has_LiveSolo(session.Members)))
+            : Sessions.OrchestrationShape.Can_StillDemote(Sessions.OrchestrationShape.Decide_DemotionReadiness(
+                session.SupervisorSpawnedUtc, Sessions.OrchestrationShape.Has_LiveSolo(session.Members)));
+
+        if (!canAct)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                promoting
+                    ? "/switch — there is no live session here to promote. Nothing was changed."
+                    : "/switch — this is already one session. Nothing was changed.",
+                cancellationToken);
+
+            return;
+        }
+
+        // The author who must have written the handover is the one about to be REPLACED.
+        var outgoingAuthor = promoting ? Channels.ChannelAuthors.Solo : Channels.ChannelAuthors.Supervisor;
+        var outgoingName = promoting ? "solo" : "supervisor";
+
+        if (!HandoverEntry_Detector.Has_HandoverEntry(Read_OwnerChannelEntries(session.OrchId), outgoingAuthor))
+        {
+            // THE APP ASKS THE SESSION, rather than leaving the owner to. This is the "imposes a
+            // standardized procedure" half: the session is told exactly what to write and why, in its
+            // own channel, where its watcher will wake it.
+            Append_OrchestrationAppEntry(
+                session.OrchId, AppEntryAudiences.Agent,
+                $"the owner asked to switch this to {(promoting ? "a full crew" : "one session")} — write your HANDOVER now",
+                $"Your session ENDS when this happens, and everything you know that is not in this channel dies with it.\n\n"
+                + $"Append an entry whose SUBJECT carries `{HandoverEntry_Detector.HANDOVER_MARKER}` and put in it: where the work actually stands, what you tried that did NOT work, what is half-done and in which files, and the traps.\n\n"
+                + "Nothing has changed yet and you are still the session here. The owner completes the switch once your entry is filed.");
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                $"✋ Not yet — the {outgoingName} has not written its HANDOVER, and everything it knows that is not in the channel would be lost. I have just asked it to write one. Send /switch again once it has.",
+                cancellationToken);
+
+            return;
+        }
+
+        var armedUtc = _switchArmedUtc.TryGetValue(session.OrchId, out var stamp) ? stamp : (DateTime?)null;
+        var armed = armedUtc != null && (DateTime.UtcNow - armedUtc.Value).TotalSeconds <= SWITCH_CONFIRM_WINDOW_SECONDS;
+
+        if (!armed)
+        {
+            _switchArmedUtc[session.OrchId] = DateTime.UtcNow;
+
+            var doomed = promoting
+                ? session.Members.Count(m => m.ClosedUtc == null && Sessions.MemberKind_Ids.Resolve_Kind(m.MemberId) == Sessions.MemberKinds.Solo)
+                : session.Members.Count(m => m.ClosedUtc == null && Sessions.MemberKind_Ids.Resolve_Kind(m.MemberId) != Sessions.MemberKinds.Solo) + 1;
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                promoting
+                    ? $"⚙️ This will turn the topic into a FULL CREW: the solo ends and a supervisor plus imp-1 take over this same conversation. {doomed} session(s) will be closed.\n\nSend /switch again within 2 minutes to go ahead."
+                    : $"⚙️ This will turn the topic back into ONE SESSION: the supervisor and every member end, and a solo takes over this same conversation. {doomed} session(s) will be closed.\n\nSend /switch again within 2 minutes to go ahead.",
+                cancellationToken);
+
+            return;
+        }
+
+        _switchArmedUtc.Remove(session.OrchId);
+
+        try
+        {
+            if (promoting)
+                _launcher.Promote_ToFullCrew(session.OrchId);
+            else
+                _launcher.Demote_ToBasic(session.OrchId);
+
+            // READ BACK, never assumed. Both launcher methods return early without acting when the
+            // shape moved under them, and reporting a switch that did not happen is the failure the
+            // promotion path already had: it announced "PROMOTED" over a silent early return.
+            var after = _store.Get_Session(session.OrchId);
+            var switched = Sessions.OrchestrationShape.Would_Promote(after.SupervisorSpawnedUtc) != promoting;
+
+            _log.Log_Info(session.OrchId, switched
+                ? $"/switch — {(promoting ? "promoted to a full crew" : "demoted to one session")} by the owner"
+                : "/switch — the launcher declined; the shape is unchanged");
+
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+
+            Raise_OrchestrationActivity(session.OrchId);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                switched
+                    ? (promoting
+                        ? "✅ Now a full crew. A supervisor has taken over this conversation and imp-1 is waiting for a brief — it reads everything above, including the handover."
+                        : "✅ Now one session. A solo has taken over this conversation and reads everything above, including the handover.")
+                    : "/switch did not change anything — the shape moved before it ran. Send it again if it is still wanted.",
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "/switch failed", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/switch failed: {ex.Message}", cancellationToken);
+        }
+    }
+
+    async Task Refresh_TopicName_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null || session.ClosedUtc != null)
+        {
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                "/refresh re-syncs an orchestration topic's name — there is nothing here to re-sync.",
+                cancellationToken);
+
+            return;
+        }
+
+        try
+        {
+            await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
+            await Sync_TopicNames_BestEffort_Async(cancellationToken);
+
+            var wantedName = Build_WantedTopicName(session);
+            var applied = _appliedTopicNames.TryGetValue(session.OrchId, out var name) && name == wantedName;
+
+            _log.Log_Info(session.OrchId, applied
+                ? $"/refresh — topic name re-asserted as '{wantedName}'"
+                : $"/refresh — topic name '{wantedName}' was NOT accepted by Telegram this attempt");
+
+            // THE NAME IS QUOTED EITHER WAY. The owner is using this command precisely because they
+            // no longer trust what the topic list shows, so a bare "done" would be asking them to
+            // take the app's word for it a second time.
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId,
+                applied
+                    ? $"♻ re-synced — this topic is now named “{wantedName}”. If a glyph in it still looks wrong, the state behind it is real and not a stale name."
+                    : $"♻ tried, and Telegram has not accepted “{wantedName}” yet. It retries on its own; send /refresh again in a moment.",
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(session.OrchId, "/refresh failed", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                client, messageThreadId, $"/refresh failed — the name was not changed: {ex.Message}", cancellationToken);
+        }
+    }
+
     async Task Toggle_Done_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
@@ -6030,46 +6304,61 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var turningOn = !session.Done;
+            // `/done` IS NOT A TOGGLE ANY MORE, and this is the whole fix.
+            //
+            // It was one, and every single use of it in this machine's history was undone within
+            // seconds: 2026-08-21 14:21:48 marked and 14:22:05 cleared (17 s), 2026-08-24 08:53:45
+            // and 08:54:02 (17 s), 2026-08-24 21:48:32 and 21:48:55 (23 s). A rename takes a moment
+            // to surface in Telegram's topic list, so when nothing appeared the owner sent the
+            // command again — which is the natural thing to do, and which silently un-marked it.
+            // They reported the result as the tick never being added at all (2026-08-25): *"the
+            // /done command still doesn't put the check in the topic name. It simply doesn't
+            // happen — it sends a confirmation message that starts with the check, but doesn't
+            // change the topic name."*
+            //
+            // Rewording the two replies to be distinguishable was tried first and did not hold —
+            // the second press happens before the first reply has been read. So the command now
+            // only ever means what its name says, and repeating it is harmless.
+            //
+            // NOTHING IS LOST WITH THE TOGGLE. Un-finishing already has its own route, it is more
+            // natural, and this reply has always advertised it: writing anything in the topic clears
+            // the mark and unmutes (Wake_DoneTopic_IfNeeded). An endeavour you are talking about
+            // again is not a finished one.
+            var alreadyDone = session.Done;
 
-            _store.Set_Done(session.OrchId, turningOn);
+            _store.Set_Done(session.OrchId, true);
 
             // FINISHING SUPERSEDES "still to be tested". Leaving 🧪 set behind the scenes would mean
             // clearing /done later silently restores a reminder the owner has already discharged.
-            if (turningOn && session.AwaitingTest)
+            if (session.AwaitingTest)
                 _store.Set_AwaitingTest(session.OrchId, false);
 
             // Muted underneath, exactly as /test is — a finished endeavour should stop texting them.
-            // Un-muting is a separate statement from un-finishing, which is why the two are two
-            // store calls and not one derived state.
-            _store.Set_TelegramMode(session.OrchId, turningOn ? TelegramDeliveryModes.Silenced : TelegramDeliveryModes.Normal);
+            _store.Set_TelegramMode(session.OrchId, TelegramDeliveryModes.Silenced);
 
-            _log.Log_Info(session.OrchId, turningOn
-                ? "/done — marked finished and muted, topic kept open"
-                : "/done — the finished mark was cleared, back to Normal");
+            _log.Log_Info(session.OrchId, alreadyDone
+                ? "/done — already finished, the mark and the mute were re-asserted"
+                : "/done — marked finished and muted, topic kept open");
 
             Raise_OrchestrationActivity(session.OrchId);
 
-            // BEFORE the new mode takes hold on the next tick, so the confirmation itself gets through.
-            //
-            // THE "CLEARED" REPLY MUST NOT LEAD WITH THE TICK. Both replies used to open with ✅, so
-            // on a phone the message undoing the mark looked exactly like the message making it —
-            // and /done is a SILENT TOGGLE, so a second press is the natural thing to do when the
-            // topic list has not visibly changed yet. The owner did precisely that on 2026-08-24,
-            // 17 seconds apart, and reported the tick "not being added" when it had been added and
-            // then removed. It had happened twice before on other topics, the same way.
-            //
-            // So the off reply says the state it leaves behind, in words, with a glyph that cannot be
-            // mistaken for success; and the on reply now says that repeating the command undoes it.
-            await Send_DirectReply_BestEffort_Async(
-                client, messageThreadId,
-                turningOn
-                    ? "✅ marked finished — muted, and the topic stays open. Text here whenever you want it back; that alone wakes it up. Sending /done again clears the mark."
-                    : "↩️ NOT finished any more — the tick is off this topic and it is back to normal.",
-                cancellationToken);
-
+            // THE NAME IS PUSHED BEFORE THE REPLY, so the reply can state what the topic actually
+            // reads. The owner's complaint is that the confirmation and the topic list disagreed,
+            // and they had no way to tell which was right without hunting for the topic; a
+            // confirmation that quotes the name it just set closes that gap, and a rename that
+            // failed no longer hides behind a cheerful ✅.
             await Forget_AppliedTopicName_Async(session.OrchId, cancellationToken);
             await Sync_TopicNames_BestEffort_Async(cancellationToken);
+
+            var marked = _store.Get_Session_OrNull(session.OrchId) ?? session;
+            var wantedName = Build_WantedTopicName(marked);
+            var renamed = _appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName;
+
+            var reply = renamed
+                ? $"✅ marked finished — the topic is now “{wantedName}”, and it is muted but stays open. Write anything here to un-finish it; that alone wakes it up. Sending /done again changes nothing."
+                : $"✅ marked finished and muted — but Telegram has not accepted the new topic name “{wantedName}” yet. It retries on its own; the mark itself is saved. Write anything here to un-finish it.";
+
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, reply, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -6649,6 +6938,20 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// The ONE place a topic's name is composed. Extracted so a command that changes what the name
+    /// should SAY can also TELL the owner what it will say, without a second copy of the expression
+    /// drifting away from this one — the failure decision 12 in CLAUDE.md is about.
+    /// </summary>
+    string Build_WantedTopicName(Sessions.OrchestrationSession.IOrchestrationSession session)
+    {
+        var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
+
+        return TelegramDeliveryMode_Glyphs.Decorate_TopicName(
+            baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
+            session.AwaitingTest, Last_OwnerReplyState(session.OrchId), session.Done);
+    }
+
     async Task Sync_TopicNames_Inside_Gate_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
@@ -6659,10 +6962,20 @@ internal sealed class BridgeEngineModel(
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
 
-            var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
-            var wantedName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-                session.AwaitingTest, Last_OwnerReplyState(session.OrchId), session.Done);
+            var wantedName = Build_WantedTopicName(session);
+
+            // THE BELIEF EXPIRES. Without this the guard below is unfalsifiable: it compares what we
+            // want against what we THINK we sent, so a divergence from what Telegram actually holds
+            // can never be noticed, let alone corrected. Dropping the memo on a timer turns the skip
+            // into a cache rather than a verdict — the re-push is a no-op the API answers
+            // TOPIC_NOT_MODIFIED to, which the gate already reads as Applied.
+            var revalidated = _topicNameRevalidatedUtc.TryGetValue(session.OrchId, out var lastCheck) ? lastCheck : DateTime.MinValue;
+
+            if ((DateTime.UtcNow - revalidated).TotalMinutes >= TOPIC_NAME_REVALIDATE_MINUTES)
+            {
+                _topicNameRevalidatedUtc[session.OrchId] = DateTime.UtcNow;
+                _appliedTopicNames.Remove(session.OrchId);
+            }
 
             if (_appliedTopicNames.TryGetValue(session.OrchId, out var applied) && applied == wantedName)
                 continue;
@@ -8494,6 +8807,10 @@ internal sealed class BridgeEngineModel(
 
             case "test":
                 await Toggle_AwaitingTest_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "refresh":
+                await Refresh_TopicName_Async(client, threadId, cancellationToken);
                 return true;
 
             default:
@@ -10333,6 +10650,51 @@ internal sealed class BridgeEngineModel(
     /// stale line stops lying, and one more notification would work against the quiet this system
     /// has been fighting for.
     /// </summary>
+    /// <summary>
+    /// "Turn ended" alone is a READINESS signal — it says a message would be picked up now. What the
+    /// owner asked for on 2026-08-25 is a COMPLETION signal, and the difference is content: *"the
+    /// terminal completes the operation and stops, and I haven't received anything telling me
+    /// 'done'."*
+    ///
+    /// The content already exists and was already being thrown away. A session's closing report
+    /// ("merged, 214 tests green") is narration by shape — no question, no marker — so
+    /// OwnerPush_Policy suppresses it, and the engine files it in _lastSuppressedEntry against the
+    /// five-minute deadlock release. At the end of a turn the owner was waiting on, that entry is
+    /// exactly the thing they are owed, and it is already written and already formatted.
+    ///
+    /// So: take it, say it, and CONSUME it — leaving it behind would let Break_SilentDeadlock_Async
+    /// send the same words again minutes later, wearing a "nothing has moved" warning that would be
+    /// untrue.
+    /// </summary>
+    (string Text, bool IsCompletion) Build_TurnEndedText(string orchId, PendingOwnerReply pending)
+    {
+        var speaker = Describe_Speaker(orchId);
+
+        if (!pending.Answered)
+            return ($"✓✓  ·  {speaker}: turn ended — free now, they are reading this", false);
+
+        string? lastWords = null;
+
+        lock (_ownerStateLock)
+        {
+            // Only what was said AFTER their message. An older suppressed entry belongs to a
+            // conversation that has already moved on, and replaying it here would answer a question
+            // the owner did not just ask.
+            if (_lastSuppressedEntry.TryGetValue(orchId, out var suppressed) && suppressed.SuppressedUtc >= pending.DeliveredUtc)
+            {
+                lastWords = suppressed.Text;
+                _lastSuppressedEntry.Remove(orchId);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(lastWords))
+            return ($"✓✓  ·  {speaker}: done for now — turn ended, nothing left running", true);
+
+        // The entry's own text carries its speaker glyph already, so this adds only the fact the
+        // owner cannot see from it: that the session has STOPPED, rather than being mid-sentence.
+        return ($"{lastWords}\n\n✓✓  ·  turn ended — {speaker} is free", true);
+    }
+
     async Task Announce_SupervisorFree_Async(string orchId, PendingOwnerReply pending, CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
@@ -10341,13 +10703,21 @@ internal sealed class BridgeEngineModel(
         if (Resolve_EffectiveMode(orchId) != TelegramDeliveryModes.Normal)
             return;
 
-        var turnEndedText = $"✓✓  ·  {Describe_Speaker(orchId)}: turn ended — free now, they are reading this";
+        var (turnEndedText, isCompletion) = Build_TurnEndedText(orchId, pending);
 
         // No receipt to edit — one failed narration edit is enough to drop the id — so SEND it.
         // The owner's complaint that created this announcement was being left watching a "busy"
         // line that never changed, and a transient Telegram error silently reproducing that exact
         // silence is the same defect wearing a different hat.
-        if (pending.ReceiptMessageId == null)
+        //
+        // A COMPLETION IS SENT, NEVER EDITED, and this is the one place decision 14 does not reach.
+        // "Repeats edit, they never stack" is about a line that keeps SAYING THE SAME THING — the
+        // busy narration counting up, the ✓ becoming ✓✓. A Telegram edit raises NO notification, so
+        // an edit is precisely how you tell someone something without telling them: the owner's
+        // complaint is that a finished job reaches them as silence, and quietly rewriting a receipt
+        // they have already read reproduces it exactly. New information the owner is waiting for
+        // gets a message; a repeat of information they have gets an edit.
+        if (pending.ReceiptMessageId == null || isCompletion)
         {
             // WRAPPED AT THE CALL SITE, NOT IN THE SHARED METHOD. This call sat outside any try, and
             // Send_DirectReply_BestEffort_Async's own OperationCanceled catch is bare — so a Telegram
@@ -10473,15 +10843,16 @@ internal sealed class BridgeEngineModel(
 
             // Answered: the session that talks to the owner wrote back — the supervisor of a crew,
             // or the solo of a basic orchestration. The mirrored entry IS the feedback.
-            if (ownerAnswerCount > pending.OwnerAnswerCountAtDelivery)
-            {
-                lock (_ownerStateLock)
-                {
-                    _pendingOwnerReplies.Remove(orchId);
-                }
-
-                continue;
-            }
+            //
+            // ANSWERED IS NOT FINISHED, so this no longer deletes the tracker. The reply that lands
+            // here is nearly always the receipt the role commands mandate BEFORE the work begins,
+            // and dropping the tracker on it left nothing in the app watching for the turn to end —
+            // so a job the owner asked for could be done, the terminal go quiet, and they be told
+            // nothing at all. Marking it instead keeps the ONE thing that matters afterwards: the
+            // turn-end announcement below. The nudge is disarmed by the same flag, because the owner
+            // HAS been answered and must never be told otherwise.
+            if (!pending.Answered && ownerAnswerCount > pending.OwnerAnswerCountAtDelivery)
+                pending.Answered = true;
 
             var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
 
@@ -10497,13 +10868,31 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
-            // It was busy, the owner was told so, and now the turn has ENDED. Say so, once: without
-            // it the owner is left watching a "busy" line that never changes, with no way to know
-            // the supervisor is free and a message would be picked up immediately.
-            if (pending.LastNarratedUtc != default && !pending.TurnEndAnnounced)
+            // The turn the owner was waiting on has ENDED. Say so, once.
+            //
+            // TWO WAYS TO EARN THIS LINE, and the second is new. The first is the old one: the owner
+            // was shown a "busy" line and it must stop lying. The second is that the session ANSWERED
+            // and has now gone quiet — which is the small-job case, where no narration ever fired
+            // because the whole thing took less than the 45 s that arms it, and the owner was
+            // therefore told nothing at all from the receipt onwards.
+            if (!pending.TurnEndAnnounced && (pending.Answered || pending.LastNarratedUtc != default))
             {
                 pending.TurnEndAnnounced = true;
                 await Announce_SupervisorFree_Async(orchId, pending, cancellationToken);
+            }
+
+            // ANSWERED AND IDLE — the tracker has done its whole job and must not outlive it. The
+            // nudge below is deliberately downstream of this `continue`: the owner HAS been answered,
+            // so telling the session it never replied would be false, and telling the owner an answer
+            // is coming would be worse.
+            if (pending.Answered)
+            {
+                lock (_ownerStateLock)
+                {
+                    _pendingOwnerReplies.Remove(orchId);
+                }
+
+                continue;
             }
 
             if (pending.Nudged || (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds < OWNER_REPLY_GRACE_SECONDS)

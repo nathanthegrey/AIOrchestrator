@@ -24,12 +24,59 @@ public static class OwnerPush_Policy
     public const string BLOCKED_MARKER = "BLOCKED ON OWNER";
 
     /// <summary>
+    /// The one-line greeting a session writes as it boots — "supervisor online — …", "solo online
+    /// — …". A FOURTH thing the phone gets, and the newest, because the owner cannot use this system
+    /// without it (2026-08-25): *"At the start of a new session I don't receive a message from the
+    /// sup/solo telling me it's online and ready, so I don't know when I can start writing. Absurdly
+    /// I receive a message from the impl saying it's online … I should receive Sup Online, or Solo
+    /// Online, and I also want Rev1 Online. In short, I want to know that the sessions are ready."*
+    ///
+    /// It IS progress narration by shape — no question, no marker — so the filter below killed it,
+    /// and the role commands made that worse by mandating an EMPTY body, which removes the last
+    /// chance of a stray '?' rescuing it. A member's identical greeting reached the phone only
+    /// because a spoke channel is not an owner channel and never meets this policy at all.
+    ///
+    /// It cannot become a waterfall: a session writes it exactly once, at boot.
+    /// </summary>
+    public const string ONLINE_MARKER = "online";
+
+    /// <summary>
+    /// Matched on the SUBJECT, not the raw text, so the word "online" in a sentence is not a
+    /// greeting. The subject every role command mandates starts with the speaker and the marker:
+    /// `supervisor online — <repo> — <folders>`, `solo online — …`, `rev-1 online`.
+    /// </summary>
+    public static bool Is_OnlineGreeting(string? subject)
+    {
+        if (string.IsNullOrWhiteSpace(subject))
+            return false;
+
+        var words = subject.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        // The marker is the SECOND word at the latest — "supervisor online", "solo online",
+        // "rev-1 online", "general supervisor online". Anything further in is prose.
+        for (var i = 0; i < words.Length && i < 3; i++)
+        {
+            if (string.Equals(words[i].TrimEnd(',', '.', ':', ';'), ONLINE_MARKER, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// ownerIsWaitingForAReply: the owner sent something the supervisor has not answered yet, so
     /// THIS entry is that answer and must go through whatever else it contains.
+    ///
+    /// subject: the entry's subject line, used ONLY for the boot greeting above. Optional so the
+    /// callers that genuinely have no subject to offer keep working; the mirror path always passes
+    /// it.
     /// </summary>
-    public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply)
+    public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply, string? subject = null)
     {
         if (ownerIsWaitingForAReply)
+            return true;
+
+        if (Is_OnlineGreeting(subject))
             return true;
 
         if (string.IsNullOrEmpty(rawEntryText))

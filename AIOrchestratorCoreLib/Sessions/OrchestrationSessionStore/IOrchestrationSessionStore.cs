@@ -28,6 +28,9 @@ public interface IOrchestrationSessionStore
     void Clear_StatusLineMessageId(string orchId);
     void Set_SupervisorPid(string orchId, int? pid);
 
+    /// <summary>Clears the supervisor stamp and pid — the write that takes a crew back to BASIC.</summary>
+    void Clear_Supervisor(string orchId);
+
     /// <summary>Stamps the communicator spawn (watchdog grace) — its pid lives only in its pid file.</summary>
     void Stamp_CommunicatorSpawned(string orchId);
 
