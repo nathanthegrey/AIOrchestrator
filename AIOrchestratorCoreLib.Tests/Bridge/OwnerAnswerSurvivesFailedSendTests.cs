@@ -577,6 +577,11 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken)
     {
         return Task.FromResult(Array.Empty<byte>());

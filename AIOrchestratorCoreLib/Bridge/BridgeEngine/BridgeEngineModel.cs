@@ -5279,6 +5279,15 @@ internal sealed class BridgeEngineModel(
                     ("italian", "Toggle 🇮🇹 — translate what I send you"),
                 ],
                 cancellationToken);
+
+            // AND PIN THE BUTTON THAT OPENS THAT MENU. Registering the commands only says what the
+            // menu CONTAINS; without this the `/` in the message box is left to the client default
+            // and appears in some chats and not others — which is exactly what the owner reported on
+            // 2026-08-25, with the list itself correct everywhere.
+            //
+            // Inside the same try as the commands, deliberately: the two are one feature, and a menu
+            // button pinned to a command list that failed to register would be a button onto nothing.
+            await client.Set_ChatMenuButton_ToCommands_Async(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

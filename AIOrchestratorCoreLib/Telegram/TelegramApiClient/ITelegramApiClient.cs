@@ -97,6 +97,12 @@ public interface ITelegramApiClient
     /// <summary>Registers the bot's command menu (the chat's ☰ menu button).</summary>
     Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Pins the chat's MENU BUTTON to the commands list — the `/` in the message box. Registering
+    /// commands is NOT enough on its own; without this the button is left to the client's default.
+    /// </summary>
+    Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken);
+
     Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken);
 
     /// <summary>Downloads a file the owner sent (getFile + file endpoint) — screenshots of bugs, etc.</summary>
