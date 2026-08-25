@@ -62,14 +62,46 @@ public static class TopicNameSync_Gate
     {
         if (failure is TelegramApiClient.TelegramApiException answered)
         {
+            if (Says_TopicNotModified(answered))
+                return TopicNameAttemptOutcomes.Applied;
+
             return answered.Is_Retryable
                 ? TopicNameAttemptOutcomes.OutcomeUnknown
                 : TopicNameAttemptOutcomes.Rejected;
         }
 
-        return failure is OperationCanceledException or HttpRequestException
-            ? TopicNameAttemptOutcomes.OutcomeUnknown
+        // A TRANSPORT FAILURE IS NEVER RECLASSIFIED AS APPLIED, which is why this is asked before the
+        // slug and not after it. Telegram did not answer, so it cannot have told us the name already
+        // holds — and Applied is the one outcome that suppresses retries FOR EVER.
+        if (failure is OperationCanceledException or HttpRequestException)
+            return TopicNameAttemptOutcomes.OutcomeUnknown;
+
+        return Says_TopicNotModified(failure)
+            ? TopicNameAttemptOutcomes.Applied
             : TopicNameAttemptOutcomes.Rejected;
+    }
+
+    /// <summary>
+    /// Telegram refuses an edit that would leave the topic unchanged, and answers HTTP 400 with
+    /// `TOPIC_NOT_MODIFIED`. That is the desired state already holding — <see cref="TopicNameAttemptOutcomes.Applied"/>,
+    /// exactly as that enum member has always said — so it must never be counted as a failure or the
+    /// sync retries it on every tick for as long as the app runs.
+    ///
+    /// THIS IS THE CASE THE ENUM DOCUMENTED AND THE CLASSIFIER NEVER RETURNED. `Applied` was described
+    /// here from the day the enum was written ("success wearing a failure's clothes") while the only
+    /// code that recognised it was a private `when` filter inside `BridgeEngineModel` — so the rule
+    /// existed twice: once as prose in a public, tested type, and once as an untested engine predicate
+    /// that only ONE of the two topic-name syncs was wired to. The General-topic sync, added later, was
+    /// not, and logged `Could not rename the General topic` every tick from app start.
+    ///
+    /// A SLUG, NOT PROSE. `TelegramApiException` carries the status code precisely so nobody parses a
+    /// number back out of English — that rule stands. This matches Telegram's machine-readable error
+    /// name inside the response body, which is the only place the distinction between "refused because
+    /// the name is invalid" and "refused because it is already right" is expressed at all: both are 400.
+    /// </summary>
+    static bool Says_TopicNotModified(Exception failure)
+    {
+        return failure.Message.Contains("TOPIC_NOT_MODIFIED", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

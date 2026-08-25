@@ -5673,6 +5673,13 @@ internal sealed class BridgeEngineModel(
 
         // The camera on the General topic is the AMBIENT reminder that it is on, so it is pushed with
         // the reply rather than waiting for the next tick — the owner asked for the two together.
+        //
+        // AN EXPLICIT OWNER ACTION OUTRANKS A PENDING BACKOFF, exactly as Forget_AppliedTopicName_Async
+        // says for the per-orchestration topics. The stamp is there to stop a tick-rate spin, not to
+        // make the owner wait up to 30 s for the toggle they just sent — and the desired name has
+        // changed, so this attempt is a different one from whatever failed.
+        _generalTopicNameRetryAfterUtc = null;
+
         await Sync_GeneralTopicName_BestEffort_Async(client, cancellationToken);
 
         var text = enabled
@@ -6564,9 +6571,15 @@ internal sealed class BridgeEngineModel(
     /// the desired state already holds — so it must be treated as a success or the sync retries it
     /// on every tick.
     /// </summary>
+    /// <remarks>
+    /// ASKED THROUGH THE CLASSIFIER RATHER THAN SPELT AGAIN. This used to hold its own copy of the
+    /// TOPIC_NOT_MODIFIED test, which made it invisible to the suite and — worse — available to only
+    /// whichever call site remembered it existed. The General-topic sync did not, and spun.
+    /// Decision 12: one implementation, and it lives where a test can reach it.
+    /// </remarks>
     static bool Is_TopicAlreadyNamed(Exception exception)
     {
-        return exception.Message.Contains("TOPIC_NOT_MODIFIED", StringComparison.OrdinalIgnoreCase);
+        return TopicNameSync_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.Applied;
     }
 
     async Task Sync_TopicNames_BestEffort_Async(CancellationToken cancellationToken)
@@ -9260,6 +9273,13 @@ internal sealed class BridgeEngineModel(
     string? _appliedGeneralTopicName;
 
     /// <summary>
+    /// When a General-topic rename whose outcome we could NOT learn may be tried again. The sibling of
+    /// <see cref="_topicNameRetryAfterUtc"/>, and here for the same reason: an unknown outcome must
+    /// suppress retries for a while and then retry, rather than for ever or for two seconds.
+    /// </summary>
+    DateTime? _generalTopicNameRetryAfterUtc;
+
+    /// <summary>
     /// Puts the camera on the GENERAL topic's name while status screenshots are on, and takes it off
     /// again (owner, 2026-08-24). The topic list is the one surface visible without opening anything,
     /// so it answers "is this on?" without them having to remember or ask.
@@ -9280,19 +9300,46 @@ internal sealed class BridgeEngineModel(
         if (_appliedGeneralTopicName == desired)
             return;
 
+        if (!TopicNameSync_Gate.Is_AttemptDue(_generalTopicNameRetryAfterUtc, DateTime.UtcNow))
+            return;
+
         try
         {
             await client.Edit_GeneralForumTopic_Async(desired, cancellationToken);
             _appliedGeneralTopicName = desired;
+            _generalTopicNameRetryAfterUtc = null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
+        catch (Exception ex) when (Is_TopicAlreadyNamed(ex))
+        {
+            // THE ORDINARY CASE AT EVERY APP START, AND IT IS NOT AN ERROR. The memo begins null while
+            // Telegram already holds the right name, so the first push is always the one Telegram
+            // refuses with TOPIC_NOT_MODIFIED. Not remembering it meant trying again on the next tick,
+            // for ever: the owner reported this as "I get this error many many times in the activity
+            // log", which is the same spin Sync_TopicNames_Inside_Gate_Async was fixed for and this
+            // copy never was. Nothing is logged — the name is what we want, which is success.
+            _appliedGeneralTopicName = desired;
+            _generalTopicNameRetryAfterUtc = null;
+        }
         catch (Exception exception)
         {
             // Cosmetic, and never the reason a toggle looks like it failed — the flag is saved before
-            // this runs. The name is NOT remembered on failure, so the next tick simply tries again.
+            // this runs.
+            //
+            // THE SAME THREE BUCKETS AS THE PER-ORCHESTRATION SYNC, for the same reasons, decided in the
+            // same place. An outcome we could not learn (a timeout, a dropped connection, a 429, a 5xx)
+            // is stamped and retried after the backoff; a genuine refusal is remembered as applied so it
+            // is retried when the wanted name CHANGES rather than on the next tick. Writing the memo on
+            // a refusal is the same honest-behaviour/dishonest-map trade documented at the sibling site:
+            // an invalid name will not become valid by being sent again two seconds later.
+            if (TopicNameSync_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.OutcomeUnknown)
+                _generalTopicNameRetryAfterUtc = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, MIRROR_RETRY_BACKOFF_SECONDS);
+            else
+                _appliedGeneralTopicName = desired;
+
             _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not rename the General topic: {exception.Message}");
         }
     }
