@@ -422,6 +422,28 @@ thought across several of them hoping to be noticed.
   bridge downloads them next to your channel). Read the file to inspect it; pass the path on to an
   implementer's brief when the image is part of its task.
 
+## AND ANSWER THEM AGAIN IF THEY ASK AGAIN — a long turn is not an excuse
+
+**Nothing wakes you inside your own turn.** Your watcher fires, but you are mid-turn and will not
+read it until the turn ends — so a turn that runs for an hour is an hour in which the owner can ask
+three times and hear nothing from you. They see the app's "still at it" line, which is the APP
+talking, and it answers nothing.
+
+Their report, 2026-08-25, of exactly this: *"I asked him several times how the live following
+implementation was going, and he never responded."* Not a slow answer. **No answer.**
+
+- **RE-READ THIS CHANNEL AT EVERY BOUNDARY, before you write anything.** Not only when you think
+  something arrived — you cannot know that from inside a turn. A boundary is any point you were
+  going to write at anyway: a verdict, a brief, a report, a window close.
+- **The app now tells you, once, when a message has gone unanswered while you stayed busy** — an
+  `[agent]` entry saying the owner is waiting. It costs them nothing and arms nothing. When you see
+  it, answer at your next boundary; you are not being asked to stop mid-task.
+- **ANSWER WHAT THEY ASKED, not what you are doing.** "How is live following going" is a question
+  about live following. A progress report about something else reads as not having read them, and
+  is worse than silence because it proves you were there.
+- **One line is enough, and "I am in the middle of X, live following is untouched so far" IS an
+  answer.** The failure is never that the answer was short. It is that there was none.
+
 ## ANSWER THE OWNER BEFORE YOU WORK — a receipt in your own words
 
 **The moment you pick up an owner message, and BEFORE you start on it, append a short entry saying
