@@ -16,6 +16,24 @@ var options = HostOptions_Factory.Create_FromArguments(
     Environment.GetEnvironmentVariable,
     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 
+// THE SAME RULE THE WPF HOST STATES: an unhandled exception must never take the host down quietly,
+// because the host dying kills every agent session with it. The WPF app installs three handlers
+// (App.xaml.cs) and the daemon had none — an unobserved background task exception left no trace at
+// all, in a process whose only window is its log.
+TaskScheduler.UnobservedTaskException += (_, unobserved) =>
+{
+    Console.Error.WriteLine($"Unobserved background task exception — daemon kept alive: {unobserved.Exception}");
+    unobserved.SetObserved();
+};
+
+AppDomain.CurrentDomain.UnhandledException += (_, fatal) =>
+{
+    // Non-recoverable (the runtime is tearing down) — at least leave a trace and an exit code the
+    // service manager will act on.
+    Console.Error.WriteLine($"FATAL unhandled exception — daemon is going down: {fatal.ExceptionObject}");
+    Environment.ExitCode = 1;
+};
+
 var builder = Host.CreateApplicationBuilder(args);
 
 // The orchestrator's own log goes to stdout through ConsoleLog_Writer; the host's framework

@@ -18,8 +18,11 @@ namespace AIOrchestrator.Daemon;
 ///
 /// Everything up to the engine start runs SYNCHRONOUSLY inside ExecuteAsync, before its first
 /// await: the generic host reports READY=1 to systemd once every hosted service's StartAsync has
-/// returned, and a BackgroundService's StartAsync returns at ExecuteAsync's first incomplete
-/// await — so this ordering is what makes READY mean "the bridge is up", not "the process exists".
+/// returned, and a BackgroundService's StartAsync returns at ExecuteAsync's first incomplete await.
+/// So READY means the lock is held, the services are built, the kit is installed and the engine
+/// task has been STARTED — not that the engine has completed a tick. An engine that throws on its
+/// first tick does so after systemd was told the unit is up; the watchdog ping below is what
+/// notices that, because it stops the moment the engine task completes.
 /// </summary>
 sealed class BridgeHost_Service(
     IHostOptions options,
@@ -41,14 +44,38 @@ sealed class BridgeHost_Service(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // EVERYTHING IS INSIDE THIS GUARD, and the exit code is the whole point. A BackgroundService
+        // that faults stops the host and the process still exits 0 (measured on
+        // Microsoft.Extensions.Hosting 10.0.11) — so `Restart=on-failure`, launchd's
+        // KeepAlive/SuccessfulExit=false and `sc failure` all read a clean stop and do NOTHING. The
+        // bridge would be dead and stay dead, which is the one outcome every one of those three
+        // service definitions was written to prevent.
+        try
+        {
+            await Run_Host_Async(stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // The ordinary stop.
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"AI Orchestrator daemon failed: {exception}");
+            Environment.ExitCode = 1;
+            _lifetime.StopApplication();
+        }
+    }
+
+    async Task Run_Host_Async(CancellationToken stoppingToken)
+    {
         var paths = SupervisionPaths_Factory.Create(_options.SupervisionRoot);
-        using var instanceLock = SingleInstance_Guard.Try_Acquire(paths);
+        using var instanceLock = SingleInstance_Guard.Try_Acquire(paths, out var lockFailure);
 
         if (instanceLock == null)
         {
-            Console.Error.WriteLine(
-                $"AI Orchestrator is already running against {paths.Root} (lock: {paths.InstanceLockFile}). "
-                + "Only one host may run — the Telegram bridge allows a single poller.");
+            // The reason carries its own explanation — a path that cannot be created must not be
+            // explained with "only one host may run", which is an answer to a different question.
+            Console.Error.WriteLine($"AI Orchestrator will not start: {lockFailure}.");
             Environment.ExitCode = 1;
             _lifetime.StopApplication();
             return;

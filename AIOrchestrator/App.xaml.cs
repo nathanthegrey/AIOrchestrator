@@ -26,14 +26,20 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // FIRST, BEFORE ANYTHING IS BUILT. On master only the config provider and the log were
+        // constructed ahead of these handlers; extracting the composition root moved four more
+        // constructors above them, which widened the window where a throw is an uncontained crash
+        // instead of the contained message box this file exists to guarantee.
+        Install_GlobalExceptionHandlers();
+
         var options = HostOptions_Factory.Create_Default();
         var paths = SupervisionPaths_Factory.Create(options.SupervisionRoot);
-        _instanceLock = SingleInstance_Guard.Try_Acquire(paths);
+        _instanceLock = SingleInstance_Guard.Try_Acquire(paths, out var lockFailure);
 
         if (_instanceLock == null)
         {
             MessageBox.Show(
-                "AI Orchestrator is already running. Only one instance may run (the Telegram bridge allows a single poller).",
+                $"AI Orchestrator cannot start: {lockFailure}.",
                 "AI Orchestrator",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -45,7 +51,6 @@ public partial class App : Application
         var services = OrchestratorServices_Factory.Create(paths);
         _log = services.Log;
 
-        Install_GlobalExceptionHandlers();
         KitAssets_Bootstrapper.Ensure_Installed(Path.Combine(AppContext.BaseDirectory, "kit"), options.ClaudeHome, paths, services.Log);
 
         _engineCancellation = new CancellationTokenSource();

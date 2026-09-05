@@ -10,6 +10,10 @@ unchanged — the two exclude each other through `~/.claude/supervision/.instanc
     dotnet publish AIOrchestrator.Daemon -c Release -r <osx-arm64|linux-x64|win-x64> --self-contained -o <dir>
 Options: `--root DIR` / `AIORCH_SUPERVISION_ROOT` (default `~/.claude/supervision`), `--claude-home DIR` /
 `AIORCH_CLAUDE_HOME` (default `~/.claude`, where commands, hooks and settings.json are installed).
+`--root` is exported to every session the daemon spawns, so they find their channels there.
+`--claude-home` is INSTALL-ONLY: the `claude` CLI reads its own config dir (and its login) from
+`CLAUDE_CONFIG_DIR`/`~/.claude`, so pointing this elsewhere without also installing the kit where the
+CLI looks leaves the role commands unresolvable — measured 2026-09-06.
 
 **Config**: `<root>/config.json` (repos, models, chat ids) and `<root>/secrets.json` (bot token, read by
 the bridge only — never in a unit file, plist or log). `kit/install.sh` (macOS/Linux) or `kit/install.ps1`
