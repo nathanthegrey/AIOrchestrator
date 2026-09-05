@@ -1,6 +1,9 @@
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running.ClaudeInvocation;
+using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
+using AIOrchestratorCoreLib.Running.PrintTurnRunner;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
@@ -91,9 +94,13 @@ public static class BridgeEngine_Factory
         var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
         var tailer = ChannelTailer_Factory.Create(fileOffsets);
 
-        var watchdog = SessionWatchdog_Factory.Create(paths, store, launcher, log);
+        var watchdog = SessionWatchdog_Factory.Create(paths, configProvider, store, launcher, log);
         var transcriber = Transcription.VoiceTranscriber.VoiceTranscriber_Factory.Create(log);
 
-        return new BridgeEngineModel(paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, translator, transcriber, lastUpdateId);
+        // The print dispatcher idles unless a role is configured `runner: print` — with a stock
+        // config.json it discovers no registered session and its tick costs one Load_All.
+        var printTurns = PrintTurnDispatcher_Factory.Create(paths, store, configProvider, PrintTurnRunner_Factory.Create(ClaudeInvocation_Resolver.Resolve_ForThisOs()), log);
+
+        return new BridgeEngineModel(paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, translator, transcriber, printTurns, lastUpdateId);
     }
 }

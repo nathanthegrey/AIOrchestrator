@@ -2,11 +2,13 @@ using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.SessionLaunch;
+using AIOrchestratorCoreLib.Running.SessionRunner;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
-using AIOrchestratorCoreLib.Spawning;
-using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -15,7 +17,8 @@ internal sealed class OrchestrationLauncherModel(
     ISupervisionPaths paths,
     IOrchestratorConfigProvider configProvider,
     IOrchestrationSessionStore store,
-    ISessionSpawner spawner,
+    ISessionRunner terminalRunner,
+    ISessionRunner printRunner,
     IOrchestrationLog log) : IOrchestrationLauncher
 {
     /// <summary>The shell writes its pid file within ~1 s of starting; 40 × 500 ms is generous.</summary>
@@ -25,7 +28,8 @@ internal sealed class OrchestrationLauncherModel(
     readonly ISupervisionPaths _paths = paths;
     readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
-    readonly ISessionSpawner _spawner = spawner;
+    readonly ISessionRunner _terminalRunner = terminalRunner;
+    readonly ISessionRunner _printRunner = printRunner;
     readonly IOrchestrationLog _log = log;
 
     public IOrchestrationSession Start_Orchestration(string repoName, string repoPath)
@@ -290,8 +294,10 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_SupervisorPidFile(orchId);
 
-        var command = SpawnCommand_Builder.Build_ForSupervisor(
+        var launch = SessionLaunch_Factory.Create(
+            SessionRoles.Supervisor,
             orchId,
+            SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
             session.RepoPath,
             session.SupervisorModelOverride ?? _configProvider.Get_Current().SupervisorModel,
             pidFile,
@@ -303,10 +309,12 @@ internal sealed class OrchestrationLauncherModel(
         _store.Set_SupervisorPid(orchId, null);
         Delete_StalePidFile_BestEffort(pidFile);
 
-        _spawner.Spawn(command);
-        Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
+        var runner = Start_Session(launch);
 
-        _log.Log_Info(orchId, "Supervisor session spawned");
+        if (runner.Kind == SessionRunners.Terminal)
+            Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
+
+        _log.Log_Info(orchId, $"Supervisor session {Describe_Started(runner)}");
     }
 
     public void Respawn_Communicator(string orchId)
@@ -314,8 +322,10 @@ internal sealed class OrchestrationLauncherModel(
         var session = _store.Get_Session(orchId);
         var pidFile = _paths.Get_CommunicatorPidFile(orchId);
 
-        var command = SpawnCommand_Builder.Build_ForCommunicator(
+        var launch = SessionLaunch_Factory.Create(
+            SessionRoles.Communicator,
             orchId,
+            SessionLaunch_Factory.COMMUNICATOR_MEMBER_ID,
             session.RepoPath,
             _configProvider.Get_Current().CommunicatorModel,
             pidFile,
@@ -326,8 +336,8 @@ internal sealed class OrchestrationLauncherModel(
         _store.Stamp_CommunicatorSpawned(orchId);
         Delete_StalePidFile_BestEffort(pidFile);
 
-        _spawner.Spawn(command);
-        _log.Log_Info(orchId, "Communicator session spawned");
+        var runner = Start_Session(launch);
+        _log.Log_Info(orchId, $"Communicator session {Describe_Started(runner)}");
     }
 
     /// <summary>
@@ -357,21 +367,17 @@ internal sealed class OrchestrationLauncherModel(
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
         var model = session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel;
 
-        var command = kind switch
-        {
-            MemberKinds.Reviewer => SpawnCommand_Builder.Build_ForReviewer(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
-            MemberKinds.Solo => SpawnCommand_Builder.Build_ForSolo(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
-            MemberKinds.Implementer => SpawnCommand_Builder.Build_ForImplementer(orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName),
-            _ => throw new Exception($"Unhandled MemberKinds '{kind}' respawning '{memberId}' of '{orchId}'"),
-        };
+        var launch = SessionLaunch_Factory.Create(SessionRole_Names.From_MemberKind(kind), orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName);
 
         _store.Set_MemberPid(orchId, memberId, null);
         Delete_StalePidFile_BestEffort(pidFile);
 
-        _spawner.Spawn(command);
-        Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
+        var runner = Start_Session(launch);
 
-        _log.Log_Info(orchId, $"{kind} '{memberId}' session spawned");
+        if (runner.Kind == SessionRunners.Terminal)
+            Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
+
+        _log.Log_Info(orchId, $"{kind} '{memberId}' session {Describe_Started(runner)}");
     }
 
     public void Spawn_GeneralSupervisor()
@@ -381,12 +387,59 @@ internal sealed class OrchestrationLauncherModel(
         // The general folder is the general supervisor's PERMANENT working directory: its
         // CLAUDE.md (persistent, machine-portable knowledge) auto-loads there, and --continue
         // resumes unambiguously because only general sessions ever run in it.
-        var command = SpawnCommand_Builder.Build_ForGeneralSupervisor(
-            _paths.GeneralFolder, _configProvider.Get_Current().GeneralSupervisorModel, _paths.GeneralPidFile);
+        var launch = SessionLaunch_Factory.Create(
+            SessionRoles.General,
+            ChannelDiscovery.GENERAL_ORCH_ID,
+            SessionLaunch_Factory.GENERAL_MEMBER_ID,
+            _paths.GeneralFolder,
+            _configProvider.Get_Current().GeneralSupervisorModel,
+            _paths.GeneralPidFile,
+            null);
 
-        _spawner.Spawn(command);
+        var runner = Start_Session(launch);
 
-        _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, "General supervisor session spawned (resume-if-possible)");
+        _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"General supervisor session {Describe_Started(runner)}");
+    }
+
+    /// <summary>
+    /// THE RUNNER SEAM. The role's configured runner starts the session; a role configured print
+    /// that this stage cannot print-run is started in a terminal, with a warning that says so.
+    /// Terminal is the default for every role, so with an untouched config.json this is exactly the
+    /// spawn that always happened.
+    /// </summary>
+    ISessionRunner Start_Session(ISessionLaunch launch)
+    {
+        var runner = Resolve_Runner(launch.Role, launch.OrchId);
+
+        // A ROLE THAT LEFT PRINT MODE LEAVES ITS REGISTRATION BEHIND, and that file is what tells
+        // the dispatcher to keep running turns and the watchdog that a missing pid file is by
+        // design. Spawning a terminal for this session is the moment we know it is no longer
+        // print-run, so it is the moment to clear it — otherwise the member would have a window AND
+        // headless turns answering the same brief, while nothing would ever respawn the window.
+        if (runner.Kind == SessionRunners.Terminal && PrintSessionState_Store.Delete_IfExists(_paths, launch.Role, launch.OrchId, launch.MemberId))
+            _log.Log_Warning(launch.OrchId, $"'{launch.MemberId}' was registered as print-run but its role is now runner: terminal — the stale registration was cleared and it is spawned in a window");
+
+        runner.Start(launch);
+        return runner;
+    }
+
+    ISessionRunner Resolve_Runner(SessionRoles role, string orchId)
+    {
+        if (_configProvider.Get_Current().Runners.Get_ForRole(role).Runner != SessionRunners.Print)
+            return _terminalRunner;
+
+        if (PrintRunner_Support.Supports(role))
+            return _printRunner;
+
+        _log.Log_Warning(orchId, PrintRunner_Support.Describe_Unsupported(role));
+        return _terminalRunner;
+    }
+
+    static string Describe_Started(ISessionRunner runner)
+    {
+        return runner.Kind == SessionRunners.Print
+            ? "registered as print-run (no window; one claude -p turn per inbound entry)"
+            : "spawned";
     }
 
     /// <summary>

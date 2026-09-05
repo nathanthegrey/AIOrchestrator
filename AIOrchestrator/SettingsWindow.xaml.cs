@@ -68,7 +68,8 @@ public partial class SettingsWindow : Window
             ItalianLayerCheckBox.IsChecked == true,
             _config.TelegramStatusScreenshots,
             _config.VoiceTranscribeCommand,
-            _config.OrchestrationTokenBudget);
+            _config.OrchestrationTokenBudget,
+            _config.Runners);
 
         OrchestratorConfig_Loader.Save(updated, _paths);
         Close();

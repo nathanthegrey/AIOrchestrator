@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Configuration;
@@ -33,7 +34,8 @@ public static class OrchestratorConfig_Loader
             Get_Bool_OrNull(configRoot, "telegramItalianLayer"),
             Get_Bool_OrNull(configRoot, "telegramStatusScreenshots"),
             Get_String_OrNull(configRoot, "voiceTranscribeCommand"),
-            Get_Long_OrNull(configRoot, "orchestrationTokenBudget"));
+            Get_Long_OrNull(configRoot, "orchestrationTokenBudget"),
+            RunnerConfigs_Json.Parse(configRoot));
     }
 
     public static void Save(IOrchestratorConfig config, ISupervisionPaths paths)
@@ -64,6 +66,8 @@ public static class OrchestratorConfig_Loader
             ["voiceTranscribeCommand"] = config.VoiceTranscribeCommand,
             ["orchestrationTokenBudget"] = config.OrchestrationTokenBudget,
         };
+
+        RunnerConfigs_Json.Write(configRoot, config.Runners);
 
         File.WriteAllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));
 

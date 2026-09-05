@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
@@ -28,6 +29,33 @@ public static class OrchestratorConfig_Factory
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget)
     {
+        return Create(
+            repos, supervisorModel, implementerModel, generalSupervisorModel, communicatorModel,
+            telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken, telegramItalianLayer,
+            telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
+            RunnerConfigs_Factory.Create_Default());
+    }
+
+    /// <summary>
+    /// The full shape. Callers that rebuild a config from parts (the Settings window) MUST pass the
+    /// runners through from the config they started from — the overload above defaults them, and a
+    /// save through it would silently reset a hand-edited <c>runners</c> block to terminal.
+    /// </summary>
+    public static IOrchestratorConfig Create(
+        IReadOnlyList<IRepoEntry> repos,
+        string? supervisorModel,
+        string? implementerModel,
+        string? generalSupervisorModel,
+        string? communicatorModel,
+        long? telegramSupergroupChatId,
+        long? telegramOwnerUserId,
+        string? telegramBotToken,
+        bool? telegramItalianLayer,
+        bool? telegramStatusScreenshots,
+        string? voiceTranscribeCommand,
+        long? orchestrationTokenBudget,
+        IRunnerConfigs runners)
+    {
         return new OrchestratorConfigModel(
             repos,
             supervisorModel ?? DEFAULT_SUPERVISOR_MODEL,
@@ -40,7 +68,8 @@ public static class OrchestratorConfig_Factory
             telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER,
             telegramStatusScreenshots ?? DEFAULT_TELEGRAM_STATUS_SCREENSHOTS,
             voiceTranscribeCommand,
-            orchestrationTokenBudget);
+            orchestrationTokenBudget,
+            runners);
     }
 
     public static IOrchestratorConfig Create_Empty()
@@ -66,7 +95,8 @@ public static class OrchestratorConfig_Factory
             telegramItalianLayer,
             source.TelegramStatusScreenshots,
             source.VoiceTranscribeCommand,
-            source.OrchestrationTokenBudget);
+            source.OrchestrationTokenBudget,
+            source.Runners);
     }
 
     /// <summary>
@@ -88,6 +118,7 @@ public static class OrchestratorConfig_Factory
             source.TelegramItalianLayer,
             telegramStatusScreenshots,
             source.VoiceTranscribeCommand,
-            source.OrchestrationTokenBudget);
+            source.OrchestrationTokenBudget,
+            source.Runners);
     }
 }
