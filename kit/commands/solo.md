@@ -15,8 +15,25 @@ that, say so (below).
 
 ## Your channel
 
-`~/.claude/supervision/$ARGUMENTS/owner-channel.md`
-(Windows: `%USERPROFILE%\.claude\supervision\$ARGUMENTS\owner-channel.md`)
+`$AIORCH_SUPERVISION_ROOT/$ARGUMENTS/owner-channel.md`
+
+**FIRST, RESOLVE YOUR ENVIRONMENT — one Bash call, before anything else.** You cannot see
+environment variables; the Read tool does not expand them, and a path you type from memory is the
+DEFAULT root, which under a bridge started with `--root` simply does not exist (measured 2026-09-06:
+a member read `$HOME/.claude/supervision/...`, found nothing, created it, and sat there until its
+turn timed out). Run exactly this and use its output for every path and every mode decision below:
+
+```bash
+echo "ROOT=${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"; env | grep '^AIORCH_' | sort
+```
+
+`AIORCH_RUNNER=print` in that output means the bridge runs you headless — see the section on it
+below; its rules change how you write to your channel, so read that output before you write anything.
+
+`$AIORCH_SUPERVISION_ROOT` is set for you by the app; it is `~/.claude/supervision` on a
+default machine (Windows: `%USERPROFILE%\.claude\supervision`) and something else whenever the
+bridge was started with `--root`. Use the variable — a composed literal is wrong the moment the
+root moves, and a session that cannot find its channel simply sits there.
 
 Duplex and append-only, straight to the owner. Their Telegram messages arrive here as `FROM owner`
 entries; your `FROM solo` entries reach their phone.
@@ -38,7 +55,7 @@ Do NOT study the repo at boot. Read what the task needs when the task arrives.
 
 As soon as the goal is clear from the owner's first message, drop
 `{"action":"set-orchestration-name","orchId":"$ARGUMENTS","name":"<2-4 words, 3 is best>"}` into
-`~/.claude/supervision/.requests/` — it renames the app card, the Telegram topic and your terminal
+`$AIORCH_SUPERVISION_ROOT/.requests/` — it renames the app card, the Telegram topic and your terminal
 window (e.g. "CRM invoice crash").
 
 **This is yours here.** The instruction used to live only in the supervisor's command, so basic
@@ -77,7 +94,7 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 
   ```bash
   bash ~/.claude/commands/channel-append.sh \
-    --channel "$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md" \
+    --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md" \
     --author  solo \
     --subject "fix landed — 214 tests green, branch ready" \
     --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
@@ -313,7 +330,7 @@ operation and stops, and I haven't received anything telling me 'done'."*
 
 ## The task ledger — PLAN.md (yours here, not a supervisor's)
 
-`~/.claude/supervision/$ARGUMENTS/PLAN.md` exists from the moment this orchestration was created —
+`$AIORCH_SUPERVISION_ROOT/$ARGUMENTS/PLAN.md` exists from the moment this orchestration was created —
 the app seeds it, reads it for the card's progress bar, and answers the owner's `/progress` and
 `/left` straight from it. In a basic orchestration there is no supervisor, so **it is yours**. Its
 seed text says "maintained by the SUPERVISOR"; read that as "maintained by whoever talks to the
@@ -418,7 +435,7 @@ discovery made while working became work.
 
 When the owner says "close this session", or the work is finished and they agree it is done, **you
 end it yourself**. Post any last one-liner, then drop
-`~/.claude/supervision/.requests/close-$ARGUMENTS-<timestamp>.json` containing:
+`$AIORCH_SUPERVISION_ROOT/.requests/close-$ARGUMENTS-<timestamp>.json` containing:
 
 ```json
 {"action":"close-orchestration","orchId":"$ARGUMENTS","reason":"<why, one line>","requester":"solo of $ARGUMENTS"}
@@ -478,7 +495,7 @@ a body line. Mentioning the word mid-sentence is discussion, not a handover.
 {"action":"promote-orchestration","orchId":"<your orch id>","reason":"<why one session is not enough>"}
 ```
 
-Write it into `~/.claude/supervision/.requests/<anything>.json`. The `reason` is mandatory and the
+Write it into `$AIORCH_SUPERVISION_ROOT/.requests/<anything>.json`. The `reason` is mandatory and the
 owner reads it — they are being asked to spend, so tell them what on, in one line.
 
 Then tell the owner in one line that you have asked, and go back to work. **Do not re-drop it**: it is
@@ -552,7 +569,7 @@ Monitor(
 ```
 
 ```bash
-ch="$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md"
+ch="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md"
 
 # Sets FP, or returns non-zero with FP_ERR naming the command that failed. A read that FAILED is
 # not a read that saw something different — see below.
@@ -585,7 +602,7 @@ self_write_suppresses() {
 
 # The watcher drops a FACT; the APP writes the record. Never write the log file from here.
 mark_unreadable() {
-  local orch="$HOME/.claude/supervision/$ARGUMENTS"
+  local orch="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS"
   [ -d "$orch" ] || return 0
   printf '%s\n%s\n%s\n%s\n%s\n%s\n' "watcher" "the owner channel fingerprint" "$1 failed" \
     "solo" "" "took the fingerprint as unknown rather than as a change" \

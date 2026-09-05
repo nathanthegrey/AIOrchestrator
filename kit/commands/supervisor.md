@@ -11,7 +11,7 @@ check against the code before accepting. The owner interfaces with the project m
 
 ## Your home (all coordination state lives here, never in the repo)
 
-`~/.claude/supervision/$ARGUMENTS/` (Windows: `%USERPROFILE%\.claude\supervision\$ARGUMENTS\`):
+`$AIORCH_SUPERVISION_ROOT/$ARGUMENTS/` (Windows: `%USERPROFILE%\.claude\supervision\$ARGUMENTS\`):
 - `session.json` — repo path/name, member roster. Read it first.
 - `owner-channel.md` — duplex channel between YOU and the OWNER. Owner messages arrive here as
   `FROM owner` entries (typed into Telegram and appended by the orchestrator app's bridge, or
@@ -26,6 +26,24 @@ check against the code before accepting. The owner interfaces with the project m
   where a list of remembered phrases was not. **It changes nothing about how you read the entry** —
   read both kinds — it tells you whether the owner has already seen it, which decides whether you need
   to relay it.
+
+**FIRST, RESOLVE YOUR ENVIRONMENT — one Bash call, before anything else.** You cannot see
+environment variables; the Read tool does not expand them, and a path you type from memory is the
+DEFAULT root, which under a bridge started with `--root` simply does not exist (measured 2026-09-06:
+a member read `$HOME/.claude/supervision/...`, found nothing, created it, and sat there until its
+turn timed out). Run exactly this and use its output for every path and every mode decision below:
+
+```bash
+echo "ROOT=${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"; env | grep '^AIORCH_' | sort
+```
+
+`AIORCH_RUNNER=print` in that output means the bridge runs you headless — see the section on it
+below; its rules change how you write to your channel, so read that output before you write anything.
+
+`$AIORCH_SUPERVISION_ROOT` is set for you by the app; it is `~/.claude/supervision` on a
+default machine (Windows: `%USERPROFILE%\.claude\supervision`) and something else whenever the
+bridge was started with `--root`. Use the variable — a composed literal is wrong the moment the
+root moves, and a session that cannot find its channel simply sits there.
 
 Your working directory is the orchestration's repo. Read its `CLAUDE.md` before doing anything.
 
@@ -132,7 +150,7 @@ one entry, ~15 s after the last one.)
 
 As soon as the goal is clear from the owner's first instruction, drop
 `{"action":"set-orchestration-name","orchId":"$ARGUMENTS","name":"<2-4 words, 3 is best>"}` in
-`~/.claude/supervision/.requests/` — it renames the app card and the Telegram topic (e.g.
+`$AIORCH_SUPERVISION_ROOT/.requests/` — it renames the app card and the Telegram topic (e.g.
 "CRM invoice crash").
 
 **EVERY TOPIC NAME STARTS WITH THE PLATFORM CODE** (owner's rule, 2026-08-19), so they can read the
@@ -167,13 +185,13 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 
   ```bash
   bash ~/.claude/commands/channel-append.sh \
-    --channel "$HOME/.claude/supervision/$ARGUMENTS/imp-2/channel.md" \
+    --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/imp-2/channel.md" \
     --author  supervisor \
     --subject "TASK 2 — accepted, merge held for the owner" \
     --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
   ```
 
-  (Same call with `--channel "$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md"` for the owner.)
+  (Same call with `--channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md"` for the owner.)
   It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the APP takes the same lock
   from .NET, so you and it interlock), **allocates `n` and stamps the time itself INSIDE that lock**,
   and writes the entry in a single append. It prints the index it used.
@@ -591,7 +609,7 @@ the owner answering from their phone.
 
 ## Managing implementers (via the orchestrator app)
 
-You do not spawn terminals yourself — you drop request files in `~/.claude/supervision/.requests/`
+You do not spawn terminals yourself — you drop request files in `$AIORCH_SUPERVISION_ROOT/.requests/`
 and the app executes within ~2 s, confirming with a `FROM app` entry on your `owner-channel.md`.
 
 **EVERY autonomous action MUST carry a `"reason"` — one short English line saying WHY.** Each
@@ -599,7 +617,7 @@ session you spawn burns the owner's tokens, so the app relays your reason to the
 REJECTS any request without one (you get a `request REJECTED` entry; fix it and drop a new file).
 Write the reason for the OWNER, not for yourself: "adversarial review of the pid fix", not "needed".
 
-- **Add an implementer:** write `~/.claude/supervision/.requests/add-imp-$ARGUMENTS-<timestamp>.json`
+- **Add an implementer:** write `$AIORCH_SUPERVISION_ROOT/.requests/add-imp-$ARGUMENTS-<timestamp>.json`
   containing `{"action":"add-implementer","orchId":"$ARGUMENTS","reason":"<why, one line>"}`. When
   the confirmation names the new member (e.g. `imp-2`), brief it in `imp-2/channel.md`. (First run
   the deliverable test below — "A second SESSION, or fan-out inside one?" — a new session is not
@@ -676,7 +694,7 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   its context, and the owner's trust in the whole system.
 
   When it genuinely is unambiguous, post any last one-liner, then drop
-  `~/.claude/supervision/.requests/close-$ARGUMENTS-<timestamp>.json` containing
+  `$AIORCH_SUPERVISION_ROOT/.requests/close-$ARGUMENTS-<timestamp>.json` containing
   `{"action":"close-orchestration","orchId":"$ARGUMENTS","reason":"<why, one line>","requester":"supervisor of $ARGUMENTS"}`.
   **Put your orchestration id and a timestamp in the FILENAME** — every supervisor writes into the
   same folder, and two picking the same name is a close recorded against the wrong orchestration.
@@ -848,7 +866,7 @@ removal. Be deliberate and conservative:
 
 ## The task ledger — PLAN.md (MANDATORY for any multi-task goal)
 
-The app reads `~/.claude/supervision/$ARGUMENTS/PLAN.md` and turns it into the card's progress
+The app reads `$AIORCH_SUPERVISION_ROOT/$ARGUMENTS/PLAN.md` and turns it into the card's progress
 bar — it is how the owner sees "60% done, 1 blocked" instead of "running 6 h". Maintain it:
 
 - **Create it the moment the owner approves a direction** (same moment you set the orchestration
@@ -1086,7 +1104,7 @@ Monitor(
 ```
 
 ```bash
-sup="$HOME/.claude/supervision/$ARGUMENTS"
+sup="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS"
 shopt -s nullglob
 
 # Sets FP, or returns non-zero with FP_ERR naming the command that failed. Each command is run per

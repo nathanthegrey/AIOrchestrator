@@ -42,6 +42,12 @@ public partial class App : Application
         }
 
         _paths = paths;
+
+        // The sessions this app spawns read their channel path from this variable (see the daemon's
+        // note): here it is always the default root, so nothing changes — it is set so the contract
+        // is the host's, stated once, rather than a default the role commands are lucky to match.
+        Environment.SetEnvironmentVariable(HostOptions_Factory.SUPERVISION_ROOT_ENV, paths.Root);
+
         var services = OrchestratorServices_Factory.Create(paths);
         _log = services.Log;
 

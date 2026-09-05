@@ -20,8 +20,25 @@ must change, you say so in a finding — someone else changes it.
 
 ## Your channel (your ONLY coordination surface)
 
-`~/.claude/supervision/<orch-id>/<member-id>/channel.md`
-(Windows: `%USERPROFILE%\.claude\supervision\<orch-id>\<member-id>\channel.md`)
+`$AIORCH_SUPERVISION_ROOT/<orch-id>/<member-id>/channel.md`
+
+**FIRST, RESOLVE YOUR ENVIRONMENT — one Bash call, before anything else.** You cannot see
+environment variables; the Read tool does not expand them, and a path you type from memory is the
+DEFAULT root, which under a bridge started with `--root` simply does not exist (measured 2026-09-06:
+a member read `$HOME/.claude/supervision/...`, found nothing, created it, and sat there until its
+turn timed out). Run exactly this and use its output for every path and every mode decision below:
+
+```bash
+echo "ROOT=${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"; env | grep '^AIORCH_' | sort
+```
+
+`AIORCH_RUNNER=print` in that output means the bridge runs you headless — see the section on it
+below; its rules change how you write to your channel, so read that output before you write anything.
+
+`$AIORCH_SUPERVISION_ROOT` is set for you by the app; it is `~/.claude/supervision` on a
+default machine (Windows: `%USERPROFILE%\.claude\supervision`) and something else whenever the
+bridge was started with `--root`. Use the variable — a composed literal is wrong the moment the
+root moves, and a session that cannot find its channel simply sits there.
 
 Duplex and append-only, between you and your SUPERVISOR. You never read other members' channels
 and **never address the owner** — everything routes through the supervisor. Appending to your own
@@ -168,7 +185,7 @@ OUT OF SCOPE (pre-existing, not part of this change)
 
   ```bash
   bash ~/.claude/commands/channel-append.sh \
-    --channel "$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md" \
+    --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/<orch-id>/<member-id>/channel.md" \
     --author  reviewer \
     --subject "review filed — 3 findings, one blocking" \
     --body-file <file holding your entry body>    # or "-" to pipe the body on stdin
@@ -292,7 +309,7 @@ Monitor(
 ```
 
 ```bash
-ch="$HOME/.claude/supervision/<orch-id>/<member-id>/channel.md"
+ch="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/<orch-id>/<member-id>/channel.md"
 
 # Sets FP, or returns non-zero with FP_ERR naming the command that failed. A read that FAILED is
 # not a read that saw something different — see "A failed read is not a change" below.
@@ -328,7 +345,7 @@ self_write_suppresses() {
 
 # The watcher drops a FACT; the APP writes the record. Never write the log file from here.
 mark_unreadable() {
-  local orch="$HOME/.claude/supervision/${AIORCH_ID:-}"
+  local orch="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/${AIORCH_ID:-}"
   [ -n "${AIORCH_ID:-}" ] && [ -d "$orch" ] || return 0
   printf '%s\n%s\n%s\n%s\n%s\n%s\n' "watcher" "the channel fingerprint" "$1 failed" \
     "${AIORCH_MEMBER:-}" "" "took the fingerprint as unknown rather than as a change" \

@@ -54,6 +54,16 @@ sealed class BridgeHost_Service(
             return;
         }
 
+        // EVERY SESSION THIS HOST SPAWNS INHERITS THE ROOT. The role commands compose their channel
+        // path from the supervision root, and until --root existed that root was always
+        // ~/.claude/supervision, so a literal was correct. It is not any more: measured 2026-09-06,
+        // a print-run implementer under `--root /tmp/...` read
+        // `$HOME/.claude/supervision/<orch>/<member>/channel.md`, found nothing, and burned a whole
+        // turn to the timeout looking for it. Set on THIS process, so both runners are covered at
+        // once — Process.Start copies the parent environment, and the print dispatcher's own
+        // AIORCH_* dictionary is additive, not a replacement.
+        Environment.SetEnvironmentVariable(HostOptions_Factory.SUPERVISION_ROOT_ENV, paths.Root);
+
         var services = OrchestratorServices_Factory.Create(paths);
         var forSystemdJournal = SystemdHelpers.IsSystemdService();
         var consoleWriter = new ConsoleLog_Writer(forSystemdJournal);

@@ -21,13 +21,31 @@ the owner what is happening RIGHT NOW. You narrate; you never work.
 
 ## Your files
 
-- Working dir = the repo root. Orchestration folder: `~/.claude/supervision/$ARGUMENTS/`.
+- Working dir = the repo root. Orchestration folder: `$AIORCH_SUPERVISION_ROOT/$ARGUMENTS/`.
 - `owner-channel.md` — the ONLY file you append to. Entry format:
   `## [n] FROM communicator — YYYY-MM-DD HH:mm — STATUS`
   Subject EXACTLY `STATUS` (the app collapses queued communicator updates under Do-Not-Disturb so
   only the newest reaches the owner). Body = your message, 1–2 short lines. It reaches the owner's
   phone as `🟢 Com: …`.
 - `imp-*/channel.md` — READ-ONLY context (what the implementers are doing).
+
+**FIRST, RESOLVE YOUR ENVIRONMENT — one Bash call, before anything else.** You cannot see
+environment variables; the Read tool does not expand them, and a path you type from memory is the
+DEFAULT root, which under a bridge started with `--root` simply does not exist (measured 2026-09-06:
+a member read `$HOME/.claude/supervision/...`, found nothing, created it, and sat there until its
+turn timed out). Run exactly this and use its output for every path and every mode decision below:
+
+```bash
+echo "ROOT=${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"; env | grep '^AIORCH_' | sort
+```
+
+`AIORCH_RUNNER=print` in that output means the bridge runs you headless — see the section on it
+below; its rules change how you write to your channel, so read that output before you write anything.
+
+`$AIORCH_SUPERVISION_ROOT` is set for you by the app; it is `~/.claude/supervision` on a
+default machine (Windows: `%USERPROFILE%\.claude\supervision`) and something else whenever the
+bridge was started with `--root`. Use the variable — a composed literal is wrong the moment the
+root moves, and a session that cannot find its channel simply sits there.
 
 ## Spying on the supervisor (your data source)
 
@@ -90,7 +108,7 @@ busy) AND on supervisor entries (your cue to go silent); the 180 s timeout drive
 supervisor is busy AND the owner is still waiting on it since their last message.
 
 ```bash
-ch="$HOME/.claude/supervision/$ARGUMENTS/owner-channel.md"
+ch="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md"
 count() { grep -c "FROM owner\|FROM supervisor" "$ch"; }
 base=$(count); start=$(date +%s)
 until [ "$(count)" -gt "$base" ] || [ $(( $(date +%s) - start )) -ge 180 ]; do sleep 5; done
