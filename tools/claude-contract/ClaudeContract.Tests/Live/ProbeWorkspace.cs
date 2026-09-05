@@ -53,7 +53,9 @@ public sealed class ProbeWorkspace
         {
             var entry = new JsonObject
             {
-                ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = $"{hookScript} {hookEvent}" }),
+                // Single-quoted: the hook command is a SHELL line, and a checkout path with a space
+                // ("Visual Studio") split it into "/Users/x/Visual" — every hook then "failed to fire".
+                ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = $"'{hookScript}' {hookEvent}" }),
             };
 
             if (hookEvent is "PreToolUse" or "PostToolUse")
@@ -64,7 +66,7 @@ public sealed class ProbeWorkspace
 
         var settings = new JsonObject
         {
-            ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = statuslineScript },
+            ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = $"'{statuslineScript}'" },
             ["hooks"] = hooks,
         };
 
