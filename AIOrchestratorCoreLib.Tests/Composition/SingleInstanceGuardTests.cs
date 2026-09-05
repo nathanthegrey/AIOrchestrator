@@ -52,4 +52,37 @@ public class SingleInstanceGuardTests : IDisposable
     {
         Assert.Equal(Path.Combine(_root, ".instance.lock"), _paths.InstanceLockFile);
     }
+
+    /// <summary>
+    /// The two failures are DIFFERENT ANSWERS and the host prints them to the owner. Folding them
+    /// together reported an unusable root as "another host is already running" — which sends
+    /// someone hunting for a process that does not exist.
+    /// </summary>
+    [Fact]
+    public void ARootThatCannotBeCreated_IsReportedAsThat_NotAsContention()
+    {
+        var underAFile = Path.Combine(_root, "a-file", "supervision");
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(Path.Combine(_root, "a-file"), "not a directory");
+
+        var held = SingleInstance_Guard.Try_Acquire(SupervisionPaths_Factory.Create(underAFile), out var reason);
+
+        Assert.Null(held);
+        Assert.NotNull(reason);
+        Assert.Contains("could not be created", reason);
+        Assert.DoesNotContain("already running", reason);
+    }
+
+    [Fact]
+    public void ContentionSaysSo_AndTheReasonNamesTheRoot()
+    {
+        using var first = SingleInstance_Guard.Try_Acquire(_paths, out var firstReason);
+        Assert.NotNull(first);
+        Assert.Null(firstReason);
+
+        Assert.Null(SingleInstance_Guard.Try_Acquire(_paths, out var reason));
+        Assert.Contains("already running", reason);
+        Assert.Contains(_root, reason);
+        Assert.Contains("single poller", reason);
+    }
 }

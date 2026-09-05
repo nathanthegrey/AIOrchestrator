@@ -37,9 +37,13 @@ WatchdogSec=60
 Restart=on-failure
 RestartSec=5
 
-# Decision 8: the sessions die with the host. control-group is systemd's default and is stated
-# here so nobody "fixes" it to process — every claude the daemon spawned belongs to this cgroup.
-KillMode=control-group
+# Decision 8: the sessions die with the host — but the daemon's own order is engine cancelled and
+# drained FIRST, sessions killed second. control-group (systemd's default) SIGTERMs every process in
+# the cgroup at once, so the claude sessions would be torn down while the engine is still inside its
+# drain. mixed sends the signal to the main process alone and leaves the rest to the daemon, which
+# is what makes the documented order true on Linux; anything still alive after TimeoutStopSec is
+# SIGKILLed cgroup-wide, so nothing can survive the stop either way.
+KillMode=mixed
 TimeoutStopSec=30
 
 # The bot token lives in $HOME/.claude/supervision/secrets.json, read by the bridge alone — never

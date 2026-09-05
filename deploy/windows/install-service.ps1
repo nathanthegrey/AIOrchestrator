@@ -45,7 +45,19 @@ if ($null -eq $existing) {
         -Credential $credential | Out-Null
     Write-Host "Service '$ServiceName' created for '$BinaryPath' running as $Account."
 } else {
-    Write-Host "Service '$ServiceName' already exists — updating restart policy and starting it."
+    # THE PATH IS RE-APPLIED, NOT ASSUMED. Skipping this is how a service keeps running last month's
+    # binary while its owner reads "already exists" and believes the publish took effect — decision
+    # 23's failure, in the one script written to fix it. sc.exe is used rather than Set-Service so
+    # the quoting matches the New-Service call above.
+    $currentPath = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'").PathName
+
+    if ($currentPath -ne "`"$BinaryPath`"") {
+        Write-Host "Service '$ServiceName' exists but points at $currentPath — repointing it at `"$BinaryPath`"."
+        if ($existing.Status -ne 'Stopped') { Stop-Service -Name $ServiceName -Force }
+        & sc.exe config $ServiceName binPath= "`"$BinaryPath`"" | Out-Null
+    } else {
+        Write-Host "Service '$ServiceName' already exists and points at the given binary — updating restart policy and starting it."
+    }
 }
 
 # Restart on failure: three escalating delays, counter reset after 24 h. The daemon exits non-zero
