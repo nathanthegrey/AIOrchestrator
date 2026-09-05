@@ -424,23 +424,9 @@ public class ChannelAppendHelperInteropTests : IDisposable
             + "This test asserts on the real script; without it there is nothing under test and a pass would be meaningless.");
     }
 
+    /// <summary>One locator for every kit test — Windows paths first, then the POSIX ones, so this runs on every OS the kit ships to.</summary>
     static string Find_Bash_OrFail()
     {
-        string[] candidates =
-        [
-            @"C:\Program Files\Git\bin\bash.exe",
-            @"C:\Program Files\Git\usr\bin\bash.exe",
-            @"C:\Windows\System32\bash.exe",
-        ];
-
-        foreach (var candidate in candidates)
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        throw new Exception(
-            $"No bash found at any of: {string.Join(", ", candidates)}. The append protocol has a bash half and a .NET half; "
-            + "without bash this suite cannot show they agree, and passing without checking is the failure mode this test exists to avoid.");
+        return TestSupport.Bash_Locator.Find_OrFail();
     }
 }
