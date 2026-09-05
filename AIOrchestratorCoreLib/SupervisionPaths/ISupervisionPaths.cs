@@ -12,6 +12,13 @@ public interface ISupervisionPaths
     string BridgeStateFile { get; }
     string GlobalLogFile { get; }
 
+    /// <summary>
+    /// Held open for the lifetime of the ONE running host (WPF app or daemon). The bridge's
+    /// getUpdates long-poll tolerates a single consumer per bot token, so a second host must
+    /// refuse to start — on every OS, which a Windows named mutex could not promise.
+    /// </summary>
+    string InstanceLockFile { get; }
+
     /// <summary>Home of the always-on GENERAL supervisor (owner ⇄ general, mirrored to the General topic).</summary>
     string GeneralFolder { get; }
     string GeneralChannelFile { get; }
