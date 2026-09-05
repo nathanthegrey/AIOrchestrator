@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Processes;
 
 namespace AIOrchestratorCoreLib.Translation.MessageTranslator;
 
@@ -104,22 +105,20 @@ internal sealed class MessageTranslatorModel(IOrchestrationLog log) : IMessageTr
         }
     }
 
-    /// <summary>cmd /c resolves claude through PATH (including .cmd shims) — the WPF app has no shell of its own.</summary>
+    /// <summary>
+    /// The OS shell resolves claude through PATH (cmd /c honours .cmd shims on Windows, /bin/sh -c
+    /// elsewhere) — the host app has no shell of its own. See <see cref="ShellCommand_Builder"/>.
+    /// </summary>
     static ProcessStartInfo Build_StartInfo(string model)
     {
-        return new ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            Arguments = $"/c claude -p --model {model}",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(false),
-            StandardOutputEncoding = new UTF8Encoding(false),
-            StandardErrorEncoding = new UTF8Encoding(false),
-        };
+        var startInfo = ShellCommand_Builder.Build_StartInfo($"claude -p --model {model}");
+        startInfo.RedirectStandardInput = true;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        startInfo.StandardInputEncoding = new UTF8Encoding(false);
+        startInfo.StandardOutputEncoding = new UTF8Encoding(false);
+        startInfo.StandardErrorEncoding = new UTF8Encoding(false);
+        return startInfo;
     }
 
     static void Kill_BestEffort(Process process)

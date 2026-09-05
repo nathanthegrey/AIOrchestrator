@@ -1,0 +1,171 @@
+using AIOrchestratorCoreLib.Composition;
+using AIOrchestratorCoreLib.Composition.HostOptions;
+using AIOrchestratorCoreLib.Composition.OrchestratorServices;
+using AIOrchestratorCoreLib.Kit;
+using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Termination;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting.Systemd;
+
+namespace AIOrchestrator.Daemon;
+
+/// <summary>
+/// The daemon's one hosted service. Its start is the WPF OnStartup without the window: instance
+/// lock, service graph, kit self-install, engine in the background. Its stop is the WPF OnExit:
+/// engine cancelled and awaited, every spawned session killed (decision 8 — sessions die with
+/// the host; the watchdog respawns them on the next start), lock released.
+///
+/// Everything up to the engine start runs SYNCHRONOUSLY inside ExecuteAsync, before its first
+/// await: the generic host reports READY=1 to systemd once every hosted service's StartAsync has
+/// returned, and a BackgroundService's StartAsync returns at ExecuteAsync's first incomplete
+/// await — so this ordering is what makes READY mean "the bridge is up", not "the process exists".
+/// </summary>
+sealed class BridgeHost_Service(
+    IHostOptions options,
+    IHostApplicationLifetime lifetime,
+    IServiceProvider serviceProvider) : BackgroundService
+{
+    public const string SERVICE_NAME = "AIOrchestrator";
+
+    /// <summary>
+    /// How long a stopping daemon waits for the engine's loops to finish their tick after the
+    /// cancel. The engine's last act is to drain queued Telegram announcements; past this bound
+    /// the sessions are killed anyway, because a hung drain must not hold up a service stop.
+    /// </summary>
+    static readonly TimeSpan ENGINE_STOP_GRACE = TimeSpan.FromSeconds(10);
+
+    readonly IHostOptions _options = options;
+    readonly IHostApplicationLifetime _lifetime = lifetime;
+    readonly IServiceProvider _serviceProvider = serviceProvider;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var paths = SupervisionPaths_Factory.Create(_options.SupervisionRoot);
+        using var instanceLock = SingleInstance_Guard.Try_Acquire(paths);
+
+        if (instanceLock == null)
+        {
+            Console.Error.WriteLine(
+                $"AI Orchestrator is already running against {paths.Root} (lock: {paths.InstanceLockFile}). "
+                + "Only one host may run — the Telegram bridge allows a single poller.");
+            Environment.ExitCode = 1;
+            _lifetime.StopApplication();
+            return;
+        }
+
+        var services = OrchestratorServices_Factory.Create(paths);
+        var forSystemdJournal = SystemdHelpers.IsSystemdService();
+        var consoleWriter = new ConsoleLog_Writer(forSystemdJournal);
+        services.Log.EntryLogged += consoleWriter.On_EntryLogged;
+
+        services.Engine.MutedChanged += muted => services.Log.Log_Info("", muted ? "Telegram muted (🌙 do-not-disturb on)" : "Telegram unmuted (🌙 off)");
+        services.Engine.SilenceAllChanged += silenced => services.Log.Log_Info("", silenced ? "All topics silenced (🔕 on)" : "Topics audible again (🔕 off)");
+        services.Engine.ItalianLayerChanged += enabled => services.Log.Log_Info("", enabled ? "Italian layer on" : "Italian layer off");
+
+        services.Log.Log_Info("", $"Daemon starting — supervision root {paths.Root}, Claude home {_options.ClaudeHome}");
+        services.Log.Log_Info("", services.ConfigProvider.Get_Current().Is_TelegramConfigured()
+            ? "Telegram: mirror + remote input active"
+            : "Telegram: not configured (file-only mode) — fill config.json and secrets.json, then restart");
+
+        KitAssets_Bootstrapper.Ensure_Installed(Path.Combine(AppContext.BaseDirectory, "kit"), _options.ClaudeHome, paths, services.Log);
+
+        using var engineCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var engineTask = Task.Run(() => services.Engine.Run_Async(engineCancellation.Token), CancellationToken.None);
+
+        try
+        {
+            await Keep_SystemdWatchdogFed_Async(engineTask, stoppingToken);
+        }
+        finally
+        {
+            services.Log.Log_Info("", "Daemon stopping — cancelling the bridge engine");
+            engineCancellation.Cancel();
+            await Await_EngineStop_Async(engineTask, services);
+
+            // Every spawned session (general + supervisors + implementers) dies with the host.
+            // Orchestration state survives on disk; the watchdog respawns everything (with resume
+            // semantics) on the next start.
+            SessionTerminator.Kill_AllSessions(paths);
+            services.Log.Log_Info("", "Daemon stopped — sessions terminated, instance lock released");
+            services.Log.EntryLogged -= consoleWriter.On_EntryLogged;
+        }
+    }
+
+    /// <summary>
+    /// The daemon's main loop: as long as the engine is running, tell systemd so. The ping is
+    /// sent from HERE, the hosted service's own loop, and it stops the moment the engine task
+    /// completes — an engine that died with the process still alive is exactly the state the
+    /// watchdog exists to catch, and a ping from an independent timer would hide it. Outside
+    /// systemd (launchd, Windows, a terminal) there is no notifier and this simply waits.
+    /// </summary>
+    async Task Keep_SystemdWatchdogFed_Async(Task engineTask, CancellationToken stoppingToken)
+    {
+        var notifier = _serviceProvider.GetService<ISystemdNotifier>();
+        var pingInterval = SystemdWatchdog_Schedule.Compute_PingInterval_OrNull(
+            Environment.GetEnvironmentVariable(SystemdWatchdog_Schedule.WATCHDOG_USEC_ENV));
+
+        if (notifier == null || !notifier.IsEnabled || pingInterval == null)
+        {
+            await Wait_ForEngineOrStop_Async(engineTask, stoppingToken);
+            return;
+        }
+
+        var watchdogPing = new ServiceState("WATCHDOG=1");
+
+        while (!stoppingToken.IsCancellationRequested && !engineTask.IsCompleted)
+        {
+            notifier.Notify(watchdogPing);
+
+            try
+            {
+                await Task.Delay(pingInterval.Value, stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Stop requested: the finally in ExecuteAsync takes it from here.
+            }
+        }
+    }
+
+    static async Task Wait_ForEngineOrStop_Async(Task engineTask, CancellationToken stoppingToken)
+    {
+        var stopRequested = new TaskCompletionSource();
+        using var registration = stoppingToken.Register(() => stopRequested.TrySetResult());
+
+        await Task.WhenAny(engineTask, stopRequested.Task);
+    }
+
+    /// <summary>
+    /// An engine that ENDED on its own while the host still runs is a bug the WPF app could not
+    /// see either: recorded as an error and the host stops, so the init system restarts it
+    /// (Restart=on-failure / KeepAlive) rather than leaving a live process with a dead bridge.
+    /// </summary>
+    async Task Await_EngineStop_Async(Task engineTask, IOrchestratorServices services)
+    {
+        try
+        {
+            await engineTask.WaitAsync(ENGINE_STOP_GRACE);
+        }
+        catch (OperationCanceledException)
+        {
+            // The ordinary way Run_Async ends after a cancel.
+        }
+        catch (TimeoutException)
+        {
+            services.Log.Log_Warning("", $"Bridge engine did not stop within {ENGINE_STOP_GRACE.TotalSeconds:0} s — proceeding with session termination");
+        }
+        catch (Exception exception)
+        {
+            services.Log.Log_Error("", "Bridge engine ended with an error", exception);
+            Environment.ExitCode = 1;
+        }
+
+        if (engineTask.IsCompleted && !_lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            services.Log.Log_Error("", "Bridge engine ended while the daemon was still running — stopping so the service manager restarts it", null);
+            Environment.ExitCode = 1;
+            _lifetime.StopApplication();
+        }
+    }
+}

@@ -118,7 +118,11 @@ usable_held_epoch() {
   stamp="$(grep -m1 '^utc=' "$OWNER_FILE" 2>/dev/null | cut -d= -f2-)"
   [ -n "$stamp" ] || return 1
 
-  epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" || return 1
+  # GNU date first, BSD date (macOS) second: `-d` is GNU-only, and on macOS it fails — which fell
+  # through to the directory-age fallback and quietly made every lock look metadata-less there.
+  epoch="$(date -u -d "$stamp" +%s 2>/dev/null)" \
+    || epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$stamp" +%s 2>/dev/null)" \
+    || return 1
   [ -n "$epoch" ] || return 1
 
   [ "$epoch" -le "$(date -u +%s)" ] || return 1
@@ -216,7 +220,9 @@ record_self_write() {
 
 acquire_lock() {
   local waited_ms=0 budget_ms delay_ms="$RETRY_INITIAL_MS"
-  budget_ms=$(awk "BEGIN{printf \"%d\", $BUDGET_SECONDS * 1000}")
+  # Shell arithmetic, not awk: macOS's awk rejected the printf form, budget_ms came back EMPTY, the
+  # `-ge` test below never held, and the helper spun on a held lock for ever (measured 2026-09-06).
+  budget_ms=$((BUDGET_SECONDS * 1000))
 
   while true; do
     # mkdir, NOT the stage-and-rename shape C# uses, and this asymmetry is deliberate and measured.
@@ -246,7 +252,7 @@ acquire_lock() {
 
     [ "$waited_ms" -ge "$budget_ms" ] && return 1
 
-    sleep "$(awk "BEGIN{printf \"%.3f\", $delay_ms/1000}")"
+    sleep "$((delay_ms / 1000)).$(printf '%03d' $((delay_ms % 1000)))"
     waited_ms=$((waited_ms + delay_ms))
     delay_ms=$((delay_ms * 2))
     [ "$delay_ms" -gt "$RETRY_MAX_MS" ] && delay_ms="$RETRY_MAX_MS"
