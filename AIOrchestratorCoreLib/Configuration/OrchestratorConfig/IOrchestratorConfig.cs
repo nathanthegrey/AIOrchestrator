@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Planning.PlanBackend;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
@@ -49,6 +50,13 @@ public interface IOrchestratorConfig
     /// Null or 0 = no guard.
     /// </summary>
     long? OrchestrationTokenBudget { get; }
+
+    /// <summary>
+    /// Which plan backend this machine runs. Null — the ordinary case — means PLAN.md alone, exactly
+    /// as before the seam existed. Hand-edited in config.json; no window writes it, which is why
+    /// <see cref="OrchestratorConfig_Loader"/> never serialises the key back out.
+    /// </summary>
+    PlanBackendSettings? PlanBackend { get; }
 
     bool Is_TelegramConfigured();
 }

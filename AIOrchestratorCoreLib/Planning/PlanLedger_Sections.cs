@@ -32,9 +32,19 @@ public static class PlanLedger_Sections
     /// </summary>
     public static readonly IReadOnlyList<string> NON_LEDGER_HEADING_PREFIXES =
     [
-        "PARKED",
-        "OWNER REQUESTS",
+        PARKED_HEADING_PREFIX,
+        OWNER_REQUESTS_HEADING_PREFIX,
     ];
+
+    /// <summary>Discoveries nobody asked for. Local by definition — never synchronised anywhere.</summary>
+    public const string PARKED_HEADING_PREFIX = "PARKED";
+
+    /// <summary>
+    /// What the OWNER asked for. Named on its own because it is the one section a plan backend may
+    /// write into (<see cref="PlanBackend.IPlanBackend"/>), and a writer that has to find it must not
+    /// spell the title a second time — the five drifted copies of the marker list are what that costs.
+    /// </summary>
+    public const string OWNER_REQUESTS_HEADING_PREFIX = "OWNER REQUESTS";
 
     /// <summary>
     /// Whether this line opens a section whose task lines are not the ledger's. False for any line
@@ -67,7 +77,7 @@ public static class PlanLedger_Sections
     /// is not a heading in markdown, and a line of `###` alone is a heading with no title — neither
     /// can name a section, so both answer null rather than the empty string.
     /// </summary>
-    static string? Read_HeadingTitle_OrNull(string line)
+    public static string? Read_HeadingTitle_OrNull(string line)
     {
         var text = line.TrimEnd('\r').TrimStart();
 

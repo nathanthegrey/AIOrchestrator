@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Planning.PlanBackend;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
@@ -26,7 +27,14 @@ public static class OrchestratorConfig_Factory
         bool? telegramItalianLayer,
         bool? telegramStatusScreenshots,
         string? voiceTranscribeCommand,
-        long? orchestrationTokenBudget)
+        long? orchestrationTokenBudget,
+
+        // OPTIONAL, AND ONLY THIS ONE. Every other parameter is required because every caller knows
+        // its value; this key is hand-edited in config.json and no window has a field for it, so the
+        // Settings window builds a config without one — and the loader, which is the only reader that
+        // can have one, passes it explicitly. Save() never serialises the key, so a config built
+        // without it cannot erase it from disk.
+        PlanBackendSettings? planBackend = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -40,7 +48,8 @@ public static class OrchestratorConfig_Factory
             telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER,
             telegramStatusScreenshots ?? DEFAULT_TELEGRAM_STATUS_SCREENSHOTS,
             voiceTranscribeCommand,
-            orchestrationTokenBudget);
+            orchestrationTokenBudget,
+            planBackend);
     }
 
     public static IOrchestratorConfig Create_Empty()
@@ -66,7 +75,8 @@ public static class OrchestratorConfig_Factory
             telegramItalianLayer,
             source.TelegramStatusScreenshots,
             source.VoiceTranscribeCommand,
-            source.OrchestrationTokenBudget);
+            source.OrchestrationTokenBudget,
+            source.PlanBackend);
     }
 
     /// <summary>
@@ -88,6 +98,7 @@ public static class OrchestratorConfig_Factory
             source.TelegramItalianLayer,
             telegramStatusScreenshots,
             source.VoiceTranscribeCommand,
-            source.OrchestrationTokenBudget);
+            source.OrchestrationTokenBudget,
+            source.PlanBackend);
     }
 }

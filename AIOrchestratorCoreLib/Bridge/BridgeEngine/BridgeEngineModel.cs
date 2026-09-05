@@ -16,6 +16,7 @@ using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Mirroring;
 using AIOrchestratorCoreLib.Planning;
+using AIOrchestratorCoreLib.Planning.PlanBackend;
 using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
@@ -987,6 +988,13 @@ internal sealed class BridgeEngineModel(
         // Moving this call below the return seven lines down compiles, passes every test, and quietly
         // reintroduces exactly the bug described above. If you are that edit: don't.
         Refresh_ProgressArtefacts();
+
+        // ABOVE THE DND GATE for the same reason as the line above it: this sends the owner nothing.
+        // It reads what a plan backend says was approved upstream, writes those requests into PLAN.md,
+        // and reports lines that have closed — none of which is Telegram traffic, and all of which
+        // must keep working while the owner is not being disturbed and on machines with no bot token
+        // at all. With no backend configured (the default) it returns before touching a single file.
+        Sync_PlanBackends();
 
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
@@ -5527,6 +5535,127 @@ internal sealed class BridgeEngineModel(
     /// cannot be reached by the suite at all — which is how three guards were once deleted at once
     /// without reddening anything.
     /// </summary>
+    /// <summary>
+    /// How often an external plan backend is asked what was approved upstream. NOT the tick rate: the
+    /// tick is 2 seconds and this call leaves the machine, so at tick rate a single orchestration
+    /// would put 1,800 requests an hour against somebody else's planning system. A request the owner
+    /// approved is not urgent to the minute; a ledger line that closed is reported on the same beat.
+    /// </summary>
+    const int PLAN_BACKEND_SYNC_SECONDS = 60;
+
+    IPlanBackend? _planBackend;
+    PlanBackendSettings? _planBackendSettings;
+    bool _planBackendLoaded;
+    DateTime _planBackendLastSyncUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// THE SEAM'S ONE CALL SITE — every orchestration's round trip with its plan backend, once a
+    /// minute. Everything it decides lives in <see cref="PlanBackend_Step"/>, which the suite can
+    /// reach; what stays here is the loop, the cadence and the log line.
+    ///
+    /// <para>
+    /// THE DEFAULT PATH RETURNS BEFORE ANY I/O. <see cref="PlanMdBackend"/> is the null object — it
+    /// lists nothing and reports nothing — so calling the step for it would spend two file probes per
+    /// orchestration per minute to reach the same nothing. An installation that configures no backend
+    /// therefore behaves exactly as it did before this existed, which is the property the whole seam
+    /// is judged on.
+    /// </para>
+    /// </summary>
+    void Sync_PlanBackends()
+    {
+        var backend = Resolve_PlanBackend();
+
+        if (backend is PlanMdBackend)
+            return;
+
+        if ((DateTime.UtcNow - _planBackendLastSyncUtc).TotalSeconds < PLAN_BACKEND_SYNC_SECONDS)
+            return;
+
+        _planBackendLastSyncUtc = DateTime.UtcNow;
+
+        foreach (var session in _store.Load_All())
+        {
+            try
+            {
+                var outcome = PlanBackend_Step.Sync(
+                    backend,
+                    _paths,
+                    session.OrchId,
+                    session.DisplayName ?? session.OrchId,
+                    session.ClosedUtc != null,
+                    () => Build_LedgerClosureEvidence(session.OrchId),
+                    DateTime.Now);
+
+                if (outcome.DidAnything)
+                {
+                    _log.Log_Info(
+                        session.OrchId,
+                        $"Plan backend: {outcome.RequestsIngested} request(s) ingested, {outcome.RowsReportedClosed} row(s) reported closed"
+                            + (outcome.OrchestrationClosedReported ? ", orchestration closure reported" : ""));
+                }
+
+                if (outcome.Failure != null)
+                    _log.Log_Warning(session.OrchId, $"Plan backend: {outcome.Failure}");
+            }
+            catch (Exception ex)
+            {
+                // One orchestration's backend must not cost every other one its synchronisation —
+                // the same containment Refresh_ProgressArtefacts uses one method below.
+                _log.Log_Error(session.OrchId, "Plan backend sync failed", ex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reloaded only when the configured settings actually change — <see cref="PlanBackend_Loader"/>
+    /// touches the filesystem and reflection, which is not a per-tick cost. A failed load is announced
+    /// ONCE and then runs as PLAN.md alone: repeating a warning every minute for a path that will not
+    /// fix itself is the waterfall this app exists to prevent, and saying nothing at all would leave
+    /// the owner believing their planning system is connected.
+    /// </summary>
+    IPlanBackend Resolve_PlanBackend()
+    {
+        var settings = _configProvider.Get_Current().PlanBackend;
+
+        if (_planBackendLoaded && Nullable.Equals(settings, _planBackendSettings))
+            return _planBackend!;
+
+        var load = PlanBackend_Loader.Load(settings);
+
+        _planBackend = load.Backend;
+        _planBackendSettings = settings;
+        _planBackendLoaded = true;
+
+        if (load.Error != null)
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Plan backend: {load.Error}");
+        else if (settings?.Is_External() == true)
+            _log.Log_Info(GLOBAL_ORCH_ID, $"Plan backend: loaded '{settings?.TypeName}'");
+
+        return _planBackend;
+    }
+
+    /// <summary>
+    /// WHAT THE APP CAN HONESTLY SAY about a line reaching [x]: the conversation entry that was live
+    /// when it saw the marker change. It is an observation, not a verification — see
+    /// <see cref="PlanRowEvidence"/> — and it is built LAZILY, only for a row actually being reported,
+    /// because parsing a channel on the chance that something closed is a read per orchestration per
+    /// minute for a message that is almost never sent.
+    /// </summary>
+    PlanRowEvidence Build_LedgerClosureEvidence(string orchId)
+    {
+        var entries = ChannelEntry_Parser.Parse_All(Read_FileText_Safe(_paths.Get_OwnerChannelFile(orchId)));
+
+        if (entries.Count == 0)
+            return new PlanRowEvidence(DateTime.UtcNow, null, null);
+
+        var last = entries[^1];
+
+        return new PlanRowEvidence(
+            DateTime.UtcNow,
+            $"owner-channel #{last.Index} FROM {last.Author}",
+            last.Subject);
+    }
+
     void Refresh_ProgressArtefacts()
     {
         foreach (var session in _store.Load_All())

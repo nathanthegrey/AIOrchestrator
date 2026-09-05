@@ -48,6 +48,13 @@ public interface ISupervisionPaths
     /// disagree the first time either arithmetic changed.
     /// </summary>
     string Get_ProgressFile(string orchId);
+
+    /// <summary>
+    /// What this orchestration has already told its plan backend — which upstream requests became
+    /// ledger lines, and which of those lines were reported closed. Persisted beside the plan because
+    /// the app restarts daily and a forgotten record re-sends every gesture on the next launch.
+    /// </summary>
+    string Get_PlanBackendStateFile(string orchId);
     string Get_OwnerChannelFile(string orchId);
     string Get_OrchestrationLogFile(string orchId);
     string Get_ImplementerFolder(string orchId, string memberId);
