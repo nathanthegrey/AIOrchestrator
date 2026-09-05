@@ -58,6 +58,28 @@ done
 
 [ -n "$CHANNEL" ] && [ -n "$AUTHOR" ] && [ -n "$SUBJECT" ] && [ -n "$BODY_FILE" ] || usage
 
+# THE BUDGET IS VALIDATED HERE, BEFORE ANY ARITHMETIC SEES IT, and this is a lock-safety rule rather
+# than input hygiene. `$(( 2.5 * 1000 ))` is a bash SYNTAX ERROR, and a syntax error inside
+# acquire_lock aborts the function AND the `if ! acquire_lock` guard around it: execution resumed in
+# the critical section with no lock held, appended, and exited 0 — a torn write reported as a
+# serialised one, which is the exact failure this whole file exists to prevent (measured 2026-09-06
+# with `--budget-seconds 2.5`, and every role command invites exactly that by telling a session to
+# raise the budget when the channel is busy). Decimals are ACCEPTED, as the awk form this replaced
+# accepted them; anything else stops the run before it can write.
+case "$BUDGET_SECONDS" in
+  ''|*[!0-9.]*|*.*.*|.) echo "channel-append.sh: --budget-seconds must be a number of seconds (e.g. 10 or 2.5), got '$BUDGET_SECONDS'" >&2; exit 2 ;;
+esac
+
+# Seconds to milliseconds without floating point: whole part x1000 plus the first three decimals,
+# right-padded. Pure shell, so no external tool's dialect can decide whether the lock works.
+BUDGET_WHOLE="${BUDGET_SECONDS%%.*}"
+BUDGET_FRACTION="${BUDGET_SECONDS#*.}"
+[ "$BUDGET_FRACTION" = "$BUDGET_SECONDS" ] && BUDGET_FRACTION=""
+BUDGET_FRACTION="$(printf '%s000' "$BUDGET_FRACTION" | cut -c1-3)"
+BUDGET_MS=$(( ${BUDGET_WHOLE:-0} * 1000 + ${BUDGET_FRACTION:-0} ))
+
+[ "$BUDGET_MS" -gt 0 ] || { echo "channel-append.sh: --budget-seconds must be greater than zero, got '$BUDGET_SECONDS'" >&2; exit 2; }
+
 if [ "$BODY_FILE" = "-" ]; then
   BODY_FILE="$(mktemp)" || { echo "channel-append.sh: cannot create a temp file" >&2; exit 4; }
   cat > "$BODY_FILE"
@@ -220,9 +242,9 @@ record_self_write() {
 
 acquire_lock() {
   local waited_ms=0 budget_ms delay_ms="$RETRY_INITIAL_MS"
-  # Shell arithmetic, not awk: macOS's awk rejected the printf form, budget_ms came back EMPTY, the
-  # `-ge` test below never held, and the helper spun on a held lock for ever (measured 2026-09-06).
-  budget_ms=$((BUDGET_SECONDS * 1000))
+  # Computed and validated at parse time (see BUDGET_MS): macOS's awk rejected the printf form this
+  # replaced, budget_ms came back EMPTY, and the helper spun on a held lock for ever.
+  budget_ms="$BUDGET_MS"
 
   while true; do
     # mkdir, NOT the stage-and-rename shape C# uses, and this asymmetry is deliberate and measured.
@@ -266,6 +288,15 @@ if ! acquire_lock; then
 fi
 
 # ---- critical section -------------------------------------------------------------------------
+# THE LAST GATE, and it is not redundant with the `if ! acquire_lock` above. That guard was bypassed
+# once already — an arithmetic syntax error aborted the function and the condition with it — and the
+# cost was an entry written outside the lock and reported as success. `HELD` is set at the one place
+# the lock is actually taken, so this asks the only question that matters here: do we hold it?
+[ "$HELD" = "1" ] || {
+  echo "channel-append.sh: reached the write with no lock held — refusing to append. NOTHING WAS WRITTEN." >&2
+  exit 3
+}
+
 # The index is read HERE, inside the lock, which is what stops two writers choosing the same one.
 # Read it outside and the lock protects the write while leaving the decision it depends on racing.
 #
