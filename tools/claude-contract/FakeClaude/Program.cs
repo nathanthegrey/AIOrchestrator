@@ -57,6 +57,18 @@ if (string.IsNullOrWhiteSpace(prompt))
 var workingDirectory = Directory.GetCurrentDirectory();
 var scenario = FakeClaudeScenario.Load(workingDirectory);
 var logPath = Invocation_Logger.Resolve_LogPath(workingDirectory);
+
+// MEASURED AGAINST THE REAL CLI on 2026-09-06: a second --session-id with a uuid it has already
+// seen is refused — "Error: Session ID <uuid> is already in use.", exit 1 — while --resume of that
+// same session works, even when the first attempt was killed mid-turn. The fake refused nothing
+// here, so a bridge that re-claimed an id on a retry passed the suite and would have stalled live.
+// The fake matches the measurement, never what the bridge wishes were true.
+if (parsed.SessionId != null && Invocation_Logger.Has_ClaimedSessionId(logPath, parsed.SessionId))
+{
+    Console.Error.WriteLine($"Error: Session ID {parsed.SessionId} is already in use.");
+    return 1;
+}
+
 var (overall, forName) = Invocation_Logger.Append(logPath, rawArgs, parsed, prompt, workingDirectory);
 var turn = scenario.Resolve_Turn(parsed.Name, parsed.Name != null && scenario.TurnsByName.ContainsKey(parsed.Name) ? forName : overall);
 

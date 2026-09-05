@@ -43,6 +43,11 @@ public static class Process_Runner
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // All THREE, like the bridge's own runner. Windows defaults stdin to the console's OEM
+            // code page, so without this a Live measurement of a prompt carrying non-ASCII — every
+            // channel header has an em-dash — would be taken under an encoding production never
+            // uses, and the suite would pin a contract the bridge does not exercise.
+            StandardInputEncoding = new UTF8Encoding(false),
             StandardOutputEncoding = new UTF8Encoding(false),
             StandardErrorEncoding = new UTF8Encoding(false),
         };

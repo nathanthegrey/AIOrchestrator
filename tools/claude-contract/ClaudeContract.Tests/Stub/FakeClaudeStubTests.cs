@@ -198,6 +198,26 @@ public class FakeClaudeStubTests : IDisposable
         Assert.NotEqual(0, Run(["-p", "--no-such-flag"], stdin: "x").ExitCode);
     }
 
+    /// <summary>
+    /// A REUSED --session-id IS REFUSED, because the real CLI refuses it: measured on 2.1.261
+    /// (2026-09-06) as `Error: Session ID &lt;uuid&gt; is already in use.`, exit 1, while `--resume` of
+    /// that same session works. The fake accepted it, so a bridge that re-claimed an id on a retry
+    /// passed this suite and stalled in production — the exact failure this project exists to catch.
+    /// </summary>
+    [Fact]
+    public void AReusedSessionId_IsRefused_JustAsTheRealCliRefusesIt()
+    {
+        Assert.Equal(0, Run(["-p", "--session-id", SESSION_ID], stdin: "first").ExitCode);
+
+        var second = Run(["-p", "--session-id", SESSION_ID], stdin: "again");
+
+        Assert.Equal(1, second.ExitCode);
+        Assert.Contains($"Session ID {SESSION_ID} is already in use", second.Stderr);
+
+        // ...and resuming it is the way through, which is what the bridge does on a retry.
+        Assert.Equal(0, Run(["-p", "--resume", SESSION_ID], stdin: "resumed").ExitCode);
+    }
+
     [Fact]
     public void Version_IdentifiesItselfAsTheFake()
     {
