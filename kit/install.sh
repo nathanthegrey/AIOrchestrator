@@ -141,6 +141,27 @@ if [ -t 0 ]; then
     [ -n "$owner_id_input" ] && current_owner_id="$owner_id_input"
 fi
 
+# BOTH IDS ARE CHECKED BEFORE ANYTHING IS WRITTEN, exactly where install.ps1 checks them with
+# [long]. They reach jq as `tonumber`, and jq exiting on a bad literal used to leave config.json
+# TRUNCATED TO ZERO BYTES with no backup — repos, models and every Telegram setting gone, and the
+# next start silently in file-only mode. A stray space or a `+` typed at the prompt was enough.
+check_whole_number() {
+    # $1 = human name, $2 = value. An empty value means "not set" and is fine; anything else must be
+    # a whole number, optionally negative (supergroup ids are -100...).
+    [ -n "$2" ] || return 0
+
+    case "$2" in
+        -*) [ -n "${2#-}" ] && [ -z "$(printf '%s' "${2#-}" | tr -d '0-9')" ] && return 0 ;;
+        *)  [ -z "$(printf '%s' "$2" | tr -d '0-9')" ] && return 0 ;;
+    esac
+
+    warn "ERROR: the Telegram $1 must be a whole number, got '$2'. Nothing was written."
+    exit 1
+}
+
+check_whole_number 'supergroup chat id' "$current_chat_id"
+check_whole_number 'user id' "$current_owner_id"
+
 # --- 4. Write config.json (preserving repos) + secrets.json ------------------------------------
 repos="$(printf '%s' "$existing_config" | jq -c '.repos // []')"
 if [ "$(printf '%s' "$repos" | jq 'length')" = 0 ] && [ -t 0 ]; then
@@ -158,20 +179,31 @@ if [ "$(printf '%s' "$repos" | jq 'length')" = 0 ] && [ -t 0 ]; then
     done
 fi
 
+# MERGED ONTO WHAT IS THERE, NEVER REBUILT FROM A FIELD LIST. The previous shape named six keys and
+# silently dropped every other one the app persists — communicatorModel, voiceTranscribeCommand,
+# orchestrationTokenBudget, telegramStatusScreenshots, and telegramItalianLayer, which is the setting
+# the owner toggles from their phone (CLAUDE.md decision 11). A bootstrap re-run turned the Italian
+# layer off and said nothing. Written to a temp file and moved into place, after a backup, so a jq
+# that fails for any reason leaves the existing config untouched rather than truncated.
+[ -f "$config_file" ] && cp "$config_file" "$config_file.aiorch-backup"
+
 printf '%s' "$existing_config" | jq \
     --argjson repos "$repos" \
     --arg chatId "$current_chat_id" \
     --arg ownerId "$current_owner_id" \
-    '{
+    '. + {
         repos: $repos,
-        supervisorModel: .supervisorModel,
-        implementerModel: .implementerModel,
         generalSupervisorModel: (.generalSupervisorModel // "sonnet"),
         telegramSupergroupChatId: (if $chatId == "" then null else ($chatId | tonumber) end),
         telegramOwnerUserId: (if $ownerId == "" then null else ($ownerId | tonumber) end)
-    }' > "$config_file"
+    }' > "$config_file.tmp" && mv "$config_file.tmp" "$config_file" || {
+        rm -f "$config_file.tmp"
+        warn "ERROR: could not write $config_file — the existing file was left untouched."
+        exit 1
+    }
 
-jq -n --arg token "$current_token" '{telegramBotToken: (if $token == "" then null else $token end)}' > "$secrets_file"
+jq -n --arg token "$current_token" '{telegramBotToken: (if $token == "" then null else $token end)}' > "$secrets_file.tmp" \
+    && mv "$secrets_file.tmp" "$secrets_file"
 chmod 600 "$secrets_file"
 
 say ''
