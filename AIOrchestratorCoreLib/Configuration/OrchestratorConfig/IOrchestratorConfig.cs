@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
@@ -49,6 +50,13 @@ public interface IOrchestratorConfig
     /// Null or 0 = no guard.
     /// </summary>
     long? OrchestrationTokenBudget { get; }
+
+    /// <summary>
+    /// How each role's sessions run (terminal window vs transient print turns) and the print
+    /// dispatcher's limits — the <c>runners</c> / <c>printRunner</c> blocks. Absent blocks read as
+    /// terminal everywhere, so an existing config.json changes nothing.
+    /// </summary>
+    IRunnerConfigs Runners { get; }
 
     bool Is_TelegramConfigured();
 }

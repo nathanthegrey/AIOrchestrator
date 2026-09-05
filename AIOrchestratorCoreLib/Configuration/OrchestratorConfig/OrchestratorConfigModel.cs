@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
@@ -14,7 +15,8 @@ internal sealed class OrchestratorConfigModel(
     bool telegramItalianLayer,
     bool telegramStatusScreenshots,
     string? voiceTranscribeCommand,
-    long? orchestrationTokenBudget) : IOrchestratorConfig
+    long? orchestrationTokenBudget,
+    IRunnerConfigs runners) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -28,6 +30,7 @@ internal sealed class OrchestratorConfigModel(
     public bool TelegramStatusScreenshots { get; } = telegramStatusScreenshots;
     public string? VoiceTranscribeCommand { get; } = voiceTranscribeCommand;
     public long? OrchestrationTokenBudget { get; } = orchestrationTokenBudget;
+    public IRunnerConfigs Runners { get; } = runners;
 
     public bool Is_TelegramConfigured()
     {

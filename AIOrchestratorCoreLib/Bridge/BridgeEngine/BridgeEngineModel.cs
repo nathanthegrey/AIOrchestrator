@@ -16,6 +16,7 @@ using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Mirroring;
 using AIOrchestratorCoreLib.Planning;
+using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
 using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
@@ -48,6 +49,7 @@ internal sealed class BridgeEngineModel(
     ISessionWatchdog watchdog,
     IMessageTranslator translator,
     IVoiceTranscriber transcriber,
+    IPrintTurnDispatcher printTurns,
     long initialLastUpdateId) : IBridgeEngine
 {
     /// <summary>In-memory inline-button registry cap — taps on evicted buttons get an "expired" toast.</summary>
@@ -155,6 +157,7 @@ internal sealed class BridgeEngineModel(
     readonly ISessionWatchdog _watchdog = watchdog;
     readonly IMessageTranslator _translator = translator;
     readonly IVoiceTranscriber _transcriber = transcriber;
+    readonly IPrintTurnDispatcher _printTurns = printTurns;
     readonly Dictionary<string, (long? ThreadId, string OptionText, long GroupId, string QuestionText)> _buttonOptions = [];
     readonly Queue<string> _buttonOrder = new();
 
@@ -790,6 +793,10 @@ internal sealed class BridgeEngineModel(
             // In a finally so it runs on the cancellation path too, which is the ordinary way this
             // method ends.
             Drain_PendingAnnouncements();
+
+            // In-flight print turns die with the bridge (process trees killed); their state was not
+            // advanced, so the same entries are pending at the next start.
+            await _printTurns.Stop_Async();
         }
     }
 
@@ -939,6 +946,11 @@ internal sealed class BridgeEngineModel(
 
         // After closes are processed, so a freshly-closed session is not immediately revived.
         _watchdog.Check_AndRestart_DeadSessions();
+
+        // Print-run sessions: one `claude -p` turn per inbound entry. ABOVE the DND gate on purpose
+        // — mute pauses OUTBOUND Telegram, and a member's work is not that. The tick never blocks:
+        // it only starts turns, on background tasks, and only where none is in flight.
+        _printTurns.Tick(DateTime.Now);
 
         // Before anything that could write to a channel: the flag is what keeps a supervisor's
         // watcher silent, and a tick that appends before reconciling it would litter the meeting.

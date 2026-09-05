@@ -1,0 +1,29 @@
+using AIOrchestratorCoreLib.Running.ExecutedTurn;
+
+namespace AIOrchestratorCoreLib.Running.PrintSessionState;
+
+internal sealed class PrintSessionStateModel(
+    string sessionId,
+    SessionRoles role,
+    string orchId,
+    string memberId,
+    string workingDirectory,
+    string? model,
+    string channelFilePath,
+    int lastHandledEntryIndex,
+    int nextTurnNumber,
+    int failedAttempts,
+    IReadOnlyList<IExecutedTurn> executedTurns) : IPrintSessionState
+{
+    public string SessionId { get; } = sessionId;
+    public SessionRoles Role { get; } = role;
+    public string OrchId { get; } = orchId;
+    public string MemberId { get; } = memberId;
+    public string WorkingDirectory { get; } = workingDirectory;
+    public string? Model { get; } = model;
+    public string ChannelFilePath { get; } = channelFilePath;
+    public int LastHandledEntryIndex { get; } = lastHandledEntryIndex;
+    public int NextTurnNumber { get; } = nextTurnNumber;
+    public int FailedAttempts { get; } = failedAttempts;
+    public IReadOnlyList<IExecutedTurn> ExecutedTurns { get; } = executedTurns;
+}

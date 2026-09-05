@@ -2,6 +2,10 @@ using System.Diagnostics;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.SessionLaunch;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
@@ -85,6 +89,15 @@ internal sealed class SessionWatchdogModel(
 
     void Check_GeneralSupervisor()
     {
+        // A print-run session has no process to be alive: its state file is the registration, and
+        // its turns run on demand. Without this the watchdog would "respawn" it every 45 s and
+        // declare a crash loop on the third.
+        if (PrintSessionState_Store.Exists(_paths, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch_Factory.GENERAL_MEMBER_ID))
+        {
+            _consecutiveRespawns.Remove("general");
+            return;
+        }
+
         if (Is_SessionAlive(_paths.GeneralPidFile))
         {
             _consecutiveRespawns.Remove("general");
@@ -171,6 +184,13 @@ internal sealed class SessionWatchdogModel(
     {
         if (Is_WithinSpawnGrace(spawnedUtc))
             return;
+
+        // Print-run: no pid file by design (see Check_GeneralSupervisor).
+        if (PrintSessionState_Store.Exists(_paths, SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId)), orchId, memberId))
+        {
+            _consecutiveRespawns.Remove($"imp:{orchId}/{memberId}");
+            return;
+        }
 
         if (Is_SessionAlive(_paths.Get_ImplementerPidFile(orchId, memberId)))
         {
