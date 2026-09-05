@@ -4,6 +4,7 @@ namespace AIOrchestratorCoreLib.Running.PrintSessionState;
 
 internal sealed class PrintSessionStateModel(
     string sessionId,
+    bool sessionStarted,
     SessionRoles role,
     string orchId,
     string memberId,
@@ -16,6 +17,7 @@ internal sealed class PrintSessionStateModel(
     IReadOnlyList<IExecutedTurn> executedTurns) : IPrintSessionState
 {
     public string SessionId { get; } = sessionId;
+    public bool SessionStarted { get; } = sessionStarted;
     public SessionRoles Role { get; } = role;
     public string OrchId { get; } = orchId;
     public string MemberId { get; } = memberId;

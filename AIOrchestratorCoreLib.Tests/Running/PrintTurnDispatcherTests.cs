@@ -248,7 +248,8 @@ public class PrintTurnDispatcherTests
         var registered = PrintSessionState_Store.Read_OrNull(stateFile)!;
 
         // The state says turn 1 ran but its index was never advanced — the crash-between-writes shape.
-        var poisoned = PrintSessionState_Factory.Create(registered.SessionId, registered.Role, registered.OrchId, registered.MemberId, registered.WorkingDirectory, registered.Model, registered.ChannelFilePath,
+        var poisoned = PrintSessionState_Factory.Create(
+            registered.SessionId, sessionStarted: true, registered.Role, registered.OrchId, registered.MemberId, registered.WorkingDirectory, registered.Model, registered.ChannelFilePath,
             lastHandledEntryIndex: 0, nextTurnNumber: 1, failedAttempts: 0,
             [ExecutedTurn_Factory.Create(1, PrintTurn_RequestId.Build(orchId, memberId, 1), 1, 1, DateTime.UtcNow, "success", 0.01)]);
         PrintSessionState_Store.Write(stateFile, poisoned);
@@ -350,6 +351,15 @@ public class PrintTurnDispatcherTests
         var state = harness.Read_State(SessionRoles.Implementer, orchId, memberId);
         Assert.Empty(state.ExecutedTurns);
         Assert.Equal(0, state.LastHandledEntryIndex);
+
+        // A SHUTDOWN IS NOT A TIMEOUT. Closing the app while a turn runs cancels the same linked
+        // token the per-turn timeout uses; read as one, three ordinary restarts spent all three
+        // attempts and stalled a session that had done nothing wrong — with a `turn_ended … timeout`
+        // in the member's channel each time, describing a failure that never happened.
+        Assert.Equal(0, state.FailedAttempts);
+        var entries = ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId));
+        Assert.DoesNotContain(entries, entry => entry.Subject.Contains(PrintTurn_Words.TURN_ENDED_SUBJECT));
+        Assert.DoesNotContain(entries, entry => entry.Subject.Contains(PrintTurn_Words.TURN_STALLED_SUBJECT));
     }
 
     [Fact]

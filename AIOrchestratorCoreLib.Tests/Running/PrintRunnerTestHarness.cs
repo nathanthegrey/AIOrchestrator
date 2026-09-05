@@ -32,6 +32,12 @@ public sealed class PrintRunnerTestHarness : IDisposable
     public string ScenarioFile => Path.Combine(RepoPath, "fake-claude-scenario.json");
     public string InvocationLog => Path.Combine(RepoPath, "fake-claude-invocations.jsonl");
 
+    readonly double _coalesceSeconds;
+    readonly double _turnTimeoutMinutes;
+    readonly int _maxConcurrent;
+    readonly int _maxPerOrchestration;
+    readonly string _resumeForGeneral;
+
     public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh")
     {
         TempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-print-runner-{Guid.NewGuid():N}");
@@ -41,10 +47,28 @@ public sealed class PrintRunnerTestHarness : IDisposable
         Store = OrchestrationSessionStore_Factory.Create(Paths);
         Log = OrchestrationLog_Factory.Create(Paths);
 
+        _coalesceSeconds = coalesceSeconds;
+        _turnTimeoutMinutes = turnTimeoutMinutes;
+        _maxConcurrent = maxConcurrent;
+        _maxPerOrchestration = maxPerOrchestration;
+        _resumeForGeneral = resumeForGeneral;
+
+        Directory.CreateDirectory(Paths.Root);
+        Write_Config(printRoles);
+        ConfigProvider = OrchestratorConfigProvider_Factory.Create(Paths);
+    }
+
+    /// <summary>
+    /// Rewrites config.json with these roles on print — so a test can flip a role BACK to terminal
+    /// the way the owner would. The write stamp is pushed forward because the provider reloads on
+    /// it, and two writes inside one filesystem tick would otherwise serve the stale config.
+    /// </summary>
+    public void Write_Config(string printRoles)
+    {
         var runners = new JsonObject();
 
         foreach (var role in printRoles.Split(',', StringSplitOptions.RemoveEmptyEntries))
-            runners[role.Trim()] = new JsonObject { ["runner"] = "print", ["resume"] = role.Trim() == "general" ? resumeForGeneral : "transcript" };
+            runners[role.Trim()] = new JsonObject { ["runner"] = "print", ["resume"] = role.Trim() == "general" ? _resumeForGeneral : "transcript" };
 
         var config = new JsonObject
         {
@@ -52,16 +76,15 @@ public sealed class PrintRunnerTestHarness : IDisposable
             ["runners"] = runners,
             ["printRunner"] = new JsonObject
             {
-                ["maxConcurrentTurns"] = maxConcurrent,
-                ["maxConcurrentTurnsPerOrchestration"] = maxPerOrchestration,
-                ["turnTimeoutMinutes"] = turnTimeoutMinutes,
-                ["coalesceSeconds"] = coalesceSeconds,
+                ["maxConcurrentTurns"] = _maxConcurrent,
+                ["maxConcurrentTurnsPerOrchestration"] = _maxPerOrchestration,
+                ["turnTimeoutMinutes"] = _turnTimeoutMinutes,
+                ["coalesceSeconds"] = _coalesceSeconds,
             },
         };
 
-        Directory.CreateDirectory(Paths.Root);
         File.WriteAllText(Paths.ConfigFile, config.ToJsonString());
-        ConfigProvider = OrchestratorConfigProvider_Factory.Create(Paths);
+        File.SetLastWriteTimeUtc(Paths.ConfigFile, DateTime.UtcNow.AddSeconds(1));
     }
 
     public void Dispose()

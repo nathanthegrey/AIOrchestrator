@@ -47,6 +47,7 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation) : IPrin
         timeoutSource.CancelAfter(timeout);
 
         var timedOut = false;
+        var cancelled = false;
 
         try
         {
@@ -54,14 +55,26 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation) : IPrin
         }
         catch (OperationCanceledException)
         {
-            timedOut = true;
+            // THE TWO CANCELLATIONS ARE NOT THE SAME EVENT, and the token says which is which: the
+            // linked source fires both for the per-turn timeout and for the app shutting down. Read
+            // as one, closing the app while a turn runs was recorded as a TIMEOUT — a failed
+            // attempt, a `turn_ended … timeout` entry in the member's channel, and three ordinary
+            // restarts were enough to stall a session that had done nothing wrong. The process is
+            // killed either way; only the report differs.
+            cancelled = cancellationToken.IsCancellationRequested;
+            timedOut = !cancelled;
             Kill_Tree_BestEffort(process);
             process.WaitForExit();
         }
 
+        // Drained before anything is thrown: the readers complete once the process is gone, and an
+        // abandoned one is an unobserved task.
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
         stopwatch.Stop();
+
+        if (cancelled)
+            cancellationToken.ThrowIfCancellationRequested();
 
         return TurnResult_Parser.Parse(timedOut ? -1 : process.ExitCode, timedOut, stdout, stderr, stopwatch.Elapsed);
     }

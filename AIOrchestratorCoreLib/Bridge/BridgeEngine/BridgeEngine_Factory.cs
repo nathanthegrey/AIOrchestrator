@@ -94,7 +94,7 @@ public static class BridgeEngine_Factory
         var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
         var tailer = ChannelTailer_Factory.Create(fileOffsets);
 
-        var watchdog = SessionWatchdog_Factory.Create(paths, store, launcher, log);
+        var watchdog = SessionWatchdog_Factory.Create(paths, configProvider, store, launcher, log);
         var transcriber = Transcription.VoiceTranscriber.VoiceTranscriber_Factory.Create(log);
 
         // The print dispatcher idles unless a role is configured `runner: print` — with a stock

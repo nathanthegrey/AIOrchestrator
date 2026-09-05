@@ -10,6 +10,24 @@ namespace AIOrchestratorCoreLib.Running;
 /// and neither do the app's: nudges, receipts and turn_ended records are read on the next turn,
 /// and a turn started by the record of the previous turn would be a loop with one member in it.
 /// Only entries ABOVE the last handled index count — that index is the queue's cursor.
+///
+/// <para>
+/// THE CURSOR TRUSTS THE AGENT-WRITTEN <c>[n]</c>, AND THAT IS A KNOWN LIMIT, not an oversight.
+/// CLAUDE.md decision 12 records that field as a guess unless the writer re-read the file, with a
+/// live incident (two <c>[80]</c> and two <c>[81]</c> in one channel). A terminal supervisor that
+/// mints a duplicate or lower index writes a brief a print-run member will never be handed — and
+/// unlike a watcher, which wakes on any byte, there is no second path to notice it: the member
+/// simply sits idle until the next well-numbered entry.
+/// </para>
+/// <para>
+/// It is NOT fixed by counting entries or by their position in the file: <c>Channel_Compactor</c>
+/// moves older entries into a sibling archive, so neither is monotonic (decision 13, which cost this
+/// repo a nudge loop that could never clear). A cursor that survives both would have to be
+/// content-addressed — a delivered-entry digest in the state file — which is a design change rather
+/// than a tightening, and is deliberately left to the stage that can measure whether it is needed.
+/// Until then the honest statement is: print-run delivery is exactly as reliable as the numbering
+/// its writers keep, and for every print-run session's own entries that writer is the bridge.
+/// </para>
 /// </summary>
 public static class PrintTurn_Trigger
 {

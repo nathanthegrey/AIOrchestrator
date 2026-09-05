@@ -58,6 +58,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     readonly Dictionary<string, Task> _inFlight = [];
     readonly Dictionary<string, SessionTracker> _trackers = [];
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
+    readonly HashSet<string> _warnedStaleRegistrations = [];
     readonly SemaphoreSlim _globalSlots;
     readonly int _slotsPerOrchestration;
 
@@ -111,6 +112,19 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var registered in Discover_RegisteredSessions())
         {
+            // A STALE REGISTRATION IS NOT A MANDATE. The state file says a session WAS print-run;
+            // config.json says whether it still is. Flipped back to terminal, the launcher spawns a
+            // window for this member — and without this check the dispatcher would keep firing
+            // `claude -p` turns into the same channel, two sessions answering one brief. The file is
+            // deleted by the launcher at the next spawn; until then, this is the gate.
+            if (!Is_StillPrintRun(configs, registered.Role))
+            {
+                if (_warnedStaleRegistrations.Add($"{registered.OrchId}/{registered.MemberId}"))
+                    _log.Log_Warning(registered.OrchId, $"'{registered.MemberId}' has a print-session registration but role '{SessionRole_Names.Get_ConfigKey(registered.Role)}' is no longer configured runner: print — no turns are dispatched for it (the registration is cleared at its next spawn)");
+
+                continue;
+            }
+
             try
             {
                 Consider_Session(registered.StateFile, registered.Role, registered.OrchId, registered.MemberId, nowLocal, configs);
@@ -176,6 +190,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return found;
     }
 
+    static bool Is_StillPrintRun(IRunnerConfigs configs, SessionRoles role)
+    {
+        return configs.Get_ForRole(role).Runner == SessionRunners.Print && PrintRunner_Support.Supports(role);
+    }
+
     // ----- per-session decision -----
 
     void Consider_Session(string stateFile, SessionRoles role, string orchId, string memberId, DateTime nowLocal, IRunnerConfigs configs)
@@ -219,10 +238,42 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (tracker.LastFailureAt != null && nowLocal - tracker.LastFailureAt.Value < _retryBackoff)
             return;
 
-        var task = Task.Run(() => Execute_Turn_Async(key, stateFile, state, pending, tracker, configs));
+        Start_Turn(key, stateFile, state, pending, tracker, configs);
+    }
 
+    /// <summary>
+    /// Starts the turn and registers it as in-flight AS ONE STEP, and detaches it from the mirror
+    /// tick's ambient state. Both halves are load-bearing:
+    ///
+    /// <para>
+    /// REGISTERED UNDER THE LOCK, BEFORE the task can finish. Written the other way round — start,
+    /// then record — a turn that completes synchronously (the idempotency skip does no I/O, and an
+    /// uncontended semaphore completes inline) removes the key BEFORE this inserts it, leaving a
+    /// finished task in the map that nothing will ever remove: that session is then skipped by the
+    /// guard above for the life of the process. The removal in <c>Execute_Turn_Async</c>'s finally
+    /// takes the same lock, so it simply waits for this insert.
+    /// </para>
+    /// <para>
+    /// EXECUTION CONTEXT SUPPRESSED, because <c>ChannelWrite_Lock</c>'s allowance is an
+    /// <c>AsyncLocal</c> and <c>Task.Run</c> captures the ambient context. This tick opened one;
+    /// a turn inheriting it would, half an hour later, charge its channel appends against an
+    /// allowance that ended with that tick — and that file says in as many words that the hazard is
+    /// inert only while no detached lambda writes to a channel. This one writes the member's entry,
+    /// so it must not inherit. A turn is its own flow: it opens no allowance and pays the plain
+    /// per-call budget.
+    /// </para>
+    /// </summary>
+    void Start_Turn(string key, string stateFile, IPrintSessionState state, IReadOnlyList<IChannelEntry> pending, SessionTracker tracker, IRunnerConfigs configs)
+    {
         lock (_lock)
-            _inFlight[key] = task;
+        {
+            if (_inFlight.ContainsKey(key))
+                return;
+
+            using var suppressed = ExecutionContext.SuppressFlow();
+
+            _inFlight[key] = Task.Run(() => Execute_Turn_Async(key, stateFile, state, pending, tracker, configs));
+        }
     }
 
     SessionTracker Get_Tracker(string key)
@@ -320,10 +371,26 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         var roleConfig = configs.Get_ForRole(state.Role);
         var fresh = roleConfig.Resume == ResumeModes.Fresh;
         var hasHistory = state.ExecutedTurns.Count > 0;
-        var resumeTranscript = !fresh && hasHistory;
-        var sessionId = fresh && hasHistory ? Guid.NewGuid().ToString() : state.SessionId;
+
+        // WHETHER THE ID IS SPENT, not whether a turn has succeeded. `--session-id` with a uuid the
+        // CLI has already seen is refused outright ("Error: Session ID <uuid> is already in use.",
+        // exit 1, measured on 2.1.261), so a first turn that timed out could otherwise never be
+        // retried: attempts 2 and 3 would die on the flag and the session would stall for good.
+        // Resuming a transcript whose turn was killed mid-flight works (measured the same day), so
+        // the retry resumes — which also keeps whatever the killed attempt had already done.
+        var sessionUsed = state.SessionStarted || hasHistory;
+        var resumeTranscript = !fresh && sessionUsed;
+        var sessionId = fresh && sessionUsed ? Guid.NewGuid().ToString() : state.SessionId;
 
         var arguments = PrintTurnCommand_Builder.Build_Arguments(state, roleConfig, sessionId, resumeTranscript, null);
+
+        // Claimed BEFORE the process starts, so a bridge that dies mid-turn still knows the id is
+        // spent and resumes instead of colliding with itself.
+        if (!resumeTranscript)
+        {
+            state = PrintSessionState_Factory.CreateFrom_Existing_SessionClaimed(state, sessionId);
+            PrintSessionState_Store.Write(stateFile, state);
+        }
 
         var alreadyExecuted = tracker.FirstTurnSinceStart && hasHistory
             ? state.ExecutedTurns.Select(turn => turn.TurnNumber).ToList()
@@ -344,6 +411,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         _log.Log_Info(state.OrchId, $"Print turn {requestId} started — attempt {attempt}, entries [{pending[0].Index}]–[{pending[^1].Index}], {(resumeTranscript ? "resume" : fresh ? "fresh session" : "first turn")} {sessionId}");
 
         var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, configs.TurnTimeout, cancellationToken);
+
+        // The runner rethrows on shutdown rather than reporting a timeout, so nothing below runs
+        // for a turn the app cancelled: no failure counted, no turn_ended entry, no attempt spent.
+        cancellationToken.ThrowIfCancellationRequested();
+
         var outcome = TurnOutcomes.Describe(result);
 
         if (TurnOutcomes.Is_Success(result))

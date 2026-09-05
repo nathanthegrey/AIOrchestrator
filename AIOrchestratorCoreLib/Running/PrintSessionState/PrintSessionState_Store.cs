@@ -46,6 +46,29 @@ public static class PrintSessionState_Store
         return File.Exists(Get_StateFile(paths, role, orchId, memberId));
     }
 
+    /// <summary>
+    /// Clears a registration — the role is no longer print-run, so the session goes back to a
+    /// terminal. Returns whether a file was actually removed. Best-effort: a file that cannot be
+    /// deleted is reported by the caller, never thrown at a spawn that is otherwise fine.
+    /// </summary>
+    public static bool Delete_IfExists(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
+    {
+        var stateFile = Get_StateFile(paths, role, orchId, memberId);
+
+        try
+        {
+            if (!File.Exists(stateFile))
+                return false;
+
+            File.Delete(stateFile);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>Null for an absent file. A corrupt one throws — that is a session whose identity is gone, not a default.</summary>
     public static IPrintSessionState? Read_OrNull(string stateFile)
     {
@@ -68,6 +91,7 @@ public static class PrintSessionState_Store
 
         return PrintSessionState_Factory.Create(
             Read_String(root, "session_id", stateFile),
+            root["session_started"]?.GetValue<bool>() ?? executed.Count > 0,
             SessionRole_Names.Parse_OrNull(Read_String(root, "role", stateFile)) ?? throw new Exception($"Print session state at '{stateFile}' names an unknown role '{root["role"]}'"),
             Read_String(root, "orch_id", stateFile),
             Read_String(root, "member_id", stateFile),
@@ -101,6 +125,7 @@ public static class PrintSessionState_Store
         var root = new JsonObject
         {
             ["session_id"] = state.SessionId,
+            ["session_started"] = state.SessionStarted,
             ["role"] = SessionRole_Names.Get_ConfigKey(state.Role),
             ["orch_id"] = state.OrchId,
             ["member_id"] = state.MemberId,

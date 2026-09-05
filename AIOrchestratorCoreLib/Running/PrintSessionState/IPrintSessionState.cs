@@ -12,6 +12,17 @@ public interface IPrintSessionState
 {
     /// <summary>The transcript: chosen by the bridge, passed as --session-id once and --resume after (Fresh mode replaces it every turn).</summary>
     string SessionId { get; }
+
+    /// <summary>
+    /// Whether a process has already been launched under <see cref="SessionId"/> — i.e. the CLI has
+    /// claimed that transcript. MEASURED, not assumed: a second <c>--session-id</c> with the same
+    /// uuid is refused outright (<c>Error: Session ID &lt;uuid&gt; is already in use.</c>, exit 1), so a
+    /// first turn that fails could never be retried without this flag; and <c>--resume</c> of a
+    /// transcript whose turn was killed mid-flight works (both measured against 2.1.261 on
+    /// 2026-09-06). It is written BEFORE the process starts, so a bridge that dies mid-turn still
+    /// knows the id is spent.
+    /// </summary>
+    bool SessionStarted { get; }
     SessionRoles Role { get; }
     string OrchId { get; }
     string MemberId { get; }

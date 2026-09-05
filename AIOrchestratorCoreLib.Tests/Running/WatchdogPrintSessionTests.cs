@@ -28,13 +28,15 @@ public class WatchdogPrintSessionTests
     [Fact]
     public void APrintMember_WithNoPidFile_IsNotRespawned_ButATerminalOneIs()
     {
-        using var harness = new PrintRunnerTestHarness("implementer");
+        // BOTH roles configured print, because the registration file alone no longer means
+        // print-run: the config is asked too (a stale file must not silence the watchdog for ever).
+        using var harness = new PrintRunnerTestHarness("implementer,general");
         var (orchId, printMember) = harness.Register_Member(MemberKinds.Implementer);
         var terminalMember = harness.Store.Add_Member(orchId, MemberKinds.Reviewer).Members[^1].MemberId;
         harness.Register_General();
 
         var launcher = new RecordingLauncher();
-        var watchdog = SessionWatchdog_Factory.Create(harness.Paths, harness.Store, launcher, harness.Log);
+        var watchdog = SessionWatchdog_Factory.Create(harness.Paths, harness.ConfigProvider, harness.Store, launcher, harness.Log);
 
         // Past the spawn grace, so a missing pid file counts.
         Thread.Sleep(10);

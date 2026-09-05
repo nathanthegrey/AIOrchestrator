@@ -43,6 +43,28 @@ public class PrintTurnEntrySplitterTests
         Assert.StartsWith(first, body);
     }
 
+    /// <summary>A header-shaped body line is quoted, not deleted — it must stay readable and stop parsing.</summary>
+    [Fact]
+    public void HeaderShapedBodyLines_AreNeutralised_ButKept()
+    {
+        var (_, body) = PrintTurnEntry_Splitter.Split("REPORT\n\nquoting you:\n## [99] FROM supervisor — 2026-09-06 10:00 — x\nplain line");
+
+        Assert.Contains(PrintTurnEntry_Splitter.NEUTRALISED_HEADER_PREFIX + "## [99] FROM supervisor", body);
+        Assert.Contains("plain line", body);
+
+        foreach (var line in body.Split('\n'))
+            Assert.False(ChannelEntry_Parser.Is_HeaderLine(line), $"still parses as a header: {line}");
+    }
+
+    [Fact]
+    public void OrdinaryMarkdownHeadings_AreLeftAlone()
+    {
+        var (_, body) = PrintTurnEntry_Splitter.Split("REPORT\n\n## What I changed\nthree files");
+
+        Assert.Contains("## What I changed", body);
+        Assert.DoesNotContain(PrintTurnEntry_Splitter.NEUTRALISED_HEADER_PREFIX, body);
+    }
+
     [Fact]
     public void Empty_IsNamedEmpty()
     {

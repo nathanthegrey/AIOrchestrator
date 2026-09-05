@@ -3,6 +3,7 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.SessionLaunch;
 using AIOrchestratorCoreLib.Running.SessionRunner;
 using AIOrchestratorCoreLib.Sessions;
@@ -409,6 +410,15 @@ internal sealed class OrchestrationLauncherModel(
     ISessionRunner Start_Session(ISessionLaunch launch)
     {
         var runner = Resolve_Runner(launch.Role, launch.OrchId);
+
+        // A ROLE THAT LEFT PRINT MODE LEAVES ITS REGISTRATION BEHIND, and that file is what tells
+        // the dispatcher to keep running turns and the watchdog that a missing pid file is by
+        // design. Spawning a terminal for this session is the moment we know it is no longer
+        // print-run, so it is the moment to clear it — otherwise the member would have a window AND
+        // headless turns answering the same brief, while nothing would ever respawn the window.
+        if (runner.Kind == SessionRunners.Terminal && PrintSessionState_Store.Delete_IfExists(_paths, launch.Role, launch.OrchId, launch.MemberId))
+            _log.Log_Warning(launch.OrchId, $"'{launch.MemberId}' was registered as print-run but its role is now runner: terminal — the stale registration was cleared and it is spawned in a window");
+
         runner.Start(launch);
         return runner;
     }

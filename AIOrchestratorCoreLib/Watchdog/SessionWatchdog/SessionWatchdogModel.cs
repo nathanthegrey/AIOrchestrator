@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running;
@@ -13,6 +14,7 @@ namespace AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 
 internal sealed class SessionWatchdogModel(
     ISupervisionPaths paths,
+    IOrchestratorConfigProvider configProvider,
     IOrchestrationSessionStore store,
     IOrchestrationLauncher launcher,
     IOrchestrationLog log) : ISessionWatchdog
@@ -30,6 +32,7 @@ internal sealed class SessionWatchdogModel(
     static readonly IReadOnlySet<string> SHELL_PROCESS_NAMES = new HashSet<string> { "powershell", "pwsh" };
 
     readonly ISupervisionPaths _paths = paths;
+    readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
     readonly IOrchestrationLauncher _launcher = launcher;
     readonly IOrchestrationLog _log = log;
@@ -72,6 +75,21 @@ internal sealed class SessionWatchdogModel(
         }
     }
 
+    /// <summary>
+    /// A session that has no pid file BECAUSE IT IS SUPPOSED TO HAVE NONE — both halves asked, and
+    /// the config half is the one that was missing. The state file alone says a session WAS
+    /// registered as print-run; nothing deletes it when the owner flips the role back to terminal,
+    /// so answering from the file alone made the watchdog skip that slot for ever and the member's
+    /// window was never respawned after it died. The launcher clears the stale file at the next
+    /// spawn — which only happens because this returns false and lets the respawn through.
+    /// </summary>
+    bool Is_PrintRun(SessionRoles role, string orchId, string memberId)
+    {
+        return _configProvider.Get_Current().Runners.Get_ForRole(role).Runner == SessionRunners.Print
+            && PrintRunner_Support.Supports(role)
+            && PrintSessionState_Store.Exists(_paths, role, orchId, memberId);
+    }
+
     static bool Is_WithinSpawnGrace(DateTime? spawnedUtc)
     {
         return spawnedUtc != null && (DateTime.UtcNow - spawnedUtc.Value).TotalSeconds < SPAWN_GRACE_SECONDS;
@@ -92,7 +110,7 @@ internal sealed class SessionWatchdogModel(
         // A print-run session has no process to be alive: its state file is the registration, and
         // its turns run on demand. Without this the watchdog would "respawn" it every 45 s and
         // declare a crash loop on the third.
-        if (PrintSessionState_Store.Exists(_paths, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch_Factory.GENERAL_MEMBER_ID))
+        if (Is_PrintRun(SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch_Factory.GENERAL_MEMBER_ID))
         {
             _consecutiveRespawns.Remove("general");
             return;
@@ -186,7 +204,7 @@ internal sealed class SessionWatchdogModel(
             return;
 
         // Print-run: no pid file by design (see Check_GeneralSupervisor).
-        if (PrintSessionState_Store.Exists(_paths, SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId)), orchId, memberId))
+        if (Is_PrintRun(SessionRole_Names.From_MemberKind(MemberKind_Ids.Resolve_Kind(memberId)), orchId, memberId))
         {
             _consecutiveRespawns.Remove($"imp:{orchId}/{memberId}");
             return;
