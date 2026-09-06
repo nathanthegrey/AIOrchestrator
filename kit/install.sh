@@ -72,17 +72,23 @@ mkdir -p "$commands_folder" "$supervision_folder" "$supervision_folder/.requests
 # host asserts that exact number at startup and a silent install of the wrong one would only surface
 # later as a refusal to spawn.
 if command -v claude >/dev/null 2>&1; then
-    claude plugin marketplace add "$kit_folder" >/dev/null 2>&1 \
-        || claude plugin marketplace add "$kit_folder" 2>&1 | tail -2
+    # `|| { ...; }` and not `|| cmd | tail`: a pipe binds tighter than ||, so the branch written to
+    # REPORT a failure was itself a pipeline whose non-zero status killed the script under pipefail.
+    if ! claude plugin marketplace add "$kit_folder" >/dev/null 2>&1; then
+        claude plugin marketplace add "$kit_folder" 2>&1 | tail -2 || true
+    fi
     if claude plugin install aiorch@aiorch-local --scope user -y >/dev/null 2>&1; then
         ok 'Installed the aiorch plugin (role protocols, hooks, channel helper).'
     else
         ok 'The aiorch plugin was already installed.'
     fi
 
+    # `|| true`, because an assignment takes the status of its command substitution and pipefail
+    # gives it the failure of `claude` — an older CLI without --json, or one not logged in, would
+    # abort the installer silently between installing the plugin and writing any configuration.
     installed_version="$(claude plugin list --json 2>/dev/null \
-        | tr -d ' \n' | sed -n 's/.*"id":"aiorch@aiorch-local","version":"\([^"]*\)".*/\1/p')"
-    expected_version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;/"version"/q' "$kit_folder/.claude-plugin/plugin.json")"
+        | tr -d ' \n' | sed -n 's/.*"id":"aiorch@aiorch-local","version":"\([^"]*\)".*/\1/p' || true)"
+    expected_version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;/"version"/q' "$kit_folder/.claude-plugin/plugin.json" || true)"
 
     if [ -n "$installed_version" ] && [ "$installed_version" = "$expected_version" ]; then
         ok "aiorch $installed_version is installed and enabled."
@@ -98,19 +104,30 @@ fi
 # ~/.claude/commands WINS the slash word over a plugin skill (measured on CLI 2.1.263), so a
 # leftover supervisor.md would be read INSTEAD of the plugin while `claude plugin list` reported the
 # new version. Only the exact filenames this project ever shipped are touched.
-removed=0
+# IT MOVES THEM ASIDE, IT DOES NOT DELETE THEM — the same rule as the app's own sweep
+# (LegacyKit_Remover), and for the same reason: these names are GENERIC, so a `reviewer.md` or a
+# `solo.md` somebody wrote for something else entirely can carry one, and unlinking it would destroy
+# their work at a setup they ran for another purpose. The rename breaks the shadow just as completely
+# — a command is resolved by its .md name and that name is gone — while leaving every byte on disk.
+moved=0
+move_aside() {
+    [ -f "$1" ] || return 0
+    mv -f "$1" "$1.aiorch-removed"
+    moved=$((moved + 1))
+    say "  moved aside: $1  ->  $1.aiorch-removed"
+}
 for stale in supervisor implementer reviewer solo general-supervisor communicator; do
-    if [ -f "$commands_folder/$stale.md" ]; then rm -f "$commands_folder/$stale.md"; removed=$((removed + 1)); fi
+    move_aside "$commands_folder/$stale.md"
 done
 for stale in channel-append.sh .installed-by.txt; do
-    if [ -f "$commands_folder/$stale" ]; then rm -f "$commands_folder/$stale"; removed=$((removed + 1)); fi
+    move_aside "$commands_folder/$stale"
 done
 for stale in supervisor-ledger-check.sh run-to-the-end-check.sh reviewer-readonly-check.sh \
              supervisor-awaiting-answer-check.sh hook-log.sh hook-behaviour-check.sh watcher-behaviour-check.sh; do
-    if [ -f "$claude_folder/hooks/$stale" ]; then rm -f "$claude_folder/hooks/$stale"; removed=$((removed + 1)); fi
+    move_aside "$claude_folder/hooks/$stale"
 done
-if [ "$removed" -gt 0 ]; then
-    ok "Removed $removed hand-installed kit file(s) that would have shadowed the plugin."
+if [ "$moved" -gt 0 ]; then
+    ok "Moved $moved hand-installed kit file(s) aside — they would have shadowed the plugin. Nothing was deleted."
 fi
 
 if [ "$(install_file "$kit_folder/statusline/statusline.sh" "$status_line_target")" = 1 ]; then
@@ -195,7 +212,7 @@ check_whole_number 'user id' "$current_owner_id"
 repos="$(printf '%s' "$existing_config" | jq -c '.repos // []')"
 if [ "$(printf '%s' "$repos" | jq 'length')" = 0 ] && [ -t 0 ]; then
     say ''
-    head 'No repos configured yet. Add them now (empty name to finish):'
+    heading 'No repos configured yet. Add them now (empty name to finish):'
     while true; do
         read -r -p 'Repo friendly name: ' repo_name || repo_name=""
         [ -n "$repo_name" ] || break

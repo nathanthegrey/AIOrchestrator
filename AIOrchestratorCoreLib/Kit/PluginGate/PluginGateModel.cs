@@ -14,6 +14,12 @@ internal sealed class PluginGateModel : IPluginGate
     /// </summary>
     public bool Spawning_Allowed => Verdict is PluginVerdicts.Unchecked or PluginVerdicts.Ok;
 
+    /// <summary>
+    /// Flipped by the first caller that reports an Unchecked pass, so the warning is stated once
+    /// rather than on every spawn — a repeat that is a notification is a waterfall (decision 14).
+    /// </summary>
+    public bool Unchecked_WasReported { get; set; }
+
     public void Record(PluginVerdicts verdict, string? refusal)
     {
         Verdict = verdict;

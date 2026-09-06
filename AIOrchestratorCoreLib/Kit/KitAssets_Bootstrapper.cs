@@ -53,12 +53,28 @@ public static class KitAssets_Bootstrapper
 
             Unwire_LegacyHooks(claudeHomeFolder, log);
             Remove_LegacyKit(claudeHomeFolder, log);
-                Install_StatusLine(kitFolder, claudeHomeFolder, paths, log, buildStamp);
+            Install_StatusLine(kitFolder, claudeHomeFolder, paths, log, buildStamp);
+        }
+        catch (Exception ex)
+        {
+            log.Log_Error("", "Kit startup housekeeping failed", ex);
+        }
+
+        // ITS OWN TRY, AND ALWAYS REACHED. It used to be the last of four steps inside one try, so
+        // anything the three before it threw — a legacy file that would not move, a locked status
+        // line, an install record with a number where a string belongs — jumped past the one call
+        // that records a verdict. The gate stayed Unchecked, Unchecked ALLOWS, and every session
+        // spawned against a kit this host had never verified. A verdict is now taken on every path.
+        try
+        {
             Verify_Plugin(claudeHomeFolder, paths, log, gate);
         }
         catch (Exception ex)
         {
-            log.Log_Error("", "Kit startup check failed", ex);
+            var refusal = $"This host could not run its kit check at all, so it CANNOT TELL which protocols its sessions would follow: {ex.Message}";
+            log.Log_Error("", refusal, ex);
+            gate?.Record(PluginVerdicts.Unreadable, refusal);
+            Tell_Owner_Once(paths, log, refusal);
         }
     }
 
@@ -69,20 +85,28 @@ public static class KitAssets_Bootstrapper
 
         foreach (var hookFile in LegacyKit_Remover.LEGACY_HOOK_FILES)
         {
-            if (AgentHookSettings_Wirer.Ensure_Unwired(settingsFile, Path.Combine(hooksFolder, hookFile)))
-                log.Log_Info("", $"Un-wired the legacy '{hookFile}' entry from {settingsFile} — it now travels with the role that owns it, in the plugin");
+            switch (AgentHookSettings_Wirer.Ensure_Unwired(settingsFile, Path.Combine(hooksFolder, hookFile)))
+            {
+                case UnwireOutcomes.Unwired:
+                    log.Log_Info("", $"Un-wired the legacy '{hookFile}' entry from {settingsFile} — it now travels with the role that owns it, in the plugin");
+                    break;
+
+                case UnwireOutcomes.Unreadable:
+                    log.Log_Warning("", $"COULD NOT READ {settingsFile}, so the legacy '{hookFile}' entry (if it is in there) is STILL WIRED — it would fire for every session on this machine, on top of the role that now declares it. Fix that file by hand.");
+                    break;
+            }
         }
     }
 
     static void Remove_LegacyKit(string claudeHomeFolder, IOrchestrationLog log)
     {
-        var (removed, stillThere) = LegacyKit_Remover.Remove(claudeHomeFolder);
+        var (movedAside, stillThere) = LegacyKit_Remover.Remove(claudeHomeFolder);
 
-        foreach (var file in removed)
-            log.Log_Info("", $"Removed the hand-installed kit file '{file}' — the plugin ships it now");
+        foreach (var file in movedAside)
+            log.Log_Info("", $"Moved the hand-installed kit file '{file}' aside to '{file}{LegacyKit_Remover.MOVED_ASIDE_SUFFIX}' — the plugin ships it now, and NOTHING was deleted");
 
         foreach (var file in stillThere)
-            log.Log_Warning("", $"COULD NOT remove the hand-installed kit file '{file}' — while it is there, a session may read it INSTEAD of the plugin");
+            log.Log_Warning("", $"COULD NOT move the hand-installed kit file '{file}' aside — while it is there, a session may read it INSTEAD of the plugin");
     }
 
     static void Install_StatusLine(string kitFolder, string claudeHomeFolder, ISupervisionPaths paths, IOrchestrationLog log, string buildStamp)

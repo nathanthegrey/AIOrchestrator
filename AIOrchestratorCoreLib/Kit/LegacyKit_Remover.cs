@@ -11,9 +11,16 @@ namespace AIOrchestratorCoreLib.Kit;
 /// last copied it. That is decisions 18 and 23 again, in their worst form yet, because this time a
 /// version number would be actively lying.
 ///
-/// It removes ONLY the exact filenames this app shipped — the six role protocols, the append helper
+/// It touches ONLY the exact filenames this app shipped — the six role protocols, the append helper
 /// and the seven hooks. Anything else in those folders belongs to the person whose machine it is and
-/// is never touched. What it fails to delete it RETURNS, so the caller refuses rather than assuming.
+/// is never touched. What it fails to move it RETURNS, so the caller refuses rather than assuming.
+///
+/// IT MOVES ASIDE, IT DOES NOT DELETE, and that is the whole of its safety. The names it acts on are
+/// GENERIC — `reviewer.md`, `solo.md`, `communicator.md` — so a file this app never wrote can carry
+/// one, and unlinking it would destroy somebody's own work unrecoverably at an app start they did not
+/// ask for. Renaming to <c>.aiorch-removed</c> breaks the shadow just as completely (a command is
+/// resolved by its .md name, and that name is gone) while leaving every byte on disk, next to the
+/// original, for whoever wants it back. Every move is logged with both names.
 /// </summary>
 public static class LegacyKit_Remover
 {
@@ -34,24 +41,28 @@ public static class LegacyKit_Remover
 
     public const string PROVENANCE_FILE_NAME = ".installed-by.txt";
 
+    /// <summary>Appended to a file moved aside. Chosen so the .md extension no longer matches.</summary>
+    public const string MOVED_ASIDE_SUFFIX = ".aiorch-removed";
+
     /// <summary>
-    /// Deletes what it can. Returns (removed, stillThere) — stillThere is every legacy file that is
-    /// STILL on disk afterwards, whether because deleting it threw or because it reappeared. A
-    /// non-empty stillThere for a COMMAND is a shadow, and the caller must refuse on it.
+    /// Moves aside what it can. Returns (movedAside, stillThere) — stillThere is every legacy file
+    /// still sitting under its ORIGINAL name afterwards, whether because the move threw or because
+    /// the file reappeared. A non-empty stillThere for a COMMAND is a shadow, and the caller must
+    /// refuse on it.
     /// </summary>
     public static (IReadOnlyList<string> Removed, IReadOnlyList<string> StillThere) Remove(string claudeHomeFolder)
     {
-        List<string> removed = [];
+        List<string> movedAside = [];
         List<string> stillThere = [];
 
-        Sweep(Path.Combine(claudeHomeFolder, "commands"), LEGACY_COMMAND_FILES, removed, stillThere);
-        Sweep(Path.Combine(claudeHomeFolder, "hooks"), LEGACY_HOOK_FILES, removed, stillThere);
+        Sweep(Path.Combine(claudeHomeFolder, "commands"), LEGACY_COMMAND_FILES, movedAside, stillThere);
+        Sweep(Path.Combine(claudeHomeFolder, "hooks"), LEGACY_HOOK_FILES, movedAside, stillThere);
 
         // The note the old installer dropped beside the commands it owned. Cosmetic, so a failure to
-        // delete it is not a reason to refuse anything — it goes to its own list and is dropped.
-        Sweep(Path.Combine(claudeHomeFolder, "commands"), [PROVENANCE_FILE_NAME], removed, []);
+        // move it is not a reason to refuse anything — it goes to its own list and is dropped.
+        Sweep(Path.Combine(claudeHomeFolder, "commands"), [PROVENANCE_FILE_NAME], movedAside, []);
 
-        return (removed, stillThere);
+        return (movedAside, stillThere);
     }
 
     /// <summary>
@@ -72,7 +83,7 @@ public static class LegacyKit_Remover
             .Where(File.Exists)];
     }
 
-    static void Sweep(string folder, IReadOnlyList<string> names, List<string> removed, List<string> stillThere)
+    static void Sweep(string folder, IReadOnlyList<string> names, List<string> movedAside, List<string> stillThere)
     {
         if (!Directory.Exists(folder))
             return;
@@ -86,13 +97,16 @@ public static class LegacyKit_Remover
 
             try
             {
-                File.Delete(file);
-                removed.Add(file);
+                // overwrite: a second app start must not fail because the first one already put a
+                // file of this name aside. The newer copy is the one worth keeping — it is the one
+                // that was shadowing a moment ago.
+                File.Move(file, file + MOVED_ASIDE_SUFFIX, overwrite: true);
+                movedAside.Add(file);
             }
             catch
             {
                 // Deliberately swallowed HERE and re-raised by the caller looking at what is left:
-                // the exception type does not matter, only whether the file is still able to shadow.
+                // the exception type does not matter, only whether the file can still shadow.
             }
 
             if (File.Exists(file))

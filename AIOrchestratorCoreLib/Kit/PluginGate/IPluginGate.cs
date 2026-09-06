@@ -22,6 +22,12 @@ public interface IPluginGate
     bool Spawning_Allowed { get; }
 
     /// <summary>
+    /// Whether the "no verdict was ever taken" warning has already been stated. Read and set by the
+    /// launcher so it is said once per host run instead of once per spawn.
+    /// </summary>
+    bool Unchecked_WasReported { get; set; }
+
+    /// <summary>
     /// Recorded once by the host's startup check, after composition has already built the launcher.
     /// The verdict genuinely is not knowable at construction time — it depends on a Claude home the
     /// composition root is not given — so this is a seam, not a mutable service.

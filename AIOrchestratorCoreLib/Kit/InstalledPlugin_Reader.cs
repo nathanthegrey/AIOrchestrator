@@ -35,29 +35,31 @@ public static class InstalledPlugin_Reader
 
         if (File.Exists(installedFile))
         {
-            JsonNode? root;
-
+            // THE WHOLE TRAVERSAL IS INSIDE THE TRY, not just the parse. GetValue<string>() on a
+            // number, a bool or an object throws InvalidOperationException, and a record like
+            // {"version": 2} is a shape a file on disk can genuinely hold — a hand-edit, a future
+            // CLI, a half-written file. Outside the try that throw ESCAPES Read entirely, which is
+            // worse than the absence/illegibility collapse this class exists to prevent: the caller
+            // gets neither answer and the startup check dies with it.
             try
             {
-                root = JsonNode.Parse(File.ReadAllText(installedFile));
+                // Shape (measured on a real install): { "version": 2, "plugins": { "<id>": [ { scope,
+                // installPath, version, ... } ] } } — an ARRAY per id, because one plugin can be
+                // installed at more than one scope. First record wins; the refusal names the path, so
+                // a human who has two can see which one answered.
+                if (JsonNode.Parse(File.ReadAllText(installedFile)) is not JsonObject installedRoot)
+                    return new InstalledPluginReading(null, null, false, $"{installedFile} is not a JSON object");
+
+                var records = installedRoot["plugins"]?[pluginId] as JsonArray;
+                var first = records?.FirstOrDefault() as JsonObject;
+
+                version = Read_String_OrNull(first, "version");
+                installPath = Read_String_OrNull(first, "installPath");
             }
             catch (Exception ex)
             {
                 return new InstalledPluginReading(null, null, false, $"{installedFile} could not be read: {ex.Message}");
             }
-
-            // Shape (measured on a real install): { "version": 2, "plugins": { "<id>": [ { scope,
-            // installPath, version, ... } ] } } — an ARRAY per id, because one plugin can be
-            // installed at more than one scope. First record wins; the refusal names the path, so a
-            // human who has two can see which one answered.
-            if (root is not JsonObject installedRoot)
-                return new InstalledPluginReading(null, null, false, $"{installedFile} is not a JSON object");
-
-            var records = installedRoot["plugins"]?[pluginId] as JsonArray;
-            var first = records?.FirstOrDefault() as JsonObject;
-
-            version = first?["version"]?.GetValue<string>();
-            installPath = first?["installPath"]?.GetValue<string>();
         }
 
         var enabled = false;
@@ -69,12 +71,24 @@ public static class InstalledPlugin_Reader
                 var settings = JsonNode.Parse(File.ReadAllText(settingsFile)) as JsonObject;
                 enabled = settings?[ENABLED_PLUGINS_KEY]?[pluginId]?.GetValue<bool>() ?? false;
             }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+            catch (Exception ex)
             {
                 return new InstalledPluginReading(version, installPath, false, $"{settingsFile} could not be read: {ex.Message}");
             }
         }
 
         return new InstalledPluginReading(version, installPath, enabled, null);
+    }
+
+    /// <summary>
+    /// A field that is present but is not a string is NOT a value — it is an unreadable record, and
+    /// it says so by throwing out of the guarded block above rather than by quietly reading as
+    /// absent. Written as a helper so both fields answer the question the same way.
+    /// </summary>
+    static string? Read_String_OrNull(JsonObject? record, string field)
+    {
+        var node = record?[field];
+
+        return node == null ? null : node.GetValue<string>();
     }
 }

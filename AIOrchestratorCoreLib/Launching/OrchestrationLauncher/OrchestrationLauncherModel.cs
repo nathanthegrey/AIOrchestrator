@@ -1,6 +1,7 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.Kit;
 using AIOrchestratorCoreLib.Kit.PluginGate;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running;
@@ -323,6 +324,9 @@ internal sealed class OrchestrationLauncherModel(
 
         var runner = Start_Session(launch);
 
+        if (runner == null)
+            return;
+
         if (runner.Kind == SessionRunners.Terminal)
             Sync_TruePid_FromPidFile(pidFile, orchId, "supervisor", truePid => Store_SupervisorTruePid_IfStillOpen(orchId, truePid));
 
@@ -349,7 +353,9 @@ internal sealed class OrchestrationLauncherModel(
         Delete_StalePidFile_BestEffort(pidFile);
 
         var runner = Start_Session(launch);
-        _log.Log_Info(orchId, $"Communicator session {Describe_Started(runner)}");
+
+        if (runner != null)
+            _log.Log_Info(orchId, $"Communicator session {Describe_Started(runner)}");
     }
 
     /// <summary>
@@ -386,6 +392,9 @@ internal sealed class OrchestrationLauncherModel(
 
         var runner = Start_Session(launch);
 
+        if (runner == null)
+            return;
+
         if (runner.Kind == SessionRunners.Terminal)
             Sync_TruePid_FromPidFile(pidFile, orchId, memberId, truePid => Store_MemberTruePid_IfStillOpen(orchId, memberId, truePid));
 
@@ -410,7 +419,8 @@ internal sealed class OrchestrationLauncherModel(
 
         var runner = Start_Session(launch);
 
-        _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"General supervisor session {Describe_Started(runner)}");
+        if (runner != null)
+            _log.Log_Info(ChannelDiscovery.GENERAL_ORCH_ID, $"General supervisor session {Describe_Started(runner)}");
     }
 
     /// <summary>
@@ -419,7 +429,14 @@ internal sealed class OrchestrationLauncherModel(
     /// Terminal is the default for every role, so with an untouched config.json this is exactly the
     /// spawn that always happened.
     /// </summary>
-    ISessionRunner Start_Session(ISessionLaunch launch)
+    /// <summary>
+    /// Returns null when the kit gate refused, and the callers treat that as "no session exists".
+    /// It used to return the resolved runner either way, so a refusal was followed immediately by
+    /// "Supervisor session spawned" and then, 20 s later, by "pid file never appeared" — three
+    /// contradictory statements about one non-event, in a log whose entire job is telling a person
+    /// what is actually running.
+    /// </summary>
+    ISessionRunner? Start_Session(ISessionLaunch launch)
     {
         var runner = Resolve_Runner(launch.Role, launch.OrchId);
 
@@ -438,10 +455,18 @@ internal sealed class OrchestrationLauncherModel(
         // own loop with nothing catching, so an exception here would take the bridge down — and the
         // bridge staying up is exactly how the owner gets TOLD about the bad kit. Refusing costs a
         // session that would have been wrong anyway; throwing would cost the message about it.
+        // Unchecked ALLOWS, but never silently: a verdict that was never taken means the host's kit
+        // check did not run, which is a wiring bug and not a bad kit. Said ONCE per host run.
+        if (_pluginGate.Verdict == PluginVerdicts.Unchecked && !_pluginGate.Unchecked_WasReported)
+        {
+            _pluginGate.Unchecked_WasReported = true;
+            _log.Log_Warning(launch.OrchId, "The kit check never recorded a verdict, so sessions are starting UNVERIFIED — this host's startup check did not run. The app works; nothing is confirming which protocols these sessions read.");
+        }
+
         if (!_pluginGate.Spawning_Allowed)
         {
             _log.Log_Error(launch.OrchId, $"REFUSED to start '{launch.MemberId}' ({launch.Role}) — {_pluginGate.Refusal}", null);
-            return runner;
+            return null;
         }
 
         runner.Start(launch);

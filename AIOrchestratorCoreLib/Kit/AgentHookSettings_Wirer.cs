@@ -85,17 +85,23 @@ public static class AgentHookSettings_Wirer
     /// Ensure_Wired's own idempotence check matches, so this removes precisely what that added — on
     /// a machine whose settings.json was written by an older build with a different absolute path.
     /// </summary>
-    public static bool Ensure_Unwired(string settingsFilePath, string hookScriptPath)
+    public static UnwireOutcomes Ensure_Unwired(string settingsFilePath, string hookScriptPath)
     {
         try
         {
             if (!File.Exists(settingsFilePath))
-                return false;
+                return UnwireOutcomes.NothingToDo;
 
-            var root = Read_SettingsRoot_OrNull(settingsFilePath);
+            // A settings file we cannot parse is the user's to fix — but it is NOT nothing to do.
+            // Reported, because on that machine the legacy entries survive and the ledger hook fires
+            // twice for a supervisor and once for every unrelated session, which is the exact failure
+            // this stage exists to end. Silence here would be a predicate that could not be evaluated
+            // pretending it was evaluated (decision 21's corollary).
+            if (Read_SettingsRoot_OrNull(settingsFilePath) is not JsonObject root)
+                return UnwireOutcomes.Unreadable;
 
-            if (root?["hooks"] is not JsonObject hooks)
-                return false;
+            if (root["hooks"] is not JsonObject hooks)
+                return UnwireOutcomes.NothingToDo;
 
             var scriptName = Path.GetFileName(hookScriptPath);
             var changed = false;
@@ -105,36 +111,39 @@ public static class AgentHookSettings_Wirer
                 if (hooks[eventName] is not JsonArray eventEntries)
                     continue;
 
+                var removedHere = false;
+
                 for (var index = eventEntries.Count - 1; index >= 0; index--)
                 {
                     if (!Names_Script(eventEntries[index], scriptName))
                         continue;
 
                     eventEntries.RemoveAt(index);
-                    changed = true;
+                    removedHere = true;
                 }
 
-                // An event left with no entries is removed too: an empty array is a leftover, and a
-                // reader cannot tell it from an event someone meant to leave empty.
-                if (eventEntries.Count == 0)
-                {
+                // ONLY an event WE emptied. The previous version cleaned every empty array in the
+                // file, so a user who keeps `"SessionStart": []` had that key deleted and the file
+                // rewritten on a run that removed nothing of ours — and the caller then logged, seven
+                // times over, that it had un-wired hooks the file never contained.
+                if (removedHere && eventEntries.Count == 0)
                     hooks.Remove(eventName);
-                    changed = true;
-                }
+
+                changed |= removedHere;
             }
 
             if (!changed)
-                return false;
+                return UnwireOutcomes.NothingToDo;
 
             Backup_Once(settingsFilePath);
             File.WriteAllText(settingsFilePath, root.ToJsonString(JsonWriting.INDENTED));
-            return true;
+            return UnwireOutcomes.Unwired;
         }
         catch
         {
-            // Same contract as Ensure_Wired: never let settings surgery break app startup. The caller
-            // checks what is left on disk rather than trusting this return value.
-            return false;
+            // Same contract as Ensure_Wired: never let settings surgery break app startup. Reported
+            // rather than swallowed, so the caller can say which predicate it could not evaluate.
+            return UnwireOutcomes.Unreadable;
         }
     }
 

@@ -86,6 +86,39 @@ public class InstalledPluginReaderTests : IDisposable
         Assert.Contains(InstalledPlugin_Reader.INSTALLED_PLUGINS_FILE, reading.UnreadableReason);
     }
 
+    /// <summary>
+    /// A FIELD OF THE WRONG TYPE IS AN UNREADABLE RECORD, NOT AN ABSENT ONE — and above all it must
+    /// not throw out of Read. GetValue&lt;string&gt;() on a number raises InvalidOperationException, and
+    /// that call used to sit OUTSIDE the guarded block: the exception escaped the reader entirely,
+    /// so the caller got neither answer and the whole startup check died with it. {"version": 2} is
+    /// a shape a file on disk can genuinely hold — a hand-edit, a future CLI, a half-written file.
+    /// </summary>
+    [Fact]
+    public void AnInstallRecordWithANumberWhereAStringBelongs_IsUnreadable_AndNeverThrows()
+    {
+        File.WriteAllText(Installed_File, $$"""
+            { "version": 2, "plugins": { "{{KitPlugin.ID}}": [ { "version": 2, "installPath": "/x" } ] } }
+            """);
+
+        var reading = InstalledPlugin_Reader.Read(_home, KitPlugin.ID);
+
+        Assert.NotNull(reading.UnreadableReason);
+        Assert.False(reading.Is_Installed);
+    }
+
+    [Fact]
+    public void AnEnabledPluginsFlagThatIsNotABool_IsUnreadable_AndNeverThrows()
+    {
+        Write_Installed("1.0.0", "/somewhere");
+        File.WriteAllText(Path.Combine(_home, InstalledPlugin_Reader.SETTINGS_FILE), $$"""
+            { "enabledPlugins": { "{{KitPlugin.ID}}": "yes" } }
+            """);
+
+        var reading = InstalledPlugin_Reader.Read(_home, KitPlugin.ID);
+
+        Assert.NotNull(reading.UnreadableReason);
+    }
+
     [Fact]
     public void AnUnreadableSettingsFile_IsReportedAsUnreadable_NeverAsDisabled()
     {

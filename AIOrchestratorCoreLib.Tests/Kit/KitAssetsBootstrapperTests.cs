@@ -124,6 +124,48 @@ public class KitAssetsBootstrapperTests : IDisposable
         Assert.Null(gate.Refusal);
     }
 
+    /// <summary>
+    /// THE GATE IS RECORDED ON EVERY PATH. Verify_Plugin used to be the last of four steps inside one
+    /// try, so anything the three before it threw jumped past the only call that takes a verdict: the
+    /// gate stayed Unchecked, Unchecked ALLOWS, and every session spawned against a kit this host had
+    /// never verified. Here the housekeeping is made to fail — the commands folder is replaced by a
+    /// FILE, so the sweep cannot enumerate it — and a verdict must still exist afterwards.
+    /// </summary>
+    [Fact]
+    public void HousekeepingThatFails_StillLeavesAVerdict_NeverAnUncheckedGate()
+    {
+        Directory.Delete(Path.Combine(_claudeHome, "commands"), recursive: true);
+        File.WriteAllText(Path.Combine(_claudeHome, "commands"), "not a folder");
+        File.WriteAllText(Path.Combine(_claudeHome, "settings.json"), "{ not json");
+
+        var gate = PluginGate_Factory.Create();
+
+        KitAssets_Bootstrapper.Ensure_Installed(_kit, _claudeHome, _paths, OrchestrationLog_Factory.Create(_paths), gate);
+
+        Assert.NotEqual(PluginVerdicts.Unchecked, gate.Verdict);
+        Assert.False(gate.Spawning_Allowed);
+        Assert.NotNull(gate.Refusal);
+    }
+
+    /// <summary>
+    /// An unreadable settings.json is REPORTED, not passed over. On that machine the legacy hook
+    /// entries survive and would fire for every session, so silence there is the predicate that
+    /// could not be evaluated pretending it was.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableSettingsFile_IsReported_BecauseTheLegacyHooksAreStillWired()
+    {
+        File.WriteAllText(Path.Combine(_claudeHome, "settings.json"), "{ not json");
+
+        var log = OrchestrationLog_Factory.Create(_paths);
+        var problems = new List<string>();
+        log.EntryLogged += entry => { if (entry.Level != AIOrchestratorCoreLib.Logging.LogLevels.Info) problems.Add(entry.Message); };
+
+        KitAssets_Bootstrapper.Ensure_Installed(_kit, _claudeHome, _paths, log);
+
+        Assert.Contains(problems, message => message.Contains("STILL WIRED"));
+    }
+
     [Fact]
     public void AMissingKit_IsLogged_AndNeverThrows_BecauseTheBridgeMustStartAnyway()
     {

@@ -44,7 +44,15 @@ New-Item -ItemType Directory -Force (Join-Path $supervisionFolder '.requests') |
 if ($null -ne $claudeCmd) {
     & claude plugin marketplace add $kitFolder *> $null
     & claude plugin install 'aiorch@aiorch-local' --scope user -y *> $null
-    Write-Host 'Installed the aiorch plugin (role protocols, hooks, channel helper).' -ForegroundColor Green
+
+    # $ErrorActionPreference = 'Stop' does NOT stop on a NATIVE command's exit code in Windows
+    # PowerShell 5.1, and the output is swallowed above — so without this check a failed install
+    # still printed "Installed", on exactly the machine most likely to hit it.
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "claude plugin install exited $LASTEXITCODE — the aiorch plugin may NOT be installed. Re-run: claude plugin install aiorch@aiorch-local --scope user" -ForegroundColor Yellow
+    } else {
+        Write-Host 'Installed the aiorch plugin (role protocols, hooks, channel helper).' -ForegroundColor Green
+    }
 
     $expectedVersion = (Get-Content (Join-Path $kitFolder '.claude-plugin\plugin.json') -Raw | ConvertFrom-Json).version
     $installed = $null
@@ -71,9 +79,18 @@ $stale += @('supervisor-ledger-check.sh','run-to-the-end-check.sh','reviewer-rea
             'supervisor-awaiting-answer-check.sh','hook-log.sh','hook-behaviour-check.sh',
             'watcher-behaviour-check.sh') |
     ForEach-Object { Join-Path (Join-Path $claudeFolder 'hooks') $_ }
-$removed = 0
-foreach ($file in $stale) { if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force; $removed++ } }
-if ($removed -gt 0) { Write-Host "Removed $removed hand-installed kit file(s) that would have shadowed the plugin." -ForegroundColor Green }
+# MOVED ASIDE, NEVER DELETED — the same rule as the app's own sweep (LegacyKit_Remover), and for the
+# same reason: these names are generic, so a reviewer.md somebody wrote for something else can carry
+# one. The rename breaks the shadow while leaving every byte on disk.
+$moved = 0
+foreach ($file in $stale) {
+    if (Test-Path -LiteralPath $file) {
+        Move-Item -LiteralPath $file -Destination "$file.aiorch-removed" -Force
+        Write-Host "  moved aside: $file  ->  $file.aiorch-removed"
+        $moved++
+    }
+}
+if ($moved -gt 0) { Write-Host "Moved $moved hand-installed kit file(s) aside — they would have shadowed the plugin. Nothing was deleted." -ForegroundColor Green }
 
 Copy-Item (Join-Path $kitFolder 'statusline\statusline.ps1') $statusLineTarget -Force
 Write-Host 'Installed status line script.' -ForegroundColor Green
