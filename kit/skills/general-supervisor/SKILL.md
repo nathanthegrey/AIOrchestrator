@@ -331,6 +331,13 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
      cost-saving measure: a full crew costs a supervisor AND an implementer for work that may need
      neither, and most requests need neither.
 
+     **The owner can move that default, so do not assume it.** `config.json` →
+     `defaults.orchestrationMode` (`basic` or `full`) decides what a request WITHOUT a `mode` becomes;
+     it ships as `basic`. A `mode` you write always wins, in both directions — so when the shape
+     matters, say it, and never tell the owner which shape they are getting unless you named it
+     yourself. The app's own `orchestration '<id>' started` entry says which shape it used and whether
+     you or the default chose it; that entry is the truth, not your expectation of it.
+
      **A FULL CREW is `{"action":"start-orchestration","repo":"<exact repo name>","mode":"full"}`,
      and it is the one you have to justify.** Ask for it when the work is genuinely big enough to
      need review gates and parallel hands — a multi-day feature, something touching many subsystems,

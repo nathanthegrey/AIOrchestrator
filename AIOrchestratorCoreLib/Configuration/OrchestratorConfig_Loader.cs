@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
@@ -39,7 +40,8 @@ public static class OrchestratorConfig_Loader
             Get_Long_OrNull(configRoot, "orchestrationTokenBudget"),
             RunnerConfigs_Json.Parse(configRoot),
             Parse_PlanBackend_OrNull(configRoot),
-            Parse_Guardrails(configRoot));
+            Parse_Guardrails(configRoot),
+            DefaultsSettings_Json.Parse(configRoot));
     }
 
     /// <summary>
@@ -115,13 +117,14 @@ public static class OrchestratorConfig_Loader
 
         Atomic_FileWriter.Write_AllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));
 
-        // planBackend AND THE GUARDRAIL KEYS ARE DELIBERATELY ABSENT from the writes above, for the
-        // same reason from two directions. planBackend is hand-edited, no window builds one, and
-        // IOrchestratorConfig.PlanBackend is null in every config the app constructs itself — writing
-        // it would erase the owner's own key on the next save. The guardrail keys have no UI and no
-        // command that changes them, so the only thing a save could do is materialise this build's
-        // defaults into the file as if the owner had chosen them, freezing a default that is meant to
-        // move when the app is updated. Both are read; neither is owned.
+        // planBackend, THE GUARDRAIL KEYS AND defaults ARE DELIBERATELY ABSENT from the writes above,
+        // for the same reason from two directions. planBackend is hand-edited, no window builds one,
+        // and IOrchestratorConfig.PlanBackend is null in every config the app constructs itself —
+        // writing it would erase the owner's own key on the next save. The guardrail keys and the
+        // defaults block have no UI and no command that changes them, so the only thing a save could
+        // do is materialise this build's defaults into the file as if the owner had chosen them,
+        // freezing a default that is meant to move when the app is updated. All three are read; none
+        // is owned.
 
         var secretsRoot = Read_JsonObject_ForEditing(paths.SecretsFile);
 

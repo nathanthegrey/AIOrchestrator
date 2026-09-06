@@ -76,7 +76,7 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task TheTaskLandsInTheNEWOrchestrationsOwnerChannel_AsTheOwnersOwnFirstEntry_AFTERTheLaunch()
     {
-        var launcher = new LaunchOrderWitness_Fake(Build_RealLauncher(), _paths);
+        var launcher = new LaunchWitness_Fake(Build_RealLauncher(), _paths);
         var engine = Build_Engine(launcher);
 
         Write_Request($$"""{"action":"start-orchestration","repo":"Repo","mode":"full","task":{{System.Text.Json.JsonSerializer.Serialize(TASK)}}}""");
@@ -109,7 +109,7 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task ARequestWithoutATask_LeavesTheOwnerChannelEmpty()
     {
-        var launcher = new LaunchOrderWitness_Fake(Build_RealLauncher(), _paths);
+        var launcher = new LaunchWitness_Fake(Build_RealLauncher(), _paths);
         var engine = Build_Engine(launcher);
 
         Write_Request("""{"action":"start-orchestration","repo":"Repo","mode":"full"}""");
@@ -181,44 +181,4 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
 
         return satisfied || condition();
     }
-}
-
-/// <summary>
-/// The real launcher, plus a photograph of the new orchestration's owner channel taken at the instant
-/// the launch returns. That instant is the boundary the whole fix turns on: everything written before
-/// it is history to the session that was just registered, everything after it is traffic.
-/// </summary>
-internal sealed class LaunchOrderWitness_Fake(IOrchestrationLauncher inner, ISupervisionPaths paths) : IOrchestrationLauncher
-{
-    public string? StartedOrchId { get; private set; }
-    public string OwnerChannelWhenTheLaunchReturned { get; private set; } = string.Empty;
-
-    public IOrchestrationSession Start_Orchestration(string repoName, string repoPath)
-    {
-        return Photograph(inner.Start_Orchestration(repoName, repoPath));
-    }
-
-    public IOrchestrationSession Start_BasicOrchestration(string repoName, string repoPath)
-    {
-        return Photograph(inner.Start_BasicOrchestration(repoName, repoPath));
-    }
-
-    IOrchestrationSession Photograph(IOrchestrationSession session)
-    {
-        var file = paths.Get_OwnerChannelFile(session.OrchId);
-
-        StartedOrchId = session.OrchId;
-        OwnerChannelWhenTheLaunchReturned = File.Exists(file) ? File.ReadAllText(file) : string.Empty;
-
-        return session;
-    }
-
-    public IOrchestrationSession Add_Implementer(string orchId) => inner.Add_Implementer(orchId);
-    public IOrchestrationSession Promote_ToFullCrew(string orchId) => inner.Promote_ToFullCrew(orchId);
-    public IOrchestrationSession Demote_ToBasic(string orchId) => inner.Demote_ToBasic(orchId);
-    public IOrchestrationSession Add_Member(string orchId, MemberKinds kind) => inner.Add_Member(orchId, kind);
-    public void Respawn_Supervisor(string orchId) => inner.Respawn_Supervisor(orchId);
-    public void Respawn_Communicator(string orchId) => inner.Respawn_Communicator(orchId);
-    public void Respawn_Implementer(string orchId, string memberId) => inner.Respawn_Implementer(orchId, memberId);
-    public void Spawn_GeneralSupervisor() => inner.Spawn_GeneralSupervisor();
 }

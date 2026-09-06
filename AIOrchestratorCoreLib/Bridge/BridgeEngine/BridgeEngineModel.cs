@@ -3945,7 +3945,15 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                var session = request.IsBasic
+                // THE REQUEST WINS, THE CONFIG SETTLES THE SILENCE. A default is what decides when
+                // nothing was said; it never overrules a request that named its shape. Resolved here,
+                // at the moment of effect, rather than in the reader — config.json can change under a
+                // request that has been sitting in the folder, and the shape the owner gets should be
+                // the one their config says NOW.
+                var configuredDefaultIsBasic = _configProvider.Get_Current().Defaults.OrchestrationIsBasic;
+                var isBasic = request.IsBasic ?? configuredDefaultIsBasic;
+
+                var session = isBasic
                     ? _launcher.Start_BasicOrchestration(repo.Name, repo.Path)
                     : _launcher.Start_Orchestration(repo.Name, repo.Path);
 
@@ -3975,7 +3983,7 @@ internal sealed class BridgeEngineModel(
                         $"Orchestration '{session.OrchId}' is up, but its owner channel was locked and the task could not be written into it. Tell it what you need in its own topic.");
                 }
 
-                var crew = request.IsBasic
+                var crew = isBasic
                     ? "One solo session spawned — no supervisor, no implementers; you talk to it directly."
                     : "Supervisor and implementer imp-1 spawned;";
 
@@ -3983,9 +3991,18 @@ internal sealed class BridgeEngineModel(
                     ? " Its task is already in its owner channel and it starts on it."
                     : string.Empty;
 
+                // WHO CHOSE THE SHAPE, said in the entry the owner reads. It is the only place a
+                // mistyped defaults.orchestrationMode can become visible: the config layer has no log
+                // of its own, so a word neither 'basic' nor 'full' falls back silently there and would
+                // otherwise look like a key that reads right and never takes effect. Here the first
+                // orchestration after the edit says which shape was used and why.
+                var chose = request.IsBasic == null
+                    ? $" The request named no mode, so the configured default ({(configuredDefaultIsBasic ? OrchestrationModes.BASIC : OrchestrationModes.FULL)}) chose the shape."
+                    : string.Empty;
+
                 Append_GeneralAppEntry(AppEntryAudiences.Owner,
                     $"orchestration '{session.OrchId}' started",
-                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). {crew} its Telegram topic appears on its first channel entry.{task}");
+                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). {crew} its Telegram topic appears on its first channel entry.{task}{chose}");
             }
             catch (Exception ex)
             {

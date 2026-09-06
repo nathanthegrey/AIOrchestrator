@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
@@ -72,6 +73,12 @@ public interface IOrchestratorConfig
     /// guarded defaults, because a guard nobody configured must still be a guard.
     /// </summary>
     IGuardrailSettings Guardrails { get; }
+
+    /// <summary>
+    /// The <c>defaults</c> block: what a request that does not say gets. Never null — an absent block
+    /// means the shipped defaults, the same shape <see cref="Guardrails"/> has.
+    /// </summary>
+    IDefaultsSettings Defaults { get; }
 
     bool Is_TelegramConfigured();
 }
