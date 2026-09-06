@@ -202,12 +202,29 @@ public sealed class PrintRunnerTestHarness : IDisposable
         File.WriteAllText(ScenarioFile, json);
     }
 
+    /// <summary>
+    /// RETRIED, because a test may read this WHILE a fake is writing it. The fake takes the log
+    /// under an exclusive handle (it has to: ten turns share one file and the counters are computed
+    /// from what is really there), so a plain read throws "used by another process" — which is
+    /// exactly what happened once in seven runs of a test that polls this file inside its wait
+    /// predicate, and reads as a failure of the code under test rather than of the reader.
+    /// </summary>
     public IReadOnlyList<JsonObject> Read_Invocations()
     {
-        if (!File.Exists(InvocationLog))
-            return [];
+        for (var attempt = 0; ; attempt++)
+        {
+            if (!File.Exists(InvocationLog))
+                return [];
 
-        return File.ReadAllLines(InvocationLog).Where(line => line.Length > 0).Select(line => (JsonObject)JsonNode.Parse(line)!).ToList();
+            try
+            {
+                return File.ReadAllLines(InvocationLog).Where(line => line.Length > 0).Select(line => (JsonObject)JsonNode.Parse(line)!).ToList();
+            }
+            catch (IOException) when (attempt < 100)
+            {
+                Thread.Sleep(20);
+            }
+        }
     }
 
     public static List<string> Args(JsonObject invocation)
