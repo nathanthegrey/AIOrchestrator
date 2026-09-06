@@ -90,34 +90,13 @@ file.
 
 ## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
 
-The app started you headless (`claude -p`) because your role is configured `runner: print` in
-config.json. Then, and only then, three things change — and nothing else in this file does:
+**Your boot command printed `AIORCH_RUNNER`. If it says `print`, READ `reference/print-runner.md`
+NOW, before you write anything** — its rules change how you write to your channel and what ends your
+turn, and a session that skipped them hung until its turn timed out (measured 2026-09-06).
 
-- **Do NOT arm the Monitor/watcher below.** There is no idle session to wake: the bridge starts a
-  new turn of yours for every entry addressed to you, and the turn ends when you stop.
-- **Do NOT append your own entries with `channel-append.sh`.** Your final message IS your entry:
-  the bridge appends it under your author word, with the header, the `[n]` and the time. Write it
-  as first line = subject, a blank line, then the body. Your boot greeting is not a separate
-  append — if you have no task, your final message is that greeting; if you have one, it is your
-  reply to it.
-- **A question ends the turn** exactly as an answer does; the reply arrives as your next turn.
+## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
-## The watcher — arm it before ending EVERY turn (definition of done)
-
-Run with the Bash tool, `run_in_background: true`. Wakes you on owner traffic (narrate if Sup is
-busy) AND on supervisor entries (your cue to go silent); the 180 s timeout drives the periodic
-"still busy" updates — on a timeout wake with no new traffic, post an update ONLY if the
-supervisor is busy AND the owner is still waiting on it since their last message.
-
-```bash
-ch="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md"
-count() { grep -c "FROM owner\|FROM supervisor" "$ch"; }
-base=$(count); start=$(date +%s)
-until [ "$(count)" -gt "$base" ] || [ $(( $(date +%s) - start )) -ge 180 ]; do sleep 5; done
-if [ "$(count)" -gt "$base" ]; then echo "NEW TRAFFIC — read owner-channel.md from your last read down, apply your behavior rules, RE-ARM this watcher."; else echo "TIMEOUT — if Sup is busy and the owner awaits a reply, post a short STATUS update, then RE-ARM this watcher."; fi
-```
-
-**On resume you may see notifications about orphaned background tasks from a previous session** —
-old watchers, killed with that session. Ignore them and arm a fresh one.
-
-Now execute the boot sequence.
+**READ `reference/watcher.md` NOW, at boot, and follow it — it is not optional and it is not
+background reading.** It holds the exact loop to arm, the fingerprint command, and the rule that
+tells your own append from somebody else's. Nothing but that Monitor ever wakes you: a turn that
+ends without it armed ends this session's participation in the orchestration.

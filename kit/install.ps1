@@ -1,6 +1,11 @@
 ﻿# AI Orchestrator — machine setup.
-# Installs the Claude Code role commands, the status line, and the supervision home with its
-# config. Safe to re-run: existing config values are kept unless you type new ones.
+# Installs the aiorch PLUGIN (role protocols, hooks, channel helper), the status line, and the
+# supervision home with its config. Safe to re-run: existing config values are kept unless you type
+# new ones, and the plugin install is idempotent.
+#
+# THE ROLE PROTOCOLS ARE NOT COPIED ANY MORE. kit\ is a Claude Code plugin, installed once from a
+# local marketplace pointing at this very checkout — which is what ends the four-derived-copies
+# problem of decisions 17, 18 and 23.
 # Run from the repo root:  powershell -ExecutionPolicy Bypass -File kit\install.ps1
 
 $ErrorActionPreference = 'Stop'
@@ -32,29 +37,43 @@ New-Item -ItemType Directory -Force $commandsFolder | Out-Null
 New-Item -ItemType Directory -Force $supervisionFolder | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $supervisionFolder '.requests') | Out-Null
 
-# Every .md in kit\commands is a role command — copy them all, so this bootstrap path cannot
-# disagree with the app's own installer (KitAssets_Installer), which has always globbed the
-# folder. This script named three by hand, so reviewer.md and solo.md were never installed
-# by it.
-$roleCommands = Get-ChildItem (Join-Path $kitFolder 'commands') -Filter *.md -File
-Copy-Item $roleCommands.FullName $commandsFolder -Force
-$installedNames = ($roleCommands | ForEach-Object { '/' + $_.BaseName }) -join ', '
-Write-Host "Installed $($roleCommands.Count) role commands: $installedNames" -ForegroundColor Green
+# The kit is a PLUGIN. Registering this checkout as a local marketplace and installing from it means
+# the installed copy is served from the files you are looking at — so "which copy is running" stops
+# being a question anyone has to investigate (decisions 18 and 23). The version is READ BACK and
+# printed, because the host asserts that exact number at startup.
+if ($null -ne $claudeCmd) {
+    & claude plugin marketplace add $kitFolder *> $null
+    & claude plugin install 'aiorch@aiorch-local' --scope user -y *> $null
+    Write-Host 'Installed the aiorch plugin (role protocols, hooks, channel helper).' -ForegroundColor Green
 
-# The append helper ships INTO the commands folder, because that is the path every role command
-# tells a session to run. It is not optional decoration: all five mandate it for every channel
-# write, and a session that cannot find it gets exit 127, which is not in the script's own contract.
-#
-# The comment above is about this exact class of miss and did not prevent it: the glob was widened
-# from three hand-named files to every .md, and the helper is a .sh, so the bootstrap path silently
-# went on disagreeing with the app's installer (which globs .md AND .sh). Two delivery paths, one
-# behaviour — check both whenever either changes.
-$appendHelper = Join-Path $kitFolder 'channel-append.sh'
-if (-not (Test-Path -LiteralPath $appendHelper)) {
-    throw "kit\channel-append.sh is missing from the kit at '$appendHelper'. Every role command mandates it for channel writes; installing the instructions without the script would leave every session pointing at a dead path."
+    $expectedVersion = (Get-Content (Join-Path $kitFolder '.claude-plugin\plugin.json') -Raw | ConvertFrom-Json).version
+    $installed = $null
+    try { $installed = (& claude plugin list --json | ConvertFrom-Json) | Where-Object { $_.id -eq 'aiorch@aiorch-local' } } catch { $installed = $null }
+
+    if ($null -ne $installed -and $installed.version -eq $expectedVersion) {
+        Write-Host "aiorch $($installed.version) is installed and enabled." -ForegroundColor Green
+    } else {
+        Write-Host "aiorch reports version '$($installed.version)' but this checkout ships '$expectedVersion'." -ForegroundColor Yellow
+        Write-Host 'Run: claude plugin update aiorch   (the host refuses to start sessions until they match)' -ForegroundColor Yellow
+    }
+} else {
+    Write-Host 'Skipped the plugin install — the "claude" CLI is not on PATH. Sessions will have NO role protocols.' -ForegroundColor Yellow
 }
-Copy-Item $appendHelper $commandsFolder -Force
-Write-Host 'Installed the channel append helper (channel-append.sh).' -ForegroundColor Green
+
+# THE OLD HAND-INSTALLED KIT IS REMOVED, and this is not tidying: a local command in
+# ~\.claude\commands WINS the slash word over a plugin skill (measured on CLI 2.1.263), so a
+# leftover supervisor.md would be read INSTEAD of the plugin while `claude plugin list` reported the
+# new version. Only the exact filenames this project ever shipped are touched.
+$stale = @('supervisor.md','implementer.md','reviewer.md','solo.md','general-supervisor.md',
+           'communicator.md','channel-append.sh','.installed-by.txt') |
+    ForEach-Object { Join-Path $commandsFolder $_ }
+$stale += @('supervisor-ledger-check.sh','run-to-the-end-check.sh','reviewer-readonly-check.sh',
+            'supervisor-awaiting-answer-check.sh','hook-log.sh','hook-behaviour-check.sh',
+            'watcher-behaviour-check.sh') |
+    ForEach-Object { Join-Path (Join-Path $claudeFolder 'hooks') $_ }
+$removed = 0
+foreach ($file in $stale) { if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force; $removed++ } }
+if ($removed -gt 0) { Write-Host "Removed $removed hand-installed kit file(s) that would have shadowed the plugin." -ForegroundColor Green }
 
 Copy-Item (Join-Path $kitFolder 'statusline\statusline.ps1') $statusLineTarget -Force
 Write-Host 'Installed status line script.' -ForegroundColor Green
