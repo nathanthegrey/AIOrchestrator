@@ -55,7 +55,14 @@ public class SessionRoleNamesTests
     public void RunnerAndResumeWords_RoundTrip()
     {
         Assert.Equal(SessionRunners.Print, SessionRunner_Names.Parse_OrNull(" PRINT "));
-        Assert.Null(SessionRunner_Names.Parse_OrNull("bg"));
+        Assert.Equal(SessionRunners.Stream, SessionRunner_Names.Parse_OrNull("stream"));
+
+        // 'bg' IS a word now, and this line used to assert it was not. It parses because the
+        // fallback ladder needs a name for the rung between stream and print even while that rung
+        // is unimplemented — what refuses it is Runner_Support (no role) and BgSettings_Rule (never
+        // with Remote Control on), not the spelling.
+        Assert.Equal(SessionRunners.Bg, SessionRunner_Names.Parse_OrNull("bg"));
+        Assert.Null(SessionRunner_Names.Parse_OrNull("headless"));
         Assert.Equal(ResumeModes.Fresh, ResumeMode_Names.Parse_OrNull("fresh"));
         Assert.Null(ResumeMode_Names.Parse_OrNull(null));
     }

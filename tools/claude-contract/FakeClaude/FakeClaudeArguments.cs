@@ -15,6 +15,10 @@ public sealed class FakeClaudeArguments
     public string? SessionId { get; private set; }
     public string? Name { get; private set; }
     public string? OutputFormat { get; private set; }
+    public string? InputFormat { get; private set; }
+    public bool Verbose { get; private set; }
+    public bool IncludeHookEvents { get; private set; }
+    public bool ReplayUserMessages { get; private set; }
     public string? Settings { get; private set; }
     public string? Model { get; private set; }
     public string? PermissionMode { get; private set; }
@@ -70,6 +74,18 @@ public sealed class FakeClaudeArguments
                     break;
                 case "--output-format":
                     parsed.OutputFormat = Take_Value(args, ref i);
+                    break;
+                case "--input-format":
+                    parsed.InputFormat = Take_Value(args, ref i);
+                    break;
+                case "--verbose":
+                    parsed.Verbose = true;
+                    break;
+                case "--include-hook-events":
+                    parsed.IncludeHookEvents = true;
+                    break;
+                case "--replay-user-messages":
+                    parsed.ReplayUserMessages = true;
                     break;
                 case "--settings":
                     parsed.Settings = Take_Value(args, ref i);

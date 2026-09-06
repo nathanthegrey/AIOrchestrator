@@ -22,6 +22,14 @@ public sealed class FakeClaudeTurn
     public IReadOnlyList<string> Hooks { get; init; } = FakeClaudeScenario.ALL_HOOKS;
     public JsonObject? ExtraJson { get; init; }
 
+    /// <summary>
+    /// The <c>rate_limit_info</c> a stream turn emits before its result, or null for no event.
+    /// Null is the COMMON case on purpose: measured over six turns and again over three, the real
+    /// CLI emitted one <c>rate_limit_event</c> per run, at the change — so a bridge that expects one
+    /// per turn is wrong, and the fake is what proves it.
+    /// </summary>
+    public JsonObject? RateLimit { get; init; }
+
     public int Resolve_ExitCode()
     {
         if (ExitCode != null)
@@ -46,6 +54,7 @@ public sealed class FakeClaudeTurn
             OmitFields = Read_Strings(node["omit_fields"]) ?? defaults.OmitFields,
             Hooks = Read_Strings(node["hooks"]) ?? defaults.Hooks,
             ExtraJson = node["extra_json"] as JsonObject ?? defaults.ExtraJson,
+            RateLimit = node["rate_limit"] as JsonObject ?? defaults.RateLimit,
         };
     }
 

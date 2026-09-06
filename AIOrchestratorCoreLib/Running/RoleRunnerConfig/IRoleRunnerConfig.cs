@@ -7,9 +7,17 @@ public interface IRoleRunnerConfig
     ResumeModes Resume { get; }
 
     /// <summary>
-    /// Passed as <c>--permission-mode</c> to a print-run session. Null keeps today's behaviour,
+    /// Passed as <c>--permission-mode</c> to a bridge-driven session. Null keeps today's behaviour,
     /// <c>--dangerously-skip-permissions</c> (owner directive: an unattended session must never
-    /// hang on a prompt). Only the print runner reads it in this stage.
+    /// hang on a prompt). The terminal runner does not read it.
     /// </summary>
     string? PermissionMode { get; }
+
+    /// <summary>
+    /// Passed as <c>--settings</c>: a settings FILE path, or inline JSON, exactly as the CLI takes
+    /// it. Null for every role that says nothing — except <c>bg</c>, where silence is filled in with
+    /// <see cref="BgSettings_Rule.CANONICAL_SETTINGS"/> by the loader, because that transport is
+    /// never run with Remote Control on.
+    /// </summary>
+    string? Settings { get; }
 }

@@ -7,7 +7,9 @@ internal sealed class RunnerConfigsModel(
     int maxConcurrentTurns,
     int maxConcurrentTurnsPerOrchestration,
     TimeSpan turnTimeout,
-    TimeSpan coalesceWindow) : IRunnerConfigs
+    TimeSpan coalesceWindow,
+    TimeSpan silenceLimit,
+    IReadOnlyList<string> rejections) : IRunnerConfigs
 {
     readonly IReadOnlyDictionary<SessionRoles, IRoleRunnerConfig> _roles = roles;
 
@@ -15,6 +17,8 @@ internal sealed class RunnerConfigsModel(
     public int MaxConcurrentTurnsPerOrchestration { get; } = maxConcurrentTurnsPerOrchestration;
     public TimeSpan TurnTimeout { get; } = turnTimeout;
     public TimeSpan CoalesceWindow { get; } = coalesceWindow;
+    public TimeSpan SilenceLimit { get; } = silenceLimit;
+    public IReadOnlyList<string> Rejections { get; } = rejections;
 
     public IRoleRunnerConfig Get_ForRole(SessionRoles role)
     {

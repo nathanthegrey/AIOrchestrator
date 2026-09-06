@@ -13,6 +13,11 @@ public static class SessionRunner_Factory
 
     public static ISessionRunner Create_Print(ISupervisionPaths paths, IOrchestrationLog log)
     {
-        return new PrintSessionRunnerModel(paths, log);
+        return new BridgeDrivenRunnerModel(SessionRunners.Print, paths, log);
+    }
+
+    public static ISessionRunner Create_Stream(ISupervisionPaths paths, IOrchestrationLog log)
+    {
+        return new BridgeDrivenRunnerModel(SessionRunners.Stream, paths, log);
     }
 }

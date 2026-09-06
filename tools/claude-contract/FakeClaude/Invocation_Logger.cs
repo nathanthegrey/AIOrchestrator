@@ -11,6 +11,21 @@ namespace FakeClaude;
 /// </summary>
 public static class Invocation_Logger
 {
+    /// <summary>
+    /// WHAT a log line records, under the key <c>line_kind</c>. Separate from the long-standing
+    /// <c>prompt_source</c> (which says argument-or-stdin and is asserted on by the existing suite):
+    /// one process can now write several lines, and the counter has to tell them apart.
+    /// </summary>
+    public const string KIND_INVOCATION = "invocation";
+
+    /// <summary>A persistent stream process starting: it carries the flags and claims the session id, but no prompt yet.</summary>
+    public const string KIND_STREAM_START = "stream-start";
+
+    /// <summary>One user message written on a live stream process's stdin. These are what a stream turn counter counts.</summary>
+    public const string KIND_STREAM_MESSAGE = "stream-message";
+
+    public const string LINE_KIND_KEY = "line_kind";
+
     static readonly string[] LOGGED_ENVIRONMENT_PREFIXES = ["AIORCH_", "CLAUDECODE", "CLAUDE_CODE_"];
 
     /// <summary>
@@ -41,6 +56,12 @@ public static class Invocation_Logger
         return false;
     }
 
+    /// <summary>Lines written before this field existed are invocations — the only kind there was.</summary>
+    static string Read_LineKind(JsonObject line)
+    {
+        return line[LINE_KIND_KEY]?.GetValue<string>() ?? KIND_INVOCATION;
+    }
+
     public static string Resolve_LogPath(string workingDirectory)
     {
         var envPath = Environment.GetEnvironmentVariable(FakeClaudeScenario.LOG_ENV);
@@ -48,18 +69,23 @@ public static class Invocation_Logger
         return !string.IsNullOrWhiteSpace(envPath) ? envPath : Path.Combine(workingDirectory, FakeClaudeScenario.LOG_FILE);
     }
 
-    /// <summary>Appends this invocation and returns its number, overall and among invocations with the same name.</summary>
-    public static (int Overall, int ForName) Append(string logPath, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory)
+    /// <summary>
+    /// Appends this invocation and returns its number, overall and among lines with the same name
+    /// AND the same <paramref name="lineKind"/>. The second qualifier is what lets a stream
+    /// process's MESSAGES be counted independently of the process starts that carry them — without
+    /// it, a restart under the fallback ladder would shift every later turn's scenario entry by one.
+    /// </summary>
+    public static (int Overall, int ForName) Append(string logPath, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind = KIND_INVOCATION)
     {
         // SHARED, AND CONCURRENTLY. The dispatcher allows ten turns at once and they share one
         // working directory, so two fakes write this file at the same moment — and
         // File.AppendAllText opens it FileShare.Read, which makes the second one die with an
         // IOException the suite would read as a turn error. Read and append under one exclusive
         // handle, retried, so the counters below are computed from what is really there.
-        return Append_Serialised(logPath, rawArgs, args, prompt, workingDirectory);
+        return Append_Serialised(logPath, rawArgs, args, prompt, workingDirectory, lineKind);
     }
 
-    static (int Overall, int ForName) Append_Serialised(string logPath, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory)
+    static (int Overall, int ForName) Append_Serialised(string logPath, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind)
     {
         var folder = Path.GetDirectoryName(logPath);
 
@@ -71,7 +97,7 @@ public static class Invocation_Logger
             try
             {
                 using var stream = new FileStream(logPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-                return Append_ToOpenLog(stream, rawArgs, args, prompt, workingDirectory);
+                return Append_ToOpenLog(stream, rawArgs, args, prompt, workingDirectory, lineKind);
             }
             catch (IOException) when (attempt < 200)
             {
@@ -80,7 +106,7 @@ public static class Invocation_Logger
         }
     }
 
-    static (int Overall, int ForName) Append_ToOpenLog(FileStream stream, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory)
+    static (int Overall, int ForName) Append_ToOpenLog(FileStream stream, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind)
     {
         using var reader = new StreamReader(stream, leaveOpen: true);
         var existing = reader.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -92,9 +118,10 @@ public static class Invocation_Logger
             if (line.Length == 0)
                 continue;
 
-            var previousName = (JsonNode.Parse(line) as JsonObject)?["name"]?.GetValue<string>();
+            if (JsonNode.Parse(line) is not JsonObject previous)
+                continue;
 
-            if (previousName == args.Name)
+            if (previous["name"]?.GetValue<string>() == args.Name && Read_LineKind(previous) == lineKind)
                 forName++;
         }
 
@@ -123,9 +150,12 @@ public static class Invocation_Logger
             ["args"] = arguments,
             ["prompt"] = prompt,
             ["prompt_source"] = args.PositionalPrompt != null ? "argument" : "stdin",
+            [LINE_KIND_KEY] = lineKind,
             ["cwd"] = workingDirectory,
             ["resume"] = args.Resume,
-            ["session_id"] = args.SessionId,
+            // A stream MESSAGE claims no session id: the claim belongs to the process start, and
+            // recording it twice would make Has_ClaimedSessionId refuse a legitimate first turn.
+            ["session_id"] = lineKind == KIND_STREAM_MESSAGE ? null : args.SessionId,
             ["settings"] = args.Settings,
             ["model"] = args.Model,
             ["permission_mode"] = args.PermissionMode,

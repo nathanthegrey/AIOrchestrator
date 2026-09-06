@@ -136,7 +136,7 @@ public static class BridgeEngine_Factory
 
         // The print dispatcher idles unless a role is configured `runner: print` — with a stock
         // config.json it discovers no registered session and its tick costs one Load_All.
-        var printTurns = PrintTurnDispatcher_Factory.Create(paths, store, configProvider, PrintTurnRunner_Factory.Create(ClaudeInvocation_Resolver.Resolve_ForThisOs()), log);
+        var printTurns = PrintTurnDispatcher_Factory.Create(paths, store, configProvider, ClaudeInvocation_Resolver.Resolve_ForThisOs(), log);
 
         // ONE LOAD, here, for the reason the cursor above is also loaded here: a primary
         // constructor's field initialisers cannot share a value between them, so loading inside the

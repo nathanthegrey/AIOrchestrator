@@ -29,7 +29,7 @@ public static class PrintSessionState_Store
         };
     }
 
-    /// <summary>The one channel this role's turns are triggered from (see <see cref="PrintRunner_Support"/>).</summary>
+    /// <summary>The one channel this role's turns are triggered from (see <see cref="Runner_Support"/>).</summary>
     public static string Resolve_ChannelFile(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
     {
         return role switch

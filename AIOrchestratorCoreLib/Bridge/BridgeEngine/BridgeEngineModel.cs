@@ -89,6 +89,9 @@ internal sealed class BridgeEngineModel(
 
     const int MIRROR_TICK_MILLISECONDS = 2000;
 
+    /// <summary>How far back /log reads to find the whole of the last turn. A turn is tens of events; this is generous.</summary>
+    const int TURN_LOG_SCAN_RECORDS = 400;
+
     /// <summary>
     /// Pause before re-sending a channel whose mirror send failed. The tailer re-emits an
     /// unconfirmed append on EVERY poll — that is what makes the retry possible — so without this
@@ -5443,6 +5446,10 @@ internal sealed class BridgeEngineModel(
                     {
                         await Resume_AllSessions_Async(client, message.MessageThreadId, cancellationToken);
                     }
+                    else if (command is "tail" or "log")
+                    {
+                        await Send_TurnLog_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
+                    }
                     else if (command != null && command.StartsWith("imp", StringComparison.Ordinal))
                     {
                         await Send_ImplementerPeek_Async(client, message.MessageThreadId, command, message.Text, cancellationToken);
@@ -5619,6 +5626,8 @@ internal sealed class BridgeEngineModel(
                     ("close", "End THIS orchestration — you confirm with a tap"),
                     ("diff", "What the repo and worktrees ACTUALLY contain"),
                     ("imp", "Latest traffic of an implementer (/imp 2)"),
+                    ("tail", "What a headless session is doing right now (/tail 1, /tail sup)"),
+                    ("log", "The whole of a headless session's last turn (/log 1, /log sup)"),
                     ("summary", "What is going on across all orchestrations"),
                     ("pending", "Open questions awaiting me"),
                     ("resume", "Wake EVERY session — use when the usage limit resets"),
@@ -8495,6 +8504,55 @@ internal sealed class BridgeEngineModel(
         }
 
         return deleted;
+    }
+
+    /// <summary>
+    /// /tail and /log — the WINDOW a bridge-driven session does not have. A print or stream session
+    /// runs headless, so "what is it doing" and "what happened in that turn" had no answer at all
+    /// except the entry it eventually wrote; the bridge records every turn beside the session's
+    /// state file and these two read it back. No model is involved, so both are free and instant.
+    /// </summary>
+    async Task Send_TurnLog_Async(ITelegramApiClient client, long? messageThreadId, string command, string rawText, CancellationToken cancellationToken)
+    {
+        var text = Build_TurnLogText(messageThreadId, command, rawText);
+
+        if (_configProvider.Get_Current().TelegramItalianLayer)
+            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
+
+        foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
+            await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
+    }
+
+    string Build_TurnLogText(long? messageThreadId, string command, string rawText)
+    {
+        if (messageThreadId == null)
+            return $"send /{command} inside an orchestration's topic (e.g. /{command} 1)";
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        if (session == null)
+            return "no orchestration is bound to this topic";
+
+        var argument = Read_CommandArgument(rawText);
+        var target = Running.TurnLog.TurnLog_Locator.Resolve_OrNull(session, argument);
+
+        if (target == null)
+            return Running.TurnLog.TurnLog_Locator.Describe_Choices(session, $"/{command}");
+
+        var logFile = Running.TurnLog.TurnLog_Locator.Get_LogFile(_paths, session.OrchId, target.Value);
+
+        return command == "log"
+            ? Running.TurnLog.TurnLog_Formatter.Format_LastTurn(target.Value.MemberId, Running.TurnLog.TurnLog_Store.Read_LastTurn(logFile, TURN_LOG_SCAN_RECORDS))
+            : Running.TurnLog.TurnLog_Formatter.Format_Tail(target.Value.MemberId, Running.TurnLog.TurnLog_Store.Read_LastRecords(logFile, Running.TurnLog.TurnLog_Formatter.DEFAULT_TAIL_EVENTS));
+    }
+
+    /// <summary>Everything after the command word: "/tail imp-2" -> "imp-2", "/tail" -> "".</summary>
+    static string Read_CommandArgument(string rawText)
+    {
+        var trimmed = rawText.Trim();
+        var space = trimmed.IndexOf(' ');
+
+        return space < 0 ? string.Empty : trimmed[(space + 1)..].Trim();
     }
 
     /// <summary>/imp 2 — the latest entries of one implementer's spoke, which never reaches Telegram otherwise.</summary>

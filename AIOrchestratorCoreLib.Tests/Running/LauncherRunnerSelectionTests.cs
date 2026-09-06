@@ -85,6 +85,46 @@ public class LauncherRunnerSelectionTests
     }
 
     [Fact]
+    public void StreamSupervisor_IsRegistered_NotSpawned_AndIsToldWhatWakesIt()
+    {
+        var (harness, spawner, launcher) = Build("supervisor:stream");
+        using (harness)
+        {
+            var logged = new List<string>();
+            harness.Log.EntryLogged += entry => logged.Add(entry.Message);
+
+            var session = launcher.Start_Orchestration("Repo", harness.RepoPath);
+
+            // The reviewer and the implementer still get windows; the supervisor does not.
+            Assert.Equal(2, spawner.Commands.Count);
+            Assert.True(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Supervisor, session.OrchId, "sup"));
+
+            var registered = harness.Read_State(SessionRoles.Supervisor, session.OrchId, "sup");
+            Assert.Equal(harness.Paths.Get_OwnerChannelFile(session.OrchId), registered.ChannelFilePath);
+
+            // The one thing about this stage a supervisor's owner has to know, said at registration.
+            Assert.Contains(logged, message => message.Contains("OWNER channel only", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void ABgRole_HasNoTransportHere_SoItIsSpawnedInATerminal_WithAWarning()
+    {
+        var (harness, spawner, launcher) = Build("implementer:bg");
+        using (harness)
+        {
+            var logged = new List<string>();
+            harness.Log.EntryLogged += entry => logged.Add(entry.Message);
+
+            var session = launcher.Start_Orchestration("Repo", harness.RepoPath);
+
+            Assert.Equal(3, spawner.Commands.Count);
+            Assert.False(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Implementer, session.OrchId, "imp-1"));
+            Assert.Contains(logged, message => message.Contains("runner: bg", StringComparison.Ordinal) && message.Contains("no role in this stage", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void PrintGeneral_IsRegisteredInItsHome()
     {
         var (harness, spawner, launcher) = Build("general");

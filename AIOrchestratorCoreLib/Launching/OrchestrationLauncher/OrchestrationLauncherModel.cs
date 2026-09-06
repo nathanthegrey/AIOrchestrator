@@ -17,8 +17,7 @@ internal sealed class OrchestrationLauncherModel(
     ISupervisionPaths paths,
     IOrchestratorConfigProvider configProvider,
     IOrchestrationSessionStore store,
-    ISessionRunner terminalRunner,
-    ISessionRunner printRunner,
+    IReadOnlyList<ISessionRunner> runners,
     IOrchestrationLog log) : IOrchestrationLauncher
 {
     /// <summary>The shell writes its pid file within ~1 s of starting; 40 × 500 ms is generous.</summary>
@@ -28,8 +27,13 @@ internal sealed class OrchestrationLauncherModel(
     readonly ISupervisionPaths _paths = paths;
     readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
-    readonly ISessionRunner _terminalRunner = terminalRunner;
-    readonly ISessionRunner _printRunner = printRunner;
+    /// <summary>
+    /// One entry per transport this app can start, keyed by its kind. A LIST rather than a
+    /// parameter per runner because the third one arrived and the fourth is already named in the
+    /// enum: a shape that has to be widened for each of them is a shape that gets one of them
+    /// forgotten at one of its three call sites.
+    /// </summary>
+    readonly IReadOnlyDictionary<SessionRunners, ISessionRunner> _runners = runners.ToDictionary(runner => runner.Kind);
     readonly IOrchestrationLog _log = log;
 
     public IOrchestrationSession Start_Orchestration(string repoName, string repoPath)
@@ -411,7 +415,7 @@ internal sealed class OrchestrationLauncherModel(
     {
         var runner = Resolve_Runner(launch.Role, launch.OrchId);
 
-        // A ROLE THAT LEFT PRINT MODE LEAVES ITS REGISTRATION BEHIND, and that file is what tells
+        // A ROLE THAT LEFT A BRIDGE-DRIVEN MODE LEAVES ITS REGISTRATION BEHIND, and that file is what tells
         // the dispatcher to keep running turns and the watchdog that a missing pid file is by
         // design. Spawning a terminal for this session is the moment we know it is no longer
         // print-run, so it is the moment to clear it — otherwise the member would have a window AND
@@ -425,21 +429,36 @@ internal sealed class OrchestrationLauncherModel(
 
     ISessionRunner Resolve_Runner(SessionRoles role, string orchId)
     {
-        if (_configProvider.Get_Current().Runners.Get_ForRole(role).Runner != SessionRunners.Print)
-            return _terminalRunner;
+        var configured = _configProvider.Get_Current().Runners.Get_ForRole(role).Runner;
 
-        if (PrintRunner_Support.Supports(role))
-            return _printRunner;
+        if (configured == SessionRunners.Terminal)
+            return Terminal_Runner();
 
-        _log.Log_Warning(orchId, PrintRunner_Support.Describe_Unsupported(role));
-        return _terminalRunner;
+        // Two questions, and both have to be yes: this stage must support the pairing AND the
+        // transport must actually be wired. `bg` is the case that makes the second one real — it is
+        // a word config.json accepts and nothing here can start.
+        if (Runner_Support.Supports(configured, role) && _runners.TryGetValue(configured, out var runner))
+            return runner;
+
+        _log.Log_Warning(orchId, Runner_Support.Describe_Unsupported(configured, role));
+        return Terminal_Runner();
+    }
+
+    ISessionRunner Terminal_Runner()
+    {
+        return _runners.TryGetValue(SessionRunners.Terminal, out var terminal)
+            ? terminal
+            : throw new Exception("No terminal runner was wired — every other runner falls back to it, so it is the one that cannot be optional");
     }
 
     static string Describe_Started(ISessionRunner runner)
     {
-        return runner.Kind == SessionRunners.Print
-            ? "registered as print-run (no window; one claude -p turn per inbound entry)"
-            : "spawned";
+        return runner.Kind switch
+        {
+            SessionRunners.Print => "registered as print-run (no window; one claude -p turn per inbound entry)",
+            SessionRunners.Stream => "registered as stream-run (no window; one living claude -p --input-format stream-json fed on stdin)",
+            _ => "spawned",
+        };
     }
 
     /// <summary>

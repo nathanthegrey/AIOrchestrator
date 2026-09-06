@@ -21,9 +21,15 @@ if (!parsed.Print)
     return 2;
 }
 
-if (parsed.OutputFormat != null && parsed.OutputFormat != "json" && parsed.OutputFormat != "text")
+if (parsed.OutputFormat != null && parsed.OutputFormat != "json" && parsed.OutputFormat != "text" && parsed.OutputFormat != StreamJson_Responder.OUTPUT_FORMAT)
 {
     Console.Error.WriteLine($"Error: --output-format must be one of text, json, stream-json (got '{parsed.OutputFormat}')");
+    return 1;
+}
+
+if (parsed.InputFormat != null && parsed.InputFormat != "text" && parsed.InputFormat != StreamJson_Responder.INPUT_FORMAT)
+{
+    Console.Error.WriteLine($"Error: --input-format must be one of text, stream-json (got '{parsed.InputFormat}')");
     return 1;
 }
 
@@ -45,6 +51,11 @@ if (parsed.Unknown.Count > 0)
     Console.Error.WriteLine($"error: unknown option '{parsed.Unknown[0]}'");
     return 1;
 }
+
+// THE PERSISTENT SHAPE — one process, many turns, messages on stdin. Everything below this line
+// is the transient one: it reads ONE prompt, answers it and exits.
+if (parsed.InputFormat == StreamJson_Responder.INPUT_FORMAT)
+    return StreamJson_Responder.Run(parsed, rawArgs, Directory.GetCurrentDirectory());
 
 var prompt = parsed.PositionalPrompt ?? Read_StdinPrompt();
 
@@ -73,7 +84,7 @@ var (overall, forName) = Invocation_Logger.Append(logPath, rawArgs, parsed, prom
 var turn = scenario.Resolve_Turn(parsed.Name, parsed.Name != null && scenario.TurnsByName.ContainsKey(parsed.Name) ? forName : overall);
 
 var sessionId = parsed.SessionId ?? parsed.Resume ?? Guid.NewGuid().ToString();
-var model = Resolve_ModelId(parsed.Model);
+var model = Model_Ids.Resolve(parsed.Model);
 
 Simulate_Hooks(scenario, turn, workingDirectory, parsed.Resume != null);
 
@@ -101,17 +112,6 @@ static string Read_StdinPrompt()
     // The real CLI waits 3 s for stdin and says so; the fake says so and does not wait.
     Console.Error.WriteLine("Warning: no stdin data received in 3s, proceeding without it (FakeClaude: stdin is a terminal)");
     return string.Empty;
-}
-
-static string Resolve_ModelId(string? model)
-{
-    return (model ?? "haiku").ToLowerInvariant() switch
-    {
-        "haiku" => "claude-haiku-4-5-20251001",
-        "sonnet" => "claude-sonnet-4-5-20250929",
-        "opus" => "claude-opus-4-1-20250805",
-        var other => other,
-    };
 }
 
 /// <summary>Appends one line per hook event, in the format the probe's hook.sh writes (MEASUREMENTS.md §M1).</summary>

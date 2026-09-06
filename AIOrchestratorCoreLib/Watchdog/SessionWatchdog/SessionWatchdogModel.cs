@@ -100,8 +100,13 @@ internal sealed class SessionWatchdogModel(
     /// </summary>
     bool Is_PrintRun(SessionRoles role, string orchId, string memberId)
     {
-        return _configProvider.Get_Current().Runners.Get_ForRole(role).Runner == SessionRunners.Print
-            && PrintRunner_Support.Supports(role)
+        var runner = _configProvider.Get_Current().Runners.Get_ForRole(role).Runner;
+
+        // A STREAM session has a real process but still no pid FILE — the file is written by a
+        // spawned shell, and there is none. Both bridge-driven runners are exempt for the same
+        // reason and through the same question, so a third one cannot be forgotten here.
+        return Runner_Support.Is_BridgeDriven(runner)
+            && Runner_Support.Supports(runner, role)
             && PrintSessionState_Store.Exists(_paths, role, orchId, memberId);
     }
 
@@ -147,6 +152,14 @@ internal sealed class SessionWatchdogModel(
 
     void Check_OrchestrationSupervisor(Sessions.OrchestrationSession.IOrchestrationSession session)
     {
+        // A BRIDGE-DRIVEN supervisor has no pid file BY DESIGN — the same exemption the general
+        // supervisor and the members have had since the print runner landed, and it was missing here
+        // for the honest reason that a supervisor could not be bridge-driven until the stream runner
+        // existed. Without it a perfectly healthy stream supervisor is "respawned" every tick past
+        // the 90 s grace, which also drives the crash-loop counter into an alert on the owner's phone.
+        if (Is_PrintRun(SessionRoles.Supervisor, session.OrchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID))
+            return;
+
         if (Is_WithinSpawnGrace(session.SupervisorSpawnedUtc))
             return;
 

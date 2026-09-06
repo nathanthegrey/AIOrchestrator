@@ -9,7 +9,10 @@ namespace AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 
 public static class OrchestrationLauncher_Factory
 {
-    /// <summary>The production shape: the terminal runner wraps the spawner, the print runner registers against the paths.</summary>
+    /// <summary>
+    /// The production shape: the terminal runner wraps the spawner; the two bridge-driven ones only
+    /// register a state file, which is why they are built from the same two dependencies.
+    /// </summary>
     public static IOrchestrationLauncher Create(
         ISupervisionPaths paths,
         IOrchestratorConfigProvider configProvider,
@@ -17,17 +20,21 @@ public static class OrchestrationLauncher_Factory
         ISessionSpawner spawner,
         IOrchestrationLog log)
     {
-        return Create(paths, configProvider, store, SessionRunner_Factory.Create_Terminal(spawner), SessionRunner_Factory.Create_Print(paths, log), log);
+        return Create(paths, configProvider, store,
+        [
+            SessionRunner_Factory.Create_Terminal(spawner),
+            SessionRunner_Factory.Create_Print(paths, log),
+            SessionRunner_Factory.Create_Stream(paths, log),
+        ], log);
     }
 
     public static IOrchestrationLauncher Create(
         ISupervisionPaths paths,
         IOrchestratorConfigProvider configProvider,
         IOrchestrationSessionStore store,
-        ISessionRunner terminalRunner,
-        ISessionRunner printRunner,
+        IReadOnlyList<ISessionRunner> runners,
         IOrchestrationLog log)
     {
-        return new OrchestrationLauncherModel(paths, configProvider, store, terminalRunner, printRunner, log);
+        return new OrchestrationLauncherModel(paths, configProvider, store, runners, log);
     }
 }
