@@ -6,7 +6,7 @@ namespace AIOrchestratorCoreLib.Kit;
 /// <summary>
 /// Reads what a Claude home says about an installed plugin, from the two files that hold the answer:
 ///
-///   plugins/installed_plugins.json   version + installPath, per scope
+///   plugins/installed_plugins.json   version + installPath + gitCommitSha, per scope
 ///   settings.json  -> enabledPlugins  whether it is switched on
 ///
 /// FILES, NOT `claude plugin list --json`. Shelling out would make the host's startup depend on a
@@ -32,6 +32,7 @@ public static class InstalledPlugin_Reader
 
         string? version = null;
         string? installPath = null;
+        string? commitSha = null;
 
         if (File.Exists(installedFile))
         {
@@ -55,6 +56,12 @@ public static class InstalledPlugin_Reader
 
                 version = Read_String_OrNull(first, "version");
                 installPath = Read_String_OrNull(first, "installPath");
+
+                // MEASURED 2026-09-07 on CLI 2.1.263: this field is present even for a plugin served
+                // from a LOCAL DIRECTORY marketplace — it is the HEAD of the git repository the
+                // marketplace sits in, at install time. `claude plugin list --json` does NOT expose
+                // it, which is why this class reads the files rather than shelling out.
+                commitSha = Read_String_OrNull(first, "gitCommitSha");
             }
             catch (Exception ex)
             {
@@ -73,11 +80,11 @@ public static class InstalledPlugin_Reader
             }
             catch (Exception ex)
             {
-                return new InstalledPluginReading(version, installPath, false, $"{settingsFile} could not be read: {ex.Message}");
+                return new InstalledPluginReading(version, installPath, false, $"{settingsFile} could not be read: {ex.Message}", commitSha);
             }
         }
 
-        return new InstalledPluginReading(version, installPath, enabled, null);
+        return new InstalledPluginReading(version, installPath, enabled, null, commitSha);
     }
 
     /// <summary>

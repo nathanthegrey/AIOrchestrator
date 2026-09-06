@@ -131,14 +131,24 @@ public static class KitAssets_Bootstrapper
     {
         var reading = InstalledPlugin_Reader.Read(claudeHomeFolder, KitPlugin.ID);
         var shadowing = LegacyKit_Remover.Find_ShadowingCommands(claudeHomeFolder);
-        var verdict = PluginVersion_Verifier.Decide(reading, KitPlugin.EXPECTED_VERSION, shadowing);
-        var refusal = PluginVersion_Verifier.Describe(verdict, reading, KitPlugin.EXPECTED_VERSION, KitPlugin.ID, shadowing);
+        var buildCommit = Build.BuildCommit_Reader.Read_RunningBuildCommit_OrNull();
+
+        var verdict = PluginVersion_Verifier.Decide(reading, KitPlugin.EXPECTED_VERSION, shadowing, buildCommit);
+        var refusal = PluginVersion_Verifier.Describe(verdict, reading, KitPlugin.EXPECTED_VERSION, KitPlugin.ID, shadowing, buildCommit);
 
         gate?.Record(verdict, refusal);
 
         if (refusal == null)
         {
-            log.Log_Info("", $"Kit check OK — {KitPlugin.ID} {reading.Version} at {reading.InstallPath}");
+            // THE OK LINE NAMES THE COMMIT, or names what it could not compare. "Kit check OK" over a
+            // cache holding a different commit is the exact sentence that cost the 2026-09-07 evening
+            // on the VPS, and it was true of the only thing it had checked: the number.
+            var content =
+                buildCommit == null ? "content NOT VERIFIED — this build carries no commit stamp"
+                : reading.CommitSha == null ? $"content NOT VERIFIED — the install record has no gitCommitSha (this host is {buildCommit[..7]})"
+                : $"content verified — commit {reading.CommitSha[..Math.Min(7, reading.CommitSha.Length)]}";
+
+            log.Log_Info("", $"Kit check OK — {KitPlugin.ID} {reading.Version} at {reading.InstallPath} · {content}");
             return;
         }
 

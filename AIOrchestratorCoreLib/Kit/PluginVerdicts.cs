@@ -19,6 +19,18 @@ public enum PluginVerdicts
     /// <summary>Installed at a version other than the one this host expects.</summary>
     VersionMismatch,
 
+    /// <summary>
+    /// THE RIGHT NUMBER OVER THE WRONG TEXT. The installed copy carries the version this host
+    /// expects and was taken from a DIFFERENT COMMIT than the one this host was built from, so its
+    /// role protocols are not the ones under test here.
+    ///
+    /// It is a separate verdict from <see cref="VersionMismatch"/> because the fix is different and
+    /// the surprise is total: `claude plugin update` compares the version string and reports "already
+    /// at the latest version" (measured, CLI 2.1.263), so the operator has to be told to REINSTALL
+    /// rather than update, and told that updating will not work.
+    /// </summary>
+    ContentMismatch,
+
     /// <summary>Installed at the right version, but switched off — the sessions would load nothing.</summary>
     Disabled,
 
