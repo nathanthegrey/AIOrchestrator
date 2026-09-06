@@ -90,6 +90,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         var deadline = timeout;
         var bootCost = 0.0;
         var bootElapsed = TimeSpan.Zero;
+        ITurnResult? bootResult = null;
 
         if (booted)
         {
@@ -103,12 +104,25 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
 
             bootCost = boot.Result.TotalCostUsd ?? 0;
             bootElapsed = boot.Result.Elapsed;
+            bootResult = boot.Result;
             deadline -= boot.Result.Elapsed;
 
             _log.Log_Info(state.OrchId, $"Stream session '{state.MemberId}' booted with '{bootPrompt}' in {boot.Result.Elapsed.TotalSeconds:F1} s");
 
             if (deadline <= TimeSpan.Zero)
                 return TurnResult_Parser.Parse(-1, timedOut: true, string.Empty, "the boot turn used the whole timeout", bootElapsed);
+        }
+
+        // THE BOOT ALONE IS THE WHOLE TURN when nothing is pending — the dispatcher's boot turn, run so
+        // the session that owns the owner channel greets and its Telegram topic comes into existence
+        // before anybody has said anything to it. The role command has just told it to read its channels
+        // and file that greeting, and its answer to THAT is the turn's answer. Sending a second message
+        // as well would hand the session a prompt describing no traffic and buy a second entry saying
+        // nothing — the cost of one more model turn for the privilege of being confusing.
+        if (bootResult != null && pending.Count == 0)
+        {
+            Clear_StructuralFailures(key);
+            return bootResult;
         }
 
         var prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
