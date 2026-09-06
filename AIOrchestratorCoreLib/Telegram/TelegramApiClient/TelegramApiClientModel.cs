@@ -290,15 +290,6 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         {
             ["chat_id"] = _supergroupChatId,
             ["text"] = text,
-            // SILENT, because this message exists only to be deleted. Telegram has no way to install a
-            // reply keyboard without sending something, so the caller sends a carrier and removes it
-            // immediately — but the push notification fires when Telegram ACCEPTS the message, not when
-            // the owner could have read it. The owner therefore got a notification, once per app
-            // launch, for a message that was already gone by the time they opened the app: measured on
-            // the owner's phone, 2026-09-06, during the Linux VPS install, where ten restarts in an
-            // hour made a rare annoyance into a constant one. The bar itself is unaffected — it is
-            // chat-level state, and silence changes only whether the carrier buzzes on its way past.
-            ["disable_notification"] = true,
             ["reply_markup"] = new JsonObject
             {
                 ["keyboard"] = rows,
