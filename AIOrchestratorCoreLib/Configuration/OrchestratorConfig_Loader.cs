@@ -1,7 +1,9 @@
 using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
+using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Configuration;
@@ -36,7 +38,23 @@ public static class OrchestratorConfig_Loader
             Get_String_OrNull(configRoot, "voiceTranscribeCommand"),
             Get_Long_OrNull(configRoot, "orchestrationTokenBudget"),
             RunnerConfigs_Json.Parse(configRoot),
-            Parse_PlanBackend_OrNull(configRoot));
+            Parse_PlanBackend_OrNull(configRoot),
+            Parse_Guardrails(configRoot));
+    }
+
+    /// <summary>
+    /// A MISSING key and an EMPTY value are deliberately different here: no "highRiskPatterns" key
+    /// means the owner never said, and gets the default list; an explicitly empty array means they
+    /// said "nothing is high risk", which is theirs to say. Collapsing the two would make the guard
+    /// impossible to turn off, or impossible to keep.
+    /// </summary>
+    static IGuardrailSettings Parse_Guardrails(JsonObject? configRoot)
+    {
+        return GuardrailSettings_Factory.Create(
+            Get_StringList_OrNull(configRoot, GUARDRAIL_HIGH_RISK_PATTERNS),
+            Get_Int_OrNull(configRoot, GUARDRAIL_HIGH_RISK_CODE_EXPIRY_MINUTES),
+            Get_Double_OrNull(configRoot, GUARDRAIL_DISPATCH_PAUSE_THRESHOLD_PERCENT),
+            Get_Int_OrNull(configRoot, GUARDRAIL_BUTTON_EXPIRY_MINUTES));
     }
 
     /// <summary>
@@ -47,7 +65,22 @@ public static class OrchestratorConfig_Loader
     /// build a fresh object and write it, so every key it did not know about was deleted the first
     /// time anything saved — the Settings window, the repo list, the /italian toggle. A hand-edited
     /// key (planBackend is the first, and will not be the last) survived exactly until the owner next
-    /// pressed a button. Unknown keys are now carried through untouched.
+    /// pressed a button. Unknown keys are now carried through untouched. Agents edit config.json at
+    /// runtime, which is exactly why <see cref="ConfigRepos_Reorderer"/> was already written to
+    /// operate on the raw tree.
+    /// </para>
+    /// <para>
+    /// TWO BRANCHES FOUND THIS INDEPENDENTLY, which is worth recording: `stage/5-plan-backend` and
+    /// `stage/3-durable-bridge` each hit it and each fixed it, by different mechanisms. This is the
+    /// stage-3 one, kept because it is strictly the more complete of the two — the other read the
+    /// existing file with a bare `Read_JsonObject_OrNull(...) ?? []`, which THROWS on a config.json
+    /// that will not parse, and wrote with a plain `File.WriteAllText`.
+    /// </para>
+    /// <para>
+    /// ATOMIC, for the reason <see cref="Atomic_FileWriter"/> exists: a truncate-then-write that is
+    /// interrupted leaves a zero-length config.json, and a zero-length config.json is an app with no
+    /// repos, no chat id and no owner id — Telegram-blind, with the real settings gone rather than
+    /// merely unsaved.
     /// </para>
     /// </summary>
     public static void Save(IOrchestratorConfig config, ISupervisionPaths paths)
@@ -64,40 +97,56 @@ public static class OrchestratorConfig_Loader
             });
         }
 
-        // The file as it stands, so keys nobody here knows about are kept.
-        var configRoot = Read_JsonObject_OrNull(paths.ConfigFile) ?? [];
+        var configRoot = Read_JsonObject_ForEditing(paths.ConfigFile);
 
-        foreach (var (key, value) in new JsonObject
-        {
-            ["repos"] = reposArray,
-            ["supervisorModel"] = config.SupervisorModel,
-            ["implementerModel"] = config.ImplementerModel,
-            ["generalSupervisorModel"] = config.GeneralSupervisorModel,
-            ["communicatorModel"] = config.CommunicatorModel,
-            ["telegramSupergroupChatId"] = config.TelegramSupergroupChatId,
-            ["telegramOwnerUserId"] = config.TelegramOwnerUserId,
-            ["telegramItalianLayer"] = config.TelegramItalianLayer,
-            ["telegramStatusScreenshots"] = config.TelegramStatusScreenshots,
-            ["voiceTranscribeCommand"] = config.VoiceTranscribeCommand,
-            ["orchestrationTokenBudget"] = config.OrchestrationTokenBudget,
-
-            // planBackend IS DELIBERATELY ABSENT from this list. It is hand-edited, no window builds
-            // one, and IOrchestratorConfig.PlanBackend is null in every config the app constructs
-            // itself — writing it would mean erasing the owner's own key on the next save.
-        }.ToList())
-        {
-            configRoot[key] = value?.DeepClone();
-        }
+        configRoot["repos"] = reposArray;
+        configRoot["supervisorModel"] = config.SupervisorModel;
+        configRoot["implementerModel"] = config.ImplementerModel;
+        configRoot["generalSupervisorModel"] = config.GeneralSupervisorModel;
+        configRoot["communicatorModel"] = config.CommunicatorModel;
+        configRoot["telegramSupergroupChatId"] = config.TelegramSupergroupChatId;
+        configRoot["telegramOwnerUserId"] = config.TelegramOwnerUserId;
+        configRoot["telegramItalianLayer"] = config.TelegramItalianLayer;
+        configRoot["telegramStatusScreenshots"] = config.TelegramStatusScreenshots;
+        configRoot["voiceTranscribeCommand"] = config.VoiceTranscribeCommand;
+        configRoot["orchestrationTokenBudget"] = config.OrchestrationTokenBudget;
 
         RunnerConfigs_Json.Write(configRoot, config.Runners);
 
-        File.WriteAllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));
+        Atomic_FileWriter.Write_AllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));
 
-        var secretsRoot = Read_JsonObject_OrNull(paths.SecretsFile) ?? [];
+        // planBackend AND THE GUARDRAIL KEYS ARE DELIBERATELY ABSENT from the writes above, for the
+        // same reason from two directions. planBackend is hand-edited, no window builds one, and
+        // IOrchestratorConfig.PlanBackend is null in every config the app constructs itself — writing
+        // it would erase the owner's own key on the next save. The guardrail keys have no UI and no
+        // command that changes them, so the only thing a save could do is materialise this build's
+        // defaults into the file as if the owner had chosen them, freezing a default that is meant to
+        // move when the app is updated. Both are read; neither is owned.
+
+        var secretsRoot = Read_JsonObject_ForEditing(paths.SecretsFile);
 
         secretsRoot["telegramBotToken"] = config.TelegramBotToken;
 
-        File.WriteAllText(paths.SecretsFile, secretsRoot.ToJsonString(JsonWriting.INDENTED));
+        Atomic_FileWriter.Write_AllText(paths.SecretsFile, secretsRoot.ToJsonString(JsonWriting.INDENTED));
+    }
+
+    /// <summary>
+    /// The tree a save edits: the file's own object when it can be read, an empty one when it
+    /// cannot. A file that will not parse has no unknown keys worth preserving — they are already
+    /// unreachable — and refusing to save over it would strand the owner with a corrupt config and
+    /// no way to fix it from the app.
+    /// </summary>
+    static JsonObject Read_JsonObject_ForEditing(string filePath)
+    {
+        try
+        {
+            return Read_JsonObject_OrNull(filePath) ?? [];
+        }
+        catch
+        {
+            // Broad by intent: malformed, truncated, or not an object at all are one situation here.
+            return [];
+        }
     }
 
     static JsonObject? Read_JsonObject_OrNull(string filePath)
@@ -171,6 +220,13 @@ public static class OrchestratorConfig_Loader
         return node.GetValue<string?>();
     }
 
+    /// <summary>
+    /// TOLERATES A VALUE OF THE WRONG TYPE, which it did not until this stage made that reachable.
+    /// <c>JsonNode.GetValue&lt;long&gt;()</c> THROWS for a JSON string, and nothing here caught it —
+    /// so a single typo in config.json (<c>"buttonExpiryMinutes": "720"</c>, quotes and all) took
+    /// the whole load down, and the load is on the app's startup path. A typo must cost the DEFAULT
+    /// for that one setting, never the app.
+    /// </summary>
     static long? Get_Long_OrNull(JsonObject? root, string key)
     {
         if (root == null)
@@ -180,9 +236,87 @@ public static class OrchestratorConfig_Loader
         if (node == null)
             return null;
 
-        return node.GetValue<long>();
+        try
+        {
+            return node.GetValue<long>();
+        }
+        catch
+        {
+            // Broad by intent: every way a value fails to be a number is the same situation here.
+            return null;
+        }
     }
 
+    /// <summary>The config keys behind <see cref="IGuardrailSettings"/>, named once.</summary>
+    const string GUARDRAIL_HIGH_RISK_PATTERNS = "highRiskPatterns";
+    const string GUARDRAIL_HIGH_RISK_CODE_EXPIRY_MINUTES = "highRiskCodeExpiryMinutes";
+    const string GUARDRAIL_DISPATCH_PAUSE_THRESHOLD_PERCENT = "dispatchPauseThresholdPercent";
+    const string GUARDRAIL_BUTTON_EXPIRY_MINUTES = "buttonExpiryMinutes";
+
+    /// <summary>Null when the key is absent; an empty list when it is present and empty.</summary>
+    static IReadOnlyList<string>? Get_StringList_OrNull(JsonObject? root, string key)
+    {
+        if (root?[key] is not JsonArray array)
+            return null;
+
+        List<string> values = [];
+
+        foreach (var node in array)
+        {
+            // PER ELEMENT, and unguarded this was the same defect the numeric readers below were
+            // just fixed for — one non-string entry took the whole load down, and the load is on the
+            // app's startup path. `"highRiskPatterns": ["push", "deploy", 3]` is a plausible
+            // hand-edit; it must cost that entry, not the app.
+            string? value;
+
+            try
+            {
+                value = node?.GetValue<string>();
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(value))
+                values.Add(value);
+        }
+
+        return values;
+    }
+
+    static int? Get_Int_OrNull(JsonObject? root, string key)
+    {
+        var value = Get_Long_OrNull(root, key);
+
+        if (value == null || value.Value > int.MaxValue || value.Value < int.MinValue)
+            return null;
+
+        return (int)value.Value;
+    }
+
+    static double? Get_Double_OrNull(JsonObject? root, string key)
+    {
+        var node = root?[key];
+
+        if (node == null)
+            return null;
+
+        try
+        {
+            return node.GetValue<double>();
+        }
+        catch
+        {
+            // A non-numeric value is a typo, and the factory's default is the only safe reading.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Guarded for the reason the numeric readers are: a value of the wrong type is a typo in one
+    /// setting, and a typo must never be able to stop the app from starting.
+    /// </summary>
     static bool? Get_Bool_OrNull(JsonObject? root, string key)
     {
         if (root == null)
@@ -192,6 +326,13 @@ public static class OrchestratorConfig_Loader
         if (node == null)
             return null;
 
-        return node.GetValue<bool>();
+        try
+        {
+            return node.GetValue<bool>();
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

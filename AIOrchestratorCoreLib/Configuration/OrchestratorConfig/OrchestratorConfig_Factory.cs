@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
@@ -29,18 +30,19 @@ public static class OrchestratorConfig_Factory
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
 
-        // OPTIONAL, AND ONLY THIS ONE. Every other parameter is required because every caller knows
-        // its value; this key is hand-edited in config.json and no window has a field for it, so the
-        // Settings window builds a config without one — and the loader, which is the only reader that
-        // can have one, passes it explicitly. Save() never serialises the key, so a config built
-        // without it cannot erase it from disk.
-        PlanBackendSettings? planBackend = null)
+        // OPTIONAL, AND ONLY THESE TWO. Every other parameter is required because every caller knows
+        // its value; these keys are hand-edited in config.json and no window has a field for either,
+        // so the Settings window builds a config without them — and the loader, which is the only
+        // reader that can have them, passes them explicitly. Save() never serialises either key, so a
+        // config built without them cannot erase them from disk.
+        PlanBackendSettings? planBackend = null,
+        IGuardrailSettings? guardrails = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken, telegramItalianLayer,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
-            RunnerConfigs_Factory.Create_Default(), planBackend);
+            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails);
     }
 
     /// <summary>
@@ -62,7 +64,8 @@ public static class OrchestratorConfig_Factory
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
         IRunnerConfigs runners,
-        PlanBackendSettings? planBackend = null)
+        PlanBackendSettings? planBackend = null,
+        IGuardrailSettings? guardrails = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -78,7 +81,13 @@ public static class OrchestratorConfig_Factory
             voiceTranscribeCommand,
             orchestrationTokenBudget,
             runners,
-            planBackend);
+            planBackend,
+
+            // DEFAULTED, NEVER NULL — and this is where it differs from planBackend above, whose null
+            // IS its meaning. Every caller that predates this parameter, including the app's own
+            // settings window, keeps compiling and keeps getting the guarded behaviour, which is the
+            // only direction an optional guard is allowed to default in.
+            guardrails ?? GuardrailSettings_Factory.Create_Default());
     }
 
     public static IOrchestratorConfig Create_Empty()
@@ -106,7 +115,8 @@ public static class OrchestratorConfig_Factory
             source.VoiceTranscribeCommand,
             source.OrchestrationTokenBudget,
             source.Runners,
-            source.PlanBackend);
+            source.PlanBackend,
+            source.Guardrails);
     }
 
     /// <summary>
@@ -130,6 +140,7 @@ public static class OrchestratorConfig_Factory
             source.VoiceTranscribeCommand,
             source.OrchestrationTokenBudget,
             source.Runners,
-            source.PlanBackend);
+            source.PlanBackend,
+            source.Guardrails);
     }
 }

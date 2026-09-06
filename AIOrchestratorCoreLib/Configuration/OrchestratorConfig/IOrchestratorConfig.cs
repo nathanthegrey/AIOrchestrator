@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
@@ -57,11 +58,20 @@ public interface IOrchestratorConfig
     /// terminal everywhere, so an existing config.json changes nothing.
     /// </summary>
     IRunnerConfigs Runners { get; }
+
+    /// <summary>
     /// Which plan backend this machine runs. Null — the ordinary case — means PLAN.md alone, exactly
     /// as before the seam existed. Hand-edited in config.json; no window writes it, which is why
     /// <see cref="OrchestratorConfig_Loader"/> never serialises the key back out.
     /// </summary>
     PlanBackendSettings? PlanBackend { get; }
+
+    /// <summary>
+    /// What makes an irreversible decision hard to take by accident, and what stops the dispatcher
+    /// spending an allowance it is about to exhaust. Never null: an absent config.json yields the
+    /// guarded defaults, because a guard nobody configured must still be a guard.
+    /// </summary>
+    IGuardrailSettings Guardrails { get; }
 
     bool Is_TelegramConfigured();
 }

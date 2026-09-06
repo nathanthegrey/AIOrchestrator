@@ -5,9 +5,28 @@ namespace AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 
 internal sealed class TelegramApiClientModel : ITelegramApiClient
 {
+    /// <summary>
+    /// How many times a 429 is honoured before the failure is handed to the caller. Telegram answers
+    /// a rate limit with a wait, not a refusal, so retrying is the correct reading — but it has to
+    /// TERMINATE: an endpoint that answers 429 for ever would otherwise hold a mirror tick open
+    /// indefinitely, which is the shape of every unbounded-retry defect this file has already paid
+    /// for. Two attempts after the first cover a burst; a third means the limit is not a burst.
+    /// </summary>
+    const int RATE_LIMIT_RETRIES = 2;
+
     readonly HttpClient _httpClient;
     readonly string _botToken;
     readonly long _supergroupChatId;
+
+    /// <summary>
+    /// THE ONE PLACE THE OUTBOUND RATE LIMIT LIVES. Guarded by its own lock because sends come from
+    /// both loops — the mirror tick and the inbound batch — and a bucket read-modify-written from
+    /// two threads hands the same token out twice, which is the burst it exists to prevent.
+    /// See <see cref="TokenBucket_Gate"/> for why a bucket and not a delay.
+    /// </summary>
+    readonly Lock _bucketLock = new();
+    double _bucketTokens = TokenBucket_Gate.DEFAULT_CAPACITY;
+    DateTime _bucketRefilledUtc = DateTime.UtcNow;
 
     public TelegramApiClientModel(string botToken, long supergroupChatId)
     {
@@ -119,7 +138,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
-        var responseJson = await Post_Async("sendMessage", payload, cancellationToken);
+        var responseJson = await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true);
 
         return Read_MessageId_OrNull(responseJson);
     }
@@ -136,7 +155,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
-        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken));
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
     }
 
     public async Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
@@ -250,7 +269,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             payload["message_thread_id"] = messageThreadId.Value;
 
         // The id is needed later: on a tap this message is rewritten to show the chosen option.
-        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken));
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
     }
 
     public async Task<long?> Send_MessageWithReplyKeyboard_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<string>> keyboardRows, CancellationToken cancellationToken)
@@ -290,7 +309,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         // The id comes back so the PREVIOUS installer message can be deleted on the next startup:
         // the keyboard is chat-level state that outlives its carrier message, but the carrier itself
         // is a message like any other and would otherwise pile up one per app launch.
-        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken));
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
     }
 
     public async Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
@@ -336,6 +355,12 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
 
         var photoBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
         form.Add(new ByteArrayContent(photoBytes), "photo", Path.GetFileName(filePath));
+
+        // METERED LIKE ANY OTHER MESSAGE. sendPhoto builds its own multipart request and therefore
+        // does not pass through Post_Async — which is exactly how a message-creating call ends up
+        // outside the one place the rate limit lives. It creates a message in the group, so it
+        // spends the group's allowance whether or not it shares that code path.
+        await Wait_ForBucket_Async(cancellationToken);
 
         var response = await _httpClient.PostAsync(Build_MethodUrl("sendPhoto"), form, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -451,15 +476,118 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         return await response.Content.ReadAsByteArrayAsync(cancellationToken);
     }
 
-    async Task<string> Post_Async(string method, JsonObject payload, CancellationToken cancellationToken)
+    /// <summary>
+    /// Every Telegram call goes through here, which is what makes the rate limit expressible once.
+    ///
+    /// <para>
+    /// <paramref name="rateLimited"/> is OPT-IN, and what opts in is exactly the set of calls that
+    /// CREATE A MESSAGE IN THE GROUP — the thing Telegram's 20-a-minute ceiling actually counts.
+    /// Metering everything was the first shape of this and it was wrong in both directions: it spent
+    /// the message allowance on edits and deletes, which do not consume it, and it queued
+    /// <c>answerCallbackQuery</c> behind the mirror's backlog — a call Telegram gives ten seconds
+    /// before the button spinner hangs on the owner's phone. Edits and deletes have their own, far
+    /// higher limits, and the 429 handling below is what covers them.
+    /// </para>
+    /// <para>
+    /// A 429 IS HONOURED WITH TELEGRAM'S OWN NUMBER, not ours. The bucket is a guess at a limit we
+    /// cannot observe; <c>retry_after</c> is the limit answering. Retries are bounded — see
+    /// <see cref="RATE_LIMIT_RETRIES"/> — and a request that still fails is thrown exactly as
+    /// before, so every caller's existing classification of the failure is unchanged.
+    /// </para>
+    /// </summary>
+    async Task<string> Post_Async(string method, JsonObject payload, CancellationToken cancellationToken, bool rateLimited = false)
     {
-        var response = await _httpClient.PostAsJsonAsync(Build_MethodUrl(method), payload, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        for (var attempt = 0; ; attempt++)
+        {
+            if (rateLimited)
+                await Wait_ForBucket_Async(cancellationToken);
 
-        if (!response.IsSuccessStatusCode)
-            throw new TelegramApiException((int)response.StatusCode, $"Telegram '{method}' failed with HTTP {(int)response.StatusCode}: {body}");
+            var response = await _httpClient.PostAsJsonAsync(Build_MethodUrl(method), payload, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
-        return body;
+            if (response.IsSuccessStatusCode)
+                return body;
+
+            var statusCode = (int)response.StatusCode;
+            var retryAfterSeconds = Read_RetryAfterSeconds_OrNull(body);
+
+            // RETRIED ONLY FOR THE CALLS THAT CREATE A MESSAGE, and only for a wait short enough to
+            // spend inside a 2 s tick.
+            //
+            // Retrying everything cost far more than it bought. `editMessageText` and
+            // `answerCallbackQuery` come through here unmetered, so a 429 carrying
+            // `retry_after: 300` slept 300 s, retried, slept 300 s and then threw — ten minutes
+            // inside a single mirror tick, holding its channel-write allowance, with nothing
+            // mirrored and no deadline swept for the duration. And for a callback query it was
+            // pointless as well as expensive: Telegram invalidates one after about ten seconds, so
+            // the wait guaranteed the retry would fail while the owner's spinner hung.
+            //
+            // Past the inline cap the failure is handed to the caller, which is where the per-channel
+            // backoff and the outcome classification already live.
+            if (statusCode == 429 && rateLimited && attempt < RATE_LIMIT_RETRIES)
+            {
+                var wait = TokenBucket_Gate.Read_RetryAfter(retryAfterSeconds);
+
+                // A 429 with no retry_after still has to cost something, or the retry is immediate
+                // and lands on the same wall. One token's worth of time is the smallest honest wait.
+                if (wait <= TimeSpan.Zero)
+                    wait = TimeSpan.FromSeconds(TokenBucket_Gate.DEFAULT_REFILL_SECONDS / TokenBucket_Gate.DEFAULT_CAPACITY);
+
+                if (wait <= TokenBucket_Gate.MAXIMUM_INLINE_RETRY_WAIT)
+                {
+                    await Task.Delay(wait, cancellationToken);
+                    continue;
+                }
+            }
+
+            throw new TelegramApiException(statusCode, $"Telegram '{method}' failed with HTTP {statusCode}: {body}", retryAfterSeconds);
+        }
+    }
+
+    /// <summary>
+    /// Blocks until the bucket has a token. Recomputed after each sleep rather than sleeping the
+    /// whole predicted wait in one go: several senders race here, and the one that wakes first
+    /// should take the token that actually became available.
+    /// </summary>
+    async Task Wait_ForBucket_Async(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            TimeSpan wait;
+
+            lock (_bucketLock)
+            {
+                var (tokens, refilledUtc, computedWait) = TokenBucket_Gate.Take(_bucketTokens, _bucketRefilledUtc, DateTime.UtcNow);
+                _bucketTokens = tokens;
+                _bucketRefilledUtc = refilledUtc;
+                wait = computedWait;
+            }
+
+            if (wait <= TimeSpan.Zero)
+                return;
+
+            await Task.Delay(wait, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Telegram's <c>parameters.retry_after</c>, in seconds. Null for any body that does not carry
+    /// one — including one that is not JSON at all, which a proxy or a gateway can produce.
+    /// </summary>
+    static int? Read_RetryAfterSeconds_OrNull(string body)
+    {
+        try
+        {
+            if (JsonNode.Parse(body) is not JsonObject root)
+                return null;
+
+            return root["parameters"]?["retry_after"]?.GetValue<int>();
+        }
+        catch
+        {
+            // Broad by intent: a body that will not parse simply carries no advice.
+            return null;
+        }
     }
 
     string Build_MethodUrl(string method)
