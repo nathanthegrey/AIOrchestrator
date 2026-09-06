@@ -79,10 +79,49 @@ public static class PrintTurnEntry_Splitter
         return neutralised ? string.Join('\n', lines) : body;
     }
 
+    /// <summary>
+    /// The first line, made safe to sit inside a header the bridge is about to write around it.
+    ///
+    /// <para>
+    /// A heading mark would turn the subject into a second header — the parser matches '## [' at line
+    /// start — so it goes, together with bold marks.
+    /// </para>
+    /// <para>
+    /// AND A SESSION THAT ECHOES ITS OWN HEADER NAMES ITS SUBJECT TWICE. Stripping the '##' off
+    /// <c>## [2] FROM implementer — 2026-09-06 — Brief complete</c> leaves the whole header as the
+    /// subject, and the bridge then wraps a real one around it:
+    /// <c>## [2] FROM implementer — 2026-09-06 12:30 — [2] FROM implementer — 2026-09-06 — Brief
+    /// complete</c>. Cosmetic — the body is neutralised separately and a subject cannot open a phantom
+    /// entry — but it carries a SECOND index and a SECOND date, both invented by the session, inside
+    /// the ones the bridge just wrote. Measured live twice on 2026-09-06, in the stage-1b round and
+    /// again in the stage-1c one, so it is what a model ordinarily does rather than a rare slip.
+    /// </para>
+    /// <para>
+    /// The echoed subject is recovered THROUGH THE PARSER rather than by a pattern of this file's own:
+    /// a second copy of the header rule is how a legend, two ledger parsers and a marker list drifted
+    /// apart in one evening. That also fixes the boundary of the fix: a line the parser does not read
+    /// as a header — no <c>##</c>, or only one em-dash, which it reads as a date with no subject —
+    /// falls through to the stripping below and keeps the behaviour it had. Widening it would mean
+    /// inventing a laxer header shape here, which is the drift itself.
+    /// </para>
+    /// </summary>
     static string Clean_SubjectLine(string line)
     {
-        // A heading mark on the first line would turn the subject into a second header — the
-        // parser matches '## [' at line start — so it goes, together with bold marks.
+        var trimmed = line.Trim();
+
+        if (ChannelEntry_Parser.Is_HeaderLine(trimmed))
+        {
+            var echoed = ChannelEntry_Parser.Parse_All(trimmed);
+
+            if (echoed.Count == 1 && echoed[0].Subject.Length > 0)
+                return Strip_Marks(echoed[0].Subject);
+        }
+
+        return Strip_Marks(trimmed);
+    }
+
+    static string Strip_Marks(string line)
+    {
         return line.Trim().TrimStart('#').Trim().Trim('*').Trim();
     }
 }

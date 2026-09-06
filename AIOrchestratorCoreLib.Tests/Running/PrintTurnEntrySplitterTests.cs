@@ -33,6 +33,55 @@ public class PrintTurnEntrySplitterTests
         Assert.False(ChannelEntry_Parser.Is_HeaderLine(subject));
     }
 
+    /// <summary>
+    /// THE ENTRY THAT NAMED ITSELF TWICE. Seen live on 2026-09-06 in both the stage-1b and the
+    /// stage-1c rounds, so it is ordinary model behaviour: the session opens its final message with a
+    /// copy of the header it expects, and the bridge wraps a real header around it —
+    /// <c>## [2] FROM implementer — 12:30 — [2] FROM implementer — 2026-09-06 — Brief complete</c>,
+    /// carrying an index and a date the session invented inside the ones the bridge just wrote.
+    /// Only the part that was actually the subject survives now.
+    /// </summary>
+    [Fact]
+    public void AnEchoedHeaderOnTheFirstLine_ContributesItsSUBJECT_NotTheWholeHeader()
+    {
+        var (subject, body) = PrintTurnEntry_Splitter.Split(
+            "## [2] FROM implementer — 2026-09-06 — Brief complete: PLATANO written to fruit.txt\n\nTask completed successfully.");
+
+        Assert.Equal("Brief complete: PLATANO written to fruit.txt", subject);
+        Assert.Equal("Task completed successfully.", body);
+
+        // The invented index and date are gone, not merely moved.
+        Assert.DoesNotContain("[2]", subject);
+        Assert.DoesNotContain("FROM implementer", subject);
+        Assert.DoesNotContain("2026-09-06", subject);
+    }
+
+    /// <summary>An em-dash inside the subject is the subject's, and the parser already splits on the first two.</summary>
+    [Fact]
+    public void AnEchoedHeaderKeepsTheEmDashesThatBelongToItsSubject()
+    {
+        var (subject, _) = PrintTurnEntry_Splitter.Split(
+            "## [7] FROM supervisor — 2026-09-06 10:00 — VERDICT — accepted — merge it\n\nbody");
+
+        Assert.Equal("VERDICT — accepted — merge it", subject);
+    }
+
+    /// <summary>
+    /// THE BOUNDARY, stated as a test so nobody widens it by accident. A first line the PARSER does not
+    /// read as a header keeps the behaviour it always had. Recovering the subject through the parser is
+    /// what keeps one header rule in this codebase; a laxer shape invented here would be the second copy.
+    /// </summary>
+    [Theory]
+    [InlineData("[2] FROM implementer — 2026-09-06 — no hashes", "[2] FROM implementer — 2026-09-06 — no hashes")]
+    [InlineData("## [9] FROM implementer — one dash only", "[9] FROM implementer — one dash only")]
+    public void ALineTheParserDoesNotReadAsAHeader_IsOnlyStripped(string first, string expected)
+    {
+        var (subject, _) = PrintTurnEntry_Splitter.Split($"{first}\n\nbody");
+
+        Assert.Equal(expected, subject);
+        Assert.False(ChannelEntry_Parser.Is_HeaderLine(subject));
+    }
+
     [Fact]
     public void LongFirstLine_IsCapped_AndTheWholeTextStaysInTheBody()
     {
