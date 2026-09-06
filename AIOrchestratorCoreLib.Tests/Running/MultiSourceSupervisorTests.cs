@@ -150,7 +150,12 @@ public class MultiSourceSupervisorTests
     [Fact]
     public async Task TrafficOnTwoChannels_RidesOneTurn_OwnerFirst()
     {
-        using var harness = new PrintRunnerTestHarness("supervisor:stream", coalesceSeconds: 0.6);
+        // FIVE SECONDS, not the sub-second a laptop at rest needs. The window is the whole subject of
+        // this test: the two appends must land inside it or each rides its own turn and the assertion
+        // below fails for the machine's load rather than for the rule. Measured on 2026-09-06 at load
+        // average 42 — several agents building at once — a run of this suite lost two tests to exactly
+        // that kind of race. A test whose green depends on how busy the machine is stops being read.
+        using var harness = new PrintRunnerTestHarness("supervisor:stream", coalesceSeconds: 5);
         var (orchId, memberId) = Crew(harness, runner: SessionRunners.Stream);
         harness.Write_Scenario("""{"turns":[{"result":"sup online"},{"result":"TO: owner\nStatus\n\nimp-1 is done.\n\nTO: imp-1\nVERDICT\n\nAccepted."}]}""");
         var dispatcher = harness.Create_Dispatcher();
