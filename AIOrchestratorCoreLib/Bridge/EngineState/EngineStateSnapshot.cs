@@ -116,6 +116,17 @@ public sealed record PendingConfirmationRecord
 /// re-derived within a tick or two of a restart. What is here is what NOTHING can re-derive: a
 /// decision the owner was asked to take, and the memory that they were already asked.
 /// </para>
+/// <para>
+/// ONE OWNER DECISION IS DELIBERATELY NOT HERE, AND IT IS THE ONE THAT LOOKS LIKE A BUG. The
+/// close / member-close / promote confirmations keep their durable record as a PARKED REQUEST FILE
+/// (<c>.requests/awaiting-owner/&lt;id&gt;.json</c>, see <c>CloseConfirmation_Parking</c>): the request
+/// survives, the prompt does not, and the next sweep asks again with fresh buttons. So while one of
+/// those is outstanding this snapshot legitimately holds NO pending button and its file's mtime does
+/// not move — which on 2026-09-06 was read on the VPS as a save that had failed. It had not. Two
+/// mechanisms for one idea is one too many, and the reason it is documented rather than merged is
+/// that merging them changes which of the two is the truth on a restart, and that is a decision about
+/// behaviour rather than about storage.
+/// </para>
 /// </summary>
 public sealed record EngineStateSnapshot
 {

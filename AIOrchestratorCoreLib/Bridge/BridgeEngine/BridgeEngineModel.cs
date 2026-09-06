@@ -221,6 +221,17 @@ internal sealed class BridgeEngineModel(
     ///
     /// Losing this dictionary on restart is safe by design: the parked FILE is the durable state,
     /// and a parked request with no live prompt is simply asked again.
+    ///
+    /// <para>
+    /// AND IT IS THEREFORE ABSENT FROM <c>.engine-state.json</c>, which is the half nobody had written
+    /// down. That file holds the FIVE maps <c>Persist_EngineState</c> names and this is a sixth; so
+    /// while a close, a member-close or a promotion is waiting on the owner's tap, the state file
+    /// legitimately reads <c>"pendingButtons": []</c> and its mtime does not move. On the VPS on
+    /// 2026-09-06 that was read as a lost save and cost an evening: the buttons were on the phone, the
+    /// file said nothing was pending, and both were correct. The tap on THAT keyboard also does not
+    /// survive the restart — <c>Try_HandleCloseConfirmationTap_Async</c> answers only payloads in this
+    /// dictionary — the sweep simply posts a fresh prompt, which is the one that works.
+    /// </para>
     /// </summary>
     readonly Dictionary<string, CloseConfirmation> _closeConfirmations = [];
 
