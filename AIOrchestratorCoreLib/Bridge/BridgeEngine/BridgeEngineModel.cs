@@ -700,6 +700,14 @@ internal sealed class BridgeEngineModel(
     DateTime? _dispatchPausedUntilUtc = restoredState.DispatchPausedUntilUtc;
     string? _dispatchPauseReason = restoredState.DispatchPauseReason;
 
+    /// <summary>
+    /// When the pause last read the usage probes. ITS OWN STAMP, not the alert scan's: that one is
+    /// only advanced on ticks where the alert scan actually runs, and the alert scan returns early
+    /// while muted — so sharing it would make the pause check fire every 2 s under DND and once a
+    /// minute otherwise. Two consumers, two clocks, no coupling between a mute and a spend.
+    /// </summary>
+    DateTime _lastDispatchPauseCheckUtc = DateTime.MinValue;
+
     /// <summary>App-wide Do-Not-Disturb: everything is kept and replayed when it goes off.</summary>
     volatile bool _telegramMuted;
 
@@ -8912,6 +8920,16 @@ internal sealed class BridgeEngineModel(
         // against, which is how a five-hour pause becomes a permanent one.
         if (_dispatchPausedUntilUtc != null)
             return;
+
+        // THROTTLED LIKE THE ALERT SCAN IT SHARES A READER WITH. Reading the probes means globbing
+        // the supervision root and parsing one JSON per session; at the 2 s tick rate that is thirty
+        // times a minute for a number that moves once a turn. The alert path has always been on a
+        // 60 s interval and this must be too — the reader was extracted to be shared, not to be
+        // called thirty times as often.
+        if ((_clock.UtcNow - _lastDispatchPauseCheckUtc).TotalSeconds < LIMIT_CHECK_INTERVAL_SECONDS)
+            return;
+
+        _lastDispatchPauseCheckUtc = _clock.UtcNow;
 
         var thresholdPercent = _configProvider.Get_Current().Guardrails.DispatchPauseThresholdPercent;
 
