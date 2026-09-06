@@ -648,7 +648,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// waits for ever. Same rule as everywhere else here: fail towards the visible side.
     /// </para>
     /// </summary>
-    bool Write_Reply(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string resultText)
+    /// <param name="resultText">
+    /// NULLABLE, because <see cref="ITurnResult.ResultText"/> is: a turn can succeed and say nothing.
+    /// Both splitters below already accept null and answer with the "(no message)" entry, so the only
+    /// thing a non-null signature bought was a compiler warning at the one call site — and a signature
+    /// that promises what its caller cannot give is a lie that the next reader resolves with a `!`.
+    /// </param>
+    bool Write_Reply(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
     {
         var author = SessionRole_Names.Get_Author(state.Role);
         var ownChannel = state.ChannelFilePath;
