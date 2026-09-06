@@ -1,6 +1,14 @@
 ﻿---
+name: reviewer
 description: Become a REVIEWER in an orchestration session — read-only, adversarial by default (AI Orchestrator duplex protocol)
 argument-hint: <orch-id>/rev-<n>
+disable-model-invocation: true
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/reviewer-readonly-check.sh"
 ---
 
 # ROLE: REVIEWER `$ARGUMENTS`

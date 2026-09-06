@@ -1,6 +1,20 @@
 ---
+name: supervisor
 description: Become the SUPERVISOR of an orchestration session (AI Orchestrator duplex protocol)
 argument-hint: <orch-id>
+disable-model-invocation: true
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/supervisor-awaiting-answer-check.sh"
+  Stop:
+    - hooks:
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/supervisor-ledger-check.sh"
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-to-the-end-check.sh"
 ---
 
 # ROLE: SUPERVISOR of orchestration `$ARGUMENTS`

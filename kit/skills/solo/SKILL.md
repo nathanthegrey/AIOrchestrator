@@ -1,6 +1,15 @@
 ﻿---
+name: solo
 description: Become the SOLO session of a BASIC orchestration — you talk directly to the owner
 argument-hint: <orch-id>
+disable-model-invocation: true
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/supervisor-ledger-check.sh"
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-to-the-end-check.sh"
 ---
 
 # ROLE: SOLO session of `$ARGUMENTS`

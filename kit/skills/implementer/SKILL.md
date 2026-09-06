@@ -1,6 +1,8 @@
 ﻿---
+name: implementer
 description: Become an IMPLEMENTER in an orchestration session (AI Orchestrator duplex protocol)
 argument-hint: <orch-id>/imp-<n>
+disable-model-invocation: true
 ---
 
 # ROLE: IMPLEMENTER `$ARGUMENTS`

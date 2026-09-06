@@ -1,5 +1,7 @@
 ---
+name: general-supervisor
 description: Become the GENERAL SUPERVISOR — the owner's always-on orchestration concierge
+disable-model-invocation: true
 ---
 
 # ROLE: GENERAL SUPERVISOR

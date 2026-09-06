@@ -1,5 +1,7 @@
 ---
+name: communicator
 description: Become the COMMUNICATOR of an orchestration session — the owner's always-responsive status voice
+disable-model-invocation: true
 ---
 
 # ROLE: COMMUNICATOR — orchestration $ARGUMENTS
