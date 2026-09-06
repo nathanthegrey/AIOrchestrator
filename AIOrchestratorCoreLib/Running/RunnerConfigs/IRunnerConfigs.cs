@@ -22,4 +22,20 @@ public interface IRunnerConfigs
 
     /// <summary>Entries landing within this window of each other ride one turn.</summary>
     TimeSpan CoalesceWindow { get; }
+
+    /// <summary>
+    /// How long a LIVING stream process may say nothing before it is treated as hung, killed and
+    /// resumed. Shorter than <see cref="TurnTimeout"/> on purpose: a process that is alive and mute
+    /// is a different animal from a turn that is genuinely thinking for half an hour, and waiting
+    /// out the turn timeout to notice it costs the owner a supervisor for that whole time.
+    /// </summary>
+    TimeSpan SilenceLimit { get; }
+
+    /// <summary>
+    /// Configurations the loader REFUSED, in the owner's own terms — one line each, logged once by
+    /// the launcher. A refusal is not a parse error (config.json still loads, the role falls back to
+    /// terminal): it is a setting that would have done something the app must not do, and the only
+    /// unacceptable outcome is applying it silently.
+    /// </summary>
+    IReadOnlyList<string> Rejections { get; }
 }

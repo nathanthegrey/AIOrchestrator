@@ -8,10 +8,11 @@ namespace AIOrchestratorCoreLib.Running.RunnerConfigs;
 /// <code>
 /// "runners": {
 ///   "implementer": { "runner": "print", "resume": "transcript", "permission_mode": null },
+///   "supervisor":  { "runner": "stream", "resume": "transcript" },
 ///   "general":     { "runner": "print", "resume": "fresh" }
 /// },
 /// "printRunner": { "maxConcurrentTurns": 10, "maxConcurrentTurnsPerOrchestration": 3,
-///                  "turnTimeoutMinutes": 30, "coalesceSeconds": 3 }
+///                  "turnTimeoutMinutes": 30, "coalesceSeconds": 3, "streamSilenceSeconds": 120 }
 /// </code>
 /// Tolerant on the way in — an absent block, an absent role, an unknown word all read as the
 /// default, because a typo in a hand-edited file must not stop the app from starting — and
@@ -25,10 +26,12 @@ public static class RunnerConfigs_Json
     public const string RUNNER_KEY = "runner";
     public const string RESUME_KEY = "resume";
     public const string PERMISSION_MODE_KEY = "permission_mode";
+    public const string SETTINGS_KEY = "settings";
     public const string MAX_CONCURRENT_TURNS_KEY = "maxConcurrentTurns";
     public const string MAX_CONCURRENT_TURNS_PER_ORCHESTRATION_KEY = "maxConcurrentTurnsPerOrchestration";
     public const string TURN_TIMEOUT_MINUTES_KEY = "turnTimeoutMinutes";
     public const string COALESCE_SECONDS_KEY = "coalesceSeconds";
+    public const string STREAM_SILENCE_SECONDS_KEY = "streamSilenceSeconds";
 
     public static IRunnerConfigs Parse(JsonObject? configRoot)
     {
@@ -38,13 +41,14 @@ public static class RunnerConfigs_Json
             return defaults;
 
         Dictionary<SessionRoles, IRoleRunnerConfig> roles = [];
+        List<string> rejections = [];
 
         if (configRoot[RUNNERS_KEY] is JsonObject runnersNode)
         {
             foreach (var role in SessionRole_Names.ALL)
             {
                 if (runnersNode[SessionRole_Names.Get_ConfigKey(role)] is JsonObject roleNode)
-                    roles[role] = Parse_Role(role, roleNode);
+                    roles[role] = Parse_Role(role, roleNode, rejections);
             }
         }
 
@@ -55,7 +59,9 @@ public static class RunnerConfigs_Json
             Read_PositiveInt_OrDefault(limits, MAX_CONCURRENT_TURNS_KEY, defaults.MaxConcurrentTurns),
             Read_PositiveInt_OrDefault(limits, MAX_CONCURRENT_TURNS_PER_ORCHESTRATION_KEY, defaults.MaxConcurrentTurnsPerOrchestration),
             TimeSpan.FromMinutes(Read_PositiveDouble_OrDefault(limits, TURN_TIMEOUT_MINUTES_KEY, defaults.TurnTimeout.TotalMinutes)),
-            TimeSpan.FromSeconds(Read_NonNegativeDouble_OrDefault(limits, COALESCE_SECONDS_KEY, defaults.CoalesceWindow.TotalSeconds)));
+            TimeSpan.FromSeconds(Read_NonNegativeDouble_OrDefault(limits, COALESCE_SECONDS_KEY, defaults.CoalesceWindow.TotalSeconds)),
+            TimeSpan.FromSeconds(Read_PositiveDouble_OrDefault(limits, STREAM_SILENCE_SECONDS_KEY, defaults.SilenceLimit.TotalSeconds)),
+            rejections);
     }
 
     /// <summary>Sets both blocks on <paramref name="configRoot"/>, replacing whatever was there.</summary>
@@ -72,6 +78,7 @@ public static class RunnerConfigs_Json
                 [RUNNER_KEY] = SessionRunner_Names.Get_Word(roleConfig.Runner),
                 [RESUME_KEY] = ResumeMode_Names.Get_Word(roleConfig.Resume),
                 [PERMISSION_MODE_KEY] = roleConfig.PermissionMode,
+                [SETTINGS_KEY] = roleConfig.Settings,
             };
         }
 
@@ -82,17 +89,37 @@ public static class RunnerConfigs_Json
             [MAX_CONCURRENT_TURNS_PER_ORCHESTRATION_KEY] = configs.MaxConcurrentTurnsPerOrchestration,
             [TURN_TIMEOUT_MINUTES_KEY] = configs.TurnTimeout.TotalMinutes,
             [COALESCE_SECONDS_KEY] = configs.CoalesceWindow.TotalSeconds,
+            [STREAM_SILENCE_SECONDS_KEY] = configs.SilenceLimit.TotalSeconds,
         };
     }
 
-    static IRoleRunnerConfig Parse_Role(SessionRoles role, JsonObject roleNode)
+    /// <summary>
+    /// One role's block. Tolerant on everything the owner can merely mistype — an unknown word reads
+    /// as the default — and REFUSING on the one thing that is not a typo: <c>bg</c> without Remote
+    /// Control disabled. A refused role falls back to <c>terminal</c> (today's shape, a window the
+    /// owner can see) rather than to the ladder, because the ladder is for a transport that BROKE
+    /// and this is a transport that was never allowed to start.
+    /// </summary>
+    static IRoleRunnerConfig Parse_Role(SessionRoles role, JsonObject roleNode, List<string> rejections)
     {
         var defaults = RoleRunnerConfig_Factory.Create_Default(role);
+        var runner = SessionRunner_Names.Parse_OrNull(Read_String_OrNull(roleNode, RUNNER_KEY)) ?? defaults.Runner;
+        var resume = ResumeMode_Names.Parse_OrNull(Read_String_OrNull(roleNode, RESUME_KEY)) ?? defaults.Resume;
+        var permissionMode = Read_String_OrNull(roleNode, PERMISSION_MODE_KEY);
+        var settings = Read_String_OrNull(roleNode, SETTINGS_KEY);
 
-        return RoleRunnerConfig_Factory.Create(
-            SessionRunner_Names.Parse_OrNull(Read_String_OrNull(roleNode, RUNNER_KEY)) ?? defaults.Runner,
-            ResumeMode_Names.Parse_OrNull(Read_String_OrNull(roleNode, RESUME_KEY)) ?? defaults.Resume,
-            Read_String_OrNull(roleNode, PERMISSION_MODE_KEY));
+        if (runner != SessionRunners.Bg)
+            return RoleRunnerConfig_Factory.Create(runner, resume, permissionMode, settings);
+
+        var (bgSettings, refusal) = BgSettings_Rule.Resolve(settings);
+
+        if (refusal != null)
+        {
+            rejections.Add($"role '{SessionRole_Names.Get_ConfigKey(role)}' asks for runner '{SessionRunner_Names.BG}' but {refusal} — refused, the role runs in a terminal instead");
+            return RoleRunnerConfig_Factory.Create(SessionRunners.Terminal, resume, permissionMode, settings);
+        }
+
+        return RoleRunnerConfig_Factory.Create(runner, resume, permissionMode, bgSettings);
     }
 
     static string? Read_String_OrNull(JsonObject node, string key)

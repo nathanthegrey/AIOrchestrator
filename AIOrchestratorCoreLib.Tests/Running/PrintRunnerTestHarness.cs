@@ -7,7 +7,7 @@ using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.ClaudeInvocation;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
-using AIOrchestratorCoreLib.Running.PrintTurnRunner;
+using AIOrchestratorCoreLib.Running.TurnExecutor;
 using AIOrchestratorCoreLib.Running.SessionLaunch;
 using AIOrchestratorCoreLib.Running.SessionRunner;
 using AIOrchestratorCoreLib.Sessions;
@@ -37,8 +37,9 @@ public sealed class PrintRunnerTestHarness : IDisposable
     readonly int _maxConcurrent;
     readonly int _maxPerOrchestration;
     readonly string _resumeForGeneral;
+    readonly double _streamSilenceSeconds;
 
-    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh")
+    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120)
     {
         TempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-print-runner-{Guid.NewGuid():N}");
         RepoPath = Path.Combine(TempRoot, "repo");
@@ -52,6 +53,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
         _maxConcurrent = maxConcurrent;
         _maxPerOrchestration = maxPerOrchestration;
         _resumeForGeneral = resumeForGeneral;
+        _streamSilenceSeconds = streamSilenceSeconds;
 
         Directory.CreateDirectory(Paths.Root);
         Write_Config(printRoles);
@@ -63,12 +65,26 @@ public sealed class PrintRunnerTestHarness : IDisposable
     /// the way the owner would. The write stamp is pushed forward because the provider reloads on
     /// it, and two writes inside one filesystem tick would otherwise serve the stale config.
     /// </summary>
+    /// <summary>
+    /// <paramref name="printRoles"/> is a comma-separated list, each entry either a role
+    /// ("implementer") or a role and its runner ("supervisor:stream"). The bare form still means
+    /// print, so every test written before the stream runner existed says exactly what it meant.
+    /// </summary>
     public void Write_Config(string printRoles)
     {
         var runners = new JsonObject();
 
-        foreach (var role in printRoles.Split(',', StringSplitOptions.RemoveEmptyEntries))
-            runners[role.Trim()] = new JsonObject { ["runner"] = "print", ["resume"] = role.Trim() == "general" ? _resumeForGeneral : "transcript" };
+        foreach (var entry in printRoles.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = entry.Split(':', 2);
+            var role = parts[0].Trim();
+
+            runners[role] = new JsonObject
+            {
+                ["runner"] = parts.Length > 1 ? parts[1].Trim() : "print",
+                ["resume"] = role == "general" ? _resumeForGeneral : "transcript",
+            };
+        }
 
         var config = new JsonObject
         {
@@ -80,6 +96,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
                 ["maxConcurrentTurnsPerOrchestration"] = _maxPerOrchestration,
                 ["turnTimeoutMinutes"] = _turnTimeoutMinutes,
                 ["coalesceSeconds"] = _coalesceSeconds,
+                ["streamSilenceSeconds"] = _streamSilenceSeconds,
             },
         };
 
@@ -112,11 +129,17 @@ public sealed class PrintRunnerTestHarness : IDisposable
 
     public IPrintTurnDispatcher Create_Dispatcher(TimeSpan? retryBackoff = null)
     {
-        return PrintTurnDispatcher_Factory.Create(Paths, Store, ConfigProvider, PrintTurnRunner_Factory.Create(Fake_Invocation()), Log, retryBackoff ?? TimeSpan.FromMilliseconds(200));
+        return PrintTurnDispatcher_Factory.Create(Paths, Store, ConfigProvider, Create_Executors(), Log, retryBackoff ?? TimeSpan.FromMilliseconds(200));
     }
 
-    /// <summary>An orchestration with one member of the kind, registered as print-run — the launcher's path, minus the terminal.</summary>
-    public (string OrchId, string MemberId) Register_Member(MemberKinds kind, string orchId = "repo-1")
+    /// <summary>The production ladder, against the fake: print, and stream falling back to it.</summary>
+    public IReadOnlyList<ITurnExecutor> Create_Executors()
+    {
+        return TurnExecutor_Factory.Create_All(Paths, Fake_Invocation(), Log, ConfigProvider);
+    }
+
+    /// <summary>An orchestration with one member of the kind, registered bridge-driven — the launcher's path, minus the terminal.</summary>
+    public (string OrchId, string MemberId) Register_Member(MemberKinds kind, string orchId = "repo-1", SessionRunners runner = SessionRunners.Print)
     {
         if (Store.Get_Session_OrNull(orchId) == null)
             Store.Create_Orchestration(orchId, "Repo", RepoPath);
@@ -125,18 +148,35 @@ public sealed class PrintRunnerTestHarness : IDisposable
         var memberId = session.Members[^1].MemberId;
         var role = SessionRole_Names.From_MemberKind(kind);
 
-        SessionRunner_Factory.Create_Print(Paths, Log).Start(
+        Create_Runner(runner).Start(
             SessionLaunch_Factory.Create(role, orchId, memberId, RepoPath, "haiku", Paths.Get_ImplementerPidFile(orchId, memberId), null));
 
         return (orchId, memberId);
     }
 
-    public void Register_General()
+    /// <summary>The orchestration's SUPERVISOR, registered bridge-driven — woken by the owner channel.</summary>
+    public string Register_Supervisor(string orchId = "repo-1", SessionRunners runner = SessionRunners.Stream)
+    {
+        if (Store.Get_Session_OrNull(orchId) == null)
+            Store.Create_Orchestration(orchId, "Repo", RepoPath);
+
+        Create_Runner(runner).Start(
+            SessionLaunch_Factory.Create(SessionRoles.Supervisor, orchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, RepoPath, "haiku", Paths.Get_SupervisorPidFile(orchId), null));
+
+        return SessionLaunch_Factory.SUPERVISOR_MEMBER_ID;
+    }
+
+    public void Register_General(SessionRunners runner = SessionRunners.Print)
     {
         GeneralChannel_Initializer.Ensure_Exists(Paths);
 
-        SessionRunner_Factory.Create_Print(Paths, Log).Start(
+        Create_Runner(runner).Start(
             SessionLaunch_Factory.Create(SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, SessionLaunch_Factory.GENERAL_MEMBER_ID, RepoPath, "sonnet", Paths.GeneralPidFile, null));
+    }
+
+    ISessionRunner Create_Runner(SessionRunners runner)
+    {
+        return runner == SessionRunners.Stream ? SessionRunner_Factory.Create_Stream(Paths, Log) : SessionRunner_Factory.Create_Print(Paths, Log);
     }
 
     public void Write_Scenario(string json)

@@ -2,9 +2,13 @@ namespace AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 
 public static class RoleRunnerConfig_Factory
 {
-    public static IRoleRunnerConfig Create(SessionRunners runner, ResumeModes resume, string? permissionMode)
+    public static IRoleRunnerConfig Create(SessionRunners runner, ResumeModes resume, string? permissionMode, string? settings = null)
     {
-        return new RoleRunnerConfigModel(runner, resume, string.IsNullOrWhiteSpace(permissionMode) ? null : permissionMode.Trim());
+        return new RoleRunnerConfigModel(
+            runner,
+            resume,
+            string.IsNullOrWhiteSpace(permissionMode) ? null : permissionMode.Trim(),
+            string.IsNullOrWhiteSpace(settings) ? null : settings.Trim());
     }
 
     /// <summary>

@@ -4,8 +4,8 @@ using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
-using AIOrchestratorCoreLib.Running.PrintTurnRunner;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
+using AIOrchestratorCoreLib.Running.TurnExecutor;
 using AIOrchestratorCoreLib.Running.TurnResult;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -35,6 +35,14 @@ namespace AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
 /// The slot limits are read ONCE, at construction — a semaphore cannot be resized — so changing
 /// them in config.json takes effect at the next app start. Everything else (runner, resume mode,
 /// timeout, coalesce window) is read on every tick.
+///
+/// <para>
+/// HOW a turn reaches the model is NOT this class's business — that is
+/// <see cref="ITurnExecutor"/>, picked per role from the configured runner. Everything above stays
+/// identical whether the turn is one <c>claude -p</c> process or a line on a living one's stdin,
+/// and that is the point: two transports must never grow two answers to "has this turn already
+/// run".
+/// </para>
 /// </summary>
 internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 {
@@ -49,7 +57,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
     readonly IOrchestratorConfigProvider _configProvider;
-    readonly IPrintTurnRunner _turnRunner;
+    readonly IReadOnlyDictionary<SessionRunners, ITurnExecutor> _executors;
     readonly IOrchestrationLog _log;
     readonly TimeSpan _retryBackoff;
 
@@ -66,14 +74,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         ISupervisionPaths paths,
         IOrchestrationSessionStore store,
         IOrchestratorConfigProvider configProvider,
-        IPrintTurnRunner turnRunner,
+        IReadOnlyList<ITurnExecutor> executors,
         IOrchestrationLog log,
         TimeSpan retryBackoff)
     {
         _paths = paths;
         _store = store;
         _configProvider = configProvider;
-        _turnRunner = turnRunner;
+        _executors = executors.ToDictionary(executor => executor.Kind);
         _log = log;
         _retryBackoff = retryBackoff;
 
@@ -117,10 +125,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             // window for this member — and without this check the dispatcher would keep firing
             // `claude -p` turns into the same channel, two sessions answering one brief. The file is
             // deleted by the launcher at the next spawn; until then, this is the gate.
-            if (!Is_StillPrintRun(configs, registered.Role))
+            if (!Is_StillBridgeDriven(configs, registered.Role))
             {
                 if (_warnedStaleRegistrations.Add($"{registered.OrchId}/{registered.MemberId}"))
-                    _log.Log_Warning(registered.OrchId, $"'{registered.MemberId}' has a print-session registration but role '{SessionRole_Names.Get_ConfigKey(registered.Role)}' is no longer configured runner: print — no turns are dispatched for it (the registration is cleared at its next spawn)");
+                    _log.Log_Warning(registered.OrchId, $"'{registered.MemberId}' has a bridge-driven registration but role '{SessionRole_Names.Get_ConfigKey(registered.Role)}' is now configured runner: {SessionRunner_Names.Get_Word(configs.Get_ForRole(registered.Role).Runner)} — no turns are dispatched for it (the registration is cleared at its next spawn)");
 
                 continue;
             }
@@ -145,16 +153,30 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         lock (_lock)
             pending = [.. _inFlight.Values];
 
-        if (pending.Length == 0)
-            return;
-
         try
         {
-            await Task.WhenAll(pending).WaitAsync(STOP_GRACE);
+            if (pending.Length > 0)
+                await Task.WhenAll(pending).WaitAsync(STOP_GRACE);
         }
         catch
         {
             // Turns end by cancellation or are abandoned after the grace — the app is exiting either way.
+        }
+
+        // AFTER the turns, never before: a resident process killed while its turn is still being
+        // awaited turns an orderly shutdown into a structural failure and a fallback nobody asked
+        // for. The app is exiting, so the ladder's memory would not survive to be wrong — but the
+        // channel entry it writes on the way out would.
+        foreach (var executor in _executors.Values)
+        {
+            try
+            {
+                await executor.Stop_Async();
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Error(string.Empty, $"The {SessionRunner_Names.Get_Word(executor.Kind)} executor did not stop cleanly", ex);
+            }
         }
     }
 
@@ -190,9 +212,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return found;
     }
 
-    static bool Is_StillPrintRun(IRunnerConfigs configs, SessionRoles role)
+    /// <summary>
+    /// Whether this registration is still one this dispatcher owns — the configured runner must be
+    /// bridge-driven, must support the role, AND must be wired here. The third question is what
+    /// stops a role configured for a transport nothing implements from being dispatched into a
+    /// missing executor.
+    /// </summary>
+    bool Is_StillBridgeDriven(IRunnerConfigs configs, SessionRoles role)
     {
-        return configs.Get_ForRole(role).Runner == SessionRunners.Print && PrintRunner_Support.Supports(role);
+        var runner = configs.Get_ForRole(role).Runner;
+
+        return Runner_Support.Is_BridgeDriven(runner) && Runner_Support.Supports(runner, role) && _executors.ContainsKey(runner);
     }
 
     // ----- per-session decision -----
@@ -339,7 +369,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
         catch (Exception ex)
         {
-            _log.Log_Error(state.OrchId, $"Print turn for '{state.MemberId}' failed outside the process", ex);
+            _log.Log_Error(state.OrchId, $"Turn for '{state.MemberId}' failed outside the process", ex);
             tracker.LastFailureAt = DateTime.Now;
         }
         finally
@@ -363,7 +393,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (state.ExecutedTurns.Any(turn => turn.RequestId == requestId))
         {
-            _log.Log_Warning(state.OrchId, $"Print turn {requestId} was already executed — skipped, not re-run");
+            _log.Log_Warning(state.OrchId, $"Turn {requestId} was already executed — skipped, not re-run");
             PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnSkipped(state));
             return;
         }
@@ -382,8 +412,6 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         var resumeTranscript = !fresh && sessionUsed;
         var sessionId = fresh && sessionUsed ? Guid.NewGuid().ToString() : state.SessionId;
 
-        var arguments = PrintTurnCommand_Builder.Build_Arguments(state, roleConfig, sessionId, resumeTranscript, null);
-
         // Claimed BEFORE the process starts, so a bridge that dies mid-turn still knows the id is
         // spent and resumes instead of colliding with itself.
         if (!resumeTranscript)
@@ -396,21 +424,30 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             ? state.ExecutedTurns.Select(turn => turn.TurnNumber).ToList()
             : [];
 
-        var prompt = resumeTranscript ? PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecuted) : null;
         tracker.FirstTurnSinceStart = false;
+
+        var executor = _executors[roleConfig.Runner];
 
         Dictionary<string, string> environment = new()
         {
             ["AIORCH_ROLE"] = SessionRole_Names.Get_EnvWord(state.Role),
             ["AIORCH_ID"] = state.OrchId,
             ["AIORCH_MEMBER"] = state.MemberId,
-            [RUNNER_ENV_VAR] = SessionRunner_Names.PRINT,
+            [RUNNER_ENV_VAR] = SessionRunner_Names.Get_Word(executor.Kind),
+
+            // THE ROOT TRAVELS WITH THE SESSION. The stage-2 live round lost its first two turns to
+            // exactly this: under --root the member composed its channel path from the default home,
+            // did not find the file, CREATED one in the real home and sat there until the timeout.
+            // The hosts export it into their own environment and Process.Start copies the parent's,
+            // so this is belt AND braces — but a dispatcher wired directly (a test, a future host)
+            // has no parent that did, and the failure it produces is silent.
+            [Composition.HostOptions.HostOptions_Factory.SUPERVISION_ROOT_ENV] = _paths.Root,
         };
 
         var attempt = state.FailedAttempts + 1;
-        _log.Log_Info(state.OrchId, $"Print turn {requestId} started — attempt {attempt}, entries [{pending[0].Index}]–[{pending[^1].Index}], {(resumeTranscript ? "resume" : fresh ? "fresh session" : "first turn")} {sessionId}");
+        _log.Log_Info(state.OrchId, $"{SessionRunner_Names.Get_Word(executor.Kind)} turn {requestId} started — attempt {attempt}, entries [{pending[0].Index}]–[{pending[^1].Index}], {(resumeTranscript ? "resume" : fresh ? "fresh session" : "first turn")} {sessionId}");
 
-        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, configs.TurnTimeout, cancellationToken);
+        var result = await executor.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, alreadyExecuted, environment, configs.TurnTimeout, cancellationToken);
 
         // The runner rethrows on shutdown rather than reporting a timeout, so nothing below runs
         // for a turn the app cancelled: no failure counted, no turn_ended entry, no attempt spent.
@@ -424,7 +461,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             if (!Append_SessionEntry_WithRetry(state, subject, body))
             {
-                _log.Log_Error(state.OrchId, $"Print turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
+                _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, "entry not appended (channel locked)");
                 return;
             }
@@ -435,7 +472,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, result.SessionId ?? sessionId));
             tracker.LastFailureAt = null;
 
-            _log.Log_Info(state.OrchId, $"Print turn {requestId} ended — {outcome}, {Describe_Cost(result)}, {result.Elapsed.TotalSeconds:F1} s wall");
+            _log.Log_Info(state.OrchId, $"Turn {requestId} ended — {outcome}, {Describe_Cost(result)}, {result.Elapsed.TotalSeconds:F1} s wall");
             return;
         }
 
@@ -456,7 +493,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             tracker.StalledAtIndex = pending[^1].Index;
 
-            var alert = $"Print turn {requestId} failed {failed.FailedAttempts} times ({outcome}{(note == null ? string.Empty : $": {note}")}) — not retried until new traffic arrives in the channel";
+            var alert = $"Turn {requestId} failed {failed.FailedAttempts} times ({outcome}{(note == null ? string.Empty : $": {note}")}) — not retried until new traffic arrives in the channel";
             _log.Log_Error(state.OrchId, alert, null);
 
             ChannelAppender.Append_AppEntry(
@@ -469,7 +506,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return;
         }
 
-        _log.Log_Warning(state.OrchId, $"Print turn {requestId} attempt {attempt} {outcome}{(note == null ? string.Empty : $" ({note})")} — retry after {_retryBackoff.TotalSeconds:F0} s; {Tail(result.RawStderr, 200)}");
+        _log.Log_Warning(state.OrchId, $"Turn {requestId} attempt {attempt} {outcome}{(note == null ? string.Empty : $" ({note})")} — retry after {_retryBackoff.TotalSeconds:F0} s; {Tail(result.RawStderr, 200)}");
     }
 
     bool Append_SessionEntry_WithRetry(IPrintSessionState state, string subject, string body)
