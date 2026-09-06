@@ -2,6 +2,8 @@ using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.TurnCursor;
+using AIOrchestratorCoreLib.Running.TurnSource;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using Xunit;
 
@@ -29,8 +31,9 @@ public class PrintSessionStateStoreTests : IDisposable
     {
         var file = PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.Implementer, "orch-1", "imp-1");
         var executed = ExecutedTurn_Factory.Create(1, "orch-1/imp-1/1", 2, 3, new DateTime(2026, 9, 5, 10, 0, 0, DateTimeKind.Utc), "success", 0.0127);
+        var cursor = TurnCursor_Factory.Create("imp-1", "/repo/ch.md", 3, new HashSet<string> { "0f1e2d3c4b5a6978", "aabbccddeeff0011" });
         var state = PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(
-            PrintSessionState_Factory.Create_New("sid", SessionRoles.Implementer, "orch-1", "imp-1", "/repo", "opus", "/repo/ch.md"), executed, "sid");
+            PrintSessionState_Factory.Create_New("sid", SessionRoles.Implementer, "orch-1", "imp-1", "/repo", "opus", "/repo/ch.md", []), executed, "sid", [cursor]);
 
         PrintSessionState_Store.Write(file, state);
         var read = PrintSessionState_Store.Read_OrNull(file);
@@ -39,7 +42,10 @@ public class PrintSessionStateStoreTests : IDisposable
         Assert.Equal("sid", read.SessionId);
         Assert.Equal(SessionRoles.Implementer, read.Role);
         Assert.Equal("opus", read.Model);
-        Assert.Equal(3, read.LastHandledEntryIndex);
+        Assert.Equal("imp-1", Assert.Single(read.Cursors).SourceKey);
+        Assert.Equal("/repo/ch.md", read.Cursors[0].ChannelFilePath);
+        Assert.Equal(3, read.Cursors[0].HighWaterIndex);
+        Assert.Equal(["0f1e2d3c4b5a6978", "aabbccddeeff0011"], read.Cursors[0].Delivered.OrderBy(identity => identity, StringComparer.Ordinal));
         Assert.Equal(2, read.NextTurnNumber);
         Assert.Equal(0, read.FailedAttempts);
         Assert.Single(read.ExecutedTurns);
@@ -65,7 +71,7 @@ public class PrintSessionStateStoreTests : IDisposable
         var read = PrintSessionState_Store.Read_OrNull(file);
 
         Assert.NotNull(read);
-        Assert.Equal(0, read.LastHandledEntryIndex);
+        Assert.Empty(read.Cursors);
         Assert.Equal(1, read.NextTurnNumber);
         Assert.Empty(read.ExecutedTurns);
     }
@@ -75,15 +81,15 @@ public class PrintSessionStateStoreTests : IDisposable
     {
         Assert.Equal(Path.Combine(_paths.Get_ImplementerFolder("o", "rev-1"), PrintSessionState_Store.STATE_FILE_NAME), PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.Reviewer, "o", "rev-1"));
         Assert.Equal(Path.Combine(_paths.GeneralFolder, PrintSessionState_Store.STATE_FILE_NAME), PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, "general"));
-        Assert.Equal(_paths.Get_ImplementerChannelFile("o", "imp-1"), PrintSessionState_Store.Resolve_ChannelFile(_paths, SessionRoles.Implementer, "o", "imp-1"));
-        Assert.Equal(_paths.Get_OwnerChannelFile("o"), PrintSessionState_Store.Resolve_ChannelFile(_paths, SessionRoles.Solo, "o", "solo-1"));
-        Assert.Equal(_paths.GeneralChannelFile, PrintSessionState_Store.Resolve_ChannelFile(_paths, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, "general"));
+        Assert.Equal(_paths.Get_ImplementerChannelFile("o", "imp-1"), TurnSources_Resolver.Resolve_Own(_paths, SessionRoles.Implementer, "o", "imp-1").ChannelFilePath);
+        Assert.Equal(_paths.Get_OwnerChannelFile("o"), TurnSources_Resolver.Resolve_Own(_paths, SessionRoles.Solo, "o", "solo-1").ChannelFilePath);
+        Assert.Equal(_paths.GeneralChannelFile, TurnSources_Resolver.Resolve_Own(_paths, SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, "general").ChannelFilePath);
     }
 
     [Fact]
     public void Transitions_MoveOnlyWhatTheyName()
     {
-        var fresh = PrintSessionState_Factory.Create_New("sid", SessionRoles.Solo, "o", "solo-1", "/r", null, "/r/c.md");
+        var fresh = PrintSessionState_Factory.Create_New("sid", SessionRoles.Solo, "o", "solo-1", "/r", null, "/r/c.md", []);
 
         var failed = PrintSessionState_Factory.CreateFrom_Existing_AttemptFailed(fresh);
         Assert.Equal(1, failed.FailedAttempts);

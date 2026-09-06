@@ -149,7 +149,7 @@ public class PrintRunnerReviewFixTests
 
         PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.Create(
             registered.SessionId, sessionStarted: true, registered.Role, registered.OrchId, registered.MemberId, registered.WorkingDirectory, registered.Model, registered.ChannelFilePath,
-            lastHandledEntryIndex: 0, nextTurnNumber: 1, failedAttempts: 0, skips));
+            registered.Cursors, nextTurnNumber: 1, failedAttempts: 0, skips));
 
         harness.Write_Scenario("""{"default":{"result":"REPORT\n\nreached turn eleven"}}""");
         var dispatcher = harness.Create_Dispatcher();

@@ -18,4 +18,7 @@ public static class PrintTurn_Words
 
     /// <summary>Subject prefix of the alert written when a turn has failed MAX_ATTEMPTS times.</summary>
     public const string TURN_STALLED_SUBJECT = "turn stalled";
+
+    /// <summary>Subject prefix of the note written when part of a reply named a channel the session is not woken by.</summary>
+    public const string MISADDRESSED_SUBJECT = "reply not addressable";
 }

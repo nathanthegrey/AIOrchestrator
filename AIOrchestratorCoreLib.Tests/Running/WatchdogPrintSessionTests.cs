@@ -69,7 +69,12 @@ public class WatchdogPrintSessionTests
         // under test: flip the role back to terminal and the same missing pid file must produce the
         // respawn. Without this the assertion above would pass just as well if the watchdog never
         // looked at supervisors at all.
-        harness.Write_Config("supervisor");
+        //
+        // NAMED EXPLICITLY, because "supervisor" alone stopped meaning terminal. Print supports the
+        // supervisor since the trigger went multi-channel, so the bare word left the role still
+        // bridge-driven and still exempt — a control that could no longer fail for its own reason,
+        // which is the same shape as a guard with its check deleted.
+        harness.Write_Config("supervisor:terminal");
         watchdog.Check_AndRestart_DeadSessions();
 
         Assert.Contains($"sup:{orchId}", launcher.Calls);

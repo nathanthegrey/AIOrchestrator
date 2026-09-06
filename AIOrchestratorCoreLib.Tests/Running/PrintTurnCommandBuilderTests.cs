@@ -12,7 +12,7 @@ public class PrintTurnCommandBuilderTests
 
     static IPrintSessionState State(SessionRoles role, string? model = "opus")
     {
-        return PrintSessionState_Factory.Create_New(SESSION_ID, role, "orch-1", role == SessionRoles.General ? "general" : "imp-1", "/repo", model, "/repo/channel.md");
+        return PrintSessionState_Factory.Create_New(SESSION_ID, role, "orch-1", role == SessionRoles.General ? "general" : "imp-1", "/repo", model, "/repo/channel.md", []);
     }
 
     [Fact]

@@ -7,13 +7,13 @@ namespace AIOrchestratorCoreLib.Running;
 /// sessions answering one brief.
 ///
 /// <para>
-/// The limit is never the transport, it is the TRIGGER. A bridge-driven session is woken by ONE
-/// channel — <see cref="PrintSessionState_Store.Resolve_ChannelFile"/> names it — so a role whose
-/// inbound traffic arrives on several (an orchestration supervisor also reads every spoke) is
-/// supported only in the sense that the owner's channel drives it: member traffic does NOT wake a
-/// bridge-driven supervisor in this stage, and its role command is told to read its spokes at the
-/// end of every turn because of it. The communicator, whose input is the supervisor's transcript
-/// rather than a channel at all, is not supported by either.
+/// THE LIMIT WAS NEVER THE TRANSPORT, IT WAS THE TRIGGER, and the trigger is no longer single-channel.
+/// A bridge-driven session is woken by every channel <see cref="TurnSource.TurnSources_Resolver"/> names
+/// for its role — one for a member, the owner channel plus every open spoke for an orchestration
+/// supervisor — so the supervisor is now supported on BOTH bridge-driven transports rather than only on
+/// the one that happened to be added with it. What remains unsupported is the COMMUNICATOR, and for a
+/// reason no amount of channel-watching answers: its input is the supervisor's transcript, not a channel
+/// at all.
 /// </para>
 /// <para>
 /// <see cref="SessionRunners.Bg"/> supports NOTHING here: the transport is not implemented in this
@@ -28,10 +28,11 @@ public static class Runner_Support
         return runner switch
         {
             SessionRunners.Terminal => true,
-            SessionRunners.Print => role is SessionRoles.Implementer or SessionRoles.Reviewer or SessionRoles.Solo or SessionRoles.General,
-            // The supervisor is the reason the stream exists: it is the owner's phone line, and the
-            // study measured its turn at 1.27 s there against 5.77 s in print.
-            SessionRunners.Stream => role is SessionRoles.Implementer or SessionRoles.Reviewer or SessionRoles.Solo or SessionRoles.General or SessionRoles.Supervisor,
+
+            // Print and stream differ in cost and latency, never in what they can be woken by: the
+            // dispatcher owns the trigger and hands both executors the same pending entries. A table
+            // that let them differ would be a second answer to "which channels wake this session".
+            SessionRunners.Print or SessionRunners.Stream => role is SessionRoles.Implementer or SessionRoles.Reviewer or SessionRoles.Solo or SessionRoles.General or SessionRoles.Supervisor,
             SessionRunners.Bg => false,
             _ => false,
         };
@@ -52,17 +53,5 @@ public static class Runner_Support
         var what = supported.Length == 0 ? "no role in this stage" : $"only {supported}";
 
         return $"role '{SessionRole_Names.Get_ConfigKey(role)}' is configured runner: {SessionRunner_Names.Get_Word(runner)}, which this stage supports for {what} — launched in a terminal instead";
-    }
-
-    /// <summary>
-    /// Said once when a bridge-driven session starts on a role whose traffic arrives on more than
-    /// one channel. Not a warning about a defect — a statement of what this stage's trigger does
-    /// and does not do, where the person reading the log can act on it.
-    /// </summary>
-    public static string? Describe_SingleSourceLimit_OrNull(SessionRoles role)
-    {
-        return role == SessionRoles.Supervisor
-            ? "it is woken by the OWNER channel only: a member writing in its spoke does not start a turn in this stage, so its role command reads the spokes itself at the end of every turn"
-            : null;
     }
 }

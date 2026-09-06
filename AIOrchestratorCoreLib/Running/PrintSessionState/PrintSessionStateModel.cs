@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
+using AIOrchestratorCoreLib.Running.TurnCursor;
 
 namespace AIOrchestratorCoreLib.Running.PrintSessionState;
 
@@ -11,7 +12,7 @@ internal sealed class PrintSessionStateModel(
     string workingDirectory,
     string? model,
     string channelFilePath,
-    int lastHandledEntryIndex,
+    IReadOnlyList<ITurnCursor> cursors,
     int nextTurnNumber,
     int failedAttempts,
     IReadOnlyList<IExecutedTurn> executedTurns) : IPrintSessionState
@@ -24,7 +25,7 @@ internal sealed class PrintSessionStateModel(
     public string WorkingDirectory { get; } = workingDirectory;
     public string? Model { get; } = model;
     public string ChannelFilePath { get; } = channelFilePath;
-    public int LastHandledEntryIndex { get; } = lastHandledEntryIndex;
+    public IReadOnlyList<ITurnCursor> Cursors { get; } = cursors;
     public int NextTurnNumber { get; } = nextTurnNumber;
     public int FailedAttempts { get; } = failedAttempts;
     public IReadOnlyList<IExecutedTurn> ExecutedTurns { get; } = executedTurns;

@@ -67,25 +67,28 @@ public class LauncherRunnerSelectionTests
         }
     }
 
+    /// <summary>
+    /// A PRINT supervisor is registered exactly like a stream one — this used to be the test that it was
+    /// refused. What refused it was the single-channel trigger, and that is gone; the transports differ
+    /// in latency and residency, never in what wakes a session.
+    /// </summary>
     [Fact]
-    public void PrintSupervisor_IsNotSupportedInThisStage_SoItIsSpawnedInATerminal_WithAWarning()
+    public void PrintSupervisor_IsRegistered_NotSpawned_JustLikeAStreamOne()
     {
         var (harness, spawner, launcher) = Build("supervisor");
         using (harness)
         {
-            var warnings = new List<string>();
-            harness.Log.EntryLogged += entry => warnings.Add(entry.Message);
-
             var session = launcher.Start_Orchestration("Repo", harness.RepoPath);
 
-            Assert.Equal(3, spawner.Commands.Count);
-            Assert.False(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Supervisor, session.OrchId, "sup"));
-            Assert.Contains(warnings, message => message.Contains("runner: print") && message.Contains("supervisor"));
+            // The reviewer and the implementer still get windows; the supervisor does not.
+            Assert.Equal(2, spawner.Commands.Count);
+            Assert.True(PrintSessionState_Store.Exists(harness.Paths, SessionRoles.Supervisor, session.OrchId, "sup"));
+            Assert.Equal(harness.Paths.Get_OwnerChannelFile(session.OrchId), harness.Read_State(SessionRoles.Supervisor, session.OrchId, "sup").ChannelFilePath);
         }
     }
 
     [Fact]
-    public void StreamSupervisor_IsRegistered_NotSpawned_AndIsToldWhatWakesIt()
+    public void StreamSupervisor_IsRegistered_WithACursorPerChannelItIsWokenBy()
     {
         var (harness, spawner, launcher) = Build("supervisor:stream");
         using (harness)
@@ -102,8 +105,15 @@ public class LauncherRunnerSelectionTests
             var registered = harness.Read_State(SessionRoles.Supervisor, session.OrchId, "sup");
             Assert.Equal(harness.Paths.Get_OwnerChannelFile(session.OrchId), registered.ChannelFilePath);
 
-            // The one thing about this stage a supervisor's owner has to know, said at registration.
-            Assert.Contains(logged, message => message.Contains("OWNER channel only", StringComparison.Ordinal));
+            // THE SUPERVISOR IS REGISTERED BEFORE ITS MEMBERS EXIST, so at this instant the roster names
+            // one channel and it carries one cursor. The spokes are picked up by the dispatcher as they
+            // appear, and a source that appears mid-life starts EMPTY — so imp-1's boot greeting, landing
+            // between its spawn and the next tick, is traffic and not absorbed history.
+            Assert.Equal("owner", Assert.Single(registered.Cursors).SourceKey);
+            Assert.Empty(registered.Cursors[0].Delivered);
+
+            // Which channels wake it, said at every registration.
+            Assert.Contains(logged, message => message.Contains("woken by 1 channel(s): owner", StringComparison.Ordinal));
         }
     }
 

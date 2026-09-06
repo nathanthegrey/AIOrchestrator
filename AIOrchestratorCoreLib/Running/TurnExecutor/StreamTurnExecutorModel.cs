@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
@@ -72,7 +72,8 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         string sessionId,
         bool resumeTranscript,
         string requestId,
-        IReadOnlyList<IChannelEntry> pending,
+        IReadOnlyList<PendingEntry> pending,
+        IReadOnlyList<TurnSource.ITurnSource> sources,
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
@@ -81,7 +82,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         var key = Build_Key(state.OrchId, state.MemberId);
 
         if (Has_FallenBack(key))
-            return await Run_OnFallback_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, alreadyExecutedTurns, environment, timeout, cancellationToken);
+            return await Run_OnFallback_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecutedTurns, environment, timeout, cancellationToken);
 
         var logFile = TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId);
         var (process, booted) = Ensure_Process(key, state, roleConfig, sessionId, resumeTranscript, requestId, environment, logFile);
@@ -110,7 +111,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
                 return TurnResult_Parser.Parse(-1, timedOut: true, string.Empty, "the boot turn used the whole timeout", bootElapsed);
         }
 
-        var prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns);
+        var prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
         var outcome = await process.Send_AndAwaitResult_Async(prompt, deadline, SilenceLimit, cancellationToken);
 
         Record_RateLimit_IfNew(state, outcome);
@@ -279,7 +280,8 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         string sessionId,
         bool resumeTranscript,
         string requestId,
-        IReadOnlyList<IChannelEntry> pending,
+        IReadOnlyList<PendingEntry> pending,
+        IReadOnlyList<TurnSource.ITurnSource> sources,
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
@@ -296,7 +298,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
             [PrintTurn_Words.RUNNER_ENV_VAR] = SessionRunner_Names.Get_Word(_fallback.Kind),
         };
 
-        return await _fallback.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, alreadyExecutedTurns, fallbackEnvironment, timeout, cancellationToken);
+        return await _fallback.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecutedTurns, fallbackEnvironment, timeout, cancellationToken);
     }
 
     bool Has_FallenBack(string key)

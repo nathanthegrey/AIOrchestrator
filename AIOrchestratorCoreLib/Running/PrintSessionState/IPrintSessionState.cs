@@ -1,11 +1,12 @@
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
+using AIOrchestratorCoreLib.Running.TurnCursor;
 
 namespace AIOrchestratorCoreLib.Running.PrintSessionState;
 
 /// <summary>
-/// Everything the bridge knows about one print-run session, persisted beside its channel
+/// Everything the bridge knows about one bridge-driven session, persisted beside its channel
 /// (<c>print-session.json</c>). It is the session's whole identity from the bridge's side: the
-/// transcript id to resume, where to run, which channel entry was last handed to it, and the
+/// transcript id to resume, where to run, how far each of its channels has been delivered, and the
 /// turns already executed. Immutable — every change is a new instance written whole.
 /// </summary>
 public interface IPrintSessionState
@@ -29,11 +30,19 @@ public interface IPrintSessionState
     string WorkingDirectory { get; }
     string? Model { get; }
 
-    /// <summary>The one channel whose inbound entries trigger this session's turns.</summary>
+    /// <summary>
+    /// The session's OWN channel: where its <c>turn_ended</c> record, its stall alert and any reply it
+    /// addressed to nobody are written. For every role but the orchestration supervisor it is also its
+    /// only source; for the supervisor it is the owner channel and the spokes are sources beside it.
+    /// </summary>
     string ChannelFilePath { get; }
 
-    /// <summary>The highest inbound entry index a completed turn was handed. Entries above it are pending.</summary>
-    int LastHandledEntryIndex { get; }
+    /// <summary>
+    /// One cursor per channel this session is woken by, keyed by
+    /// <see cref="TurnSource.ITurnSource.Key"/>. A source with no cursor here has never been seen and is
+    /// baselined on sight — see <see cref="TurnCursor_Factory.Create_Baseline"/>.
+    /// </summary>
+    IReadOnlyList<ITurnCursor> Cursors { get; }
 
     /// <summary>The number the next turn will carry (and therefore its request id).</summary>
     int NextTurnNumber { get; }
