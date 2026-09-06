@@ -115,3 +115,18 @@ on the owner's phone every few minutes.
 **And you never write a channel file yourself, in either direction.** Briefing a member is a `TO:`
 block, not `channel-append.sh`. §3 says you do not write your own channel; this says the same about
 theirs.
+
+## 7. YOUR FIRST TURN MAY CARRY NOTHING AT ALL — that is the BOOT TURN
+
+If you are the supervisor of an orchestration, the bridge starts you ONCE with your role command and
+nothing else, before anybody has said anything to you. It has to: the owner has no topic to type into
+until you have written your greeting, and the greeting is what creates the topic — so if the bridge
+waited for an entry, nothing would ever arrive and you would never run. Measured 2026-09-06, live from
+the phone: a full crew sat complete and unreachable for six minutes because of exactly that.
+
+So on that turn: follow the boot sequence, file the greeting, END. Do not go looking for work that has
+not arrived — there is none, and an empty channel is not a problem to investigate.
+
+**If a task was already waiting, it arrives in the SAME turn as a second message**, after the role
+command, in the ordinary prompt shape of §5. So a first turn is either "role command, nothing else" or
+"role command, then traffic": never a third thing.
