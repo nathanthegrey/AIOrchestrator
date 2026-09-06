@@ -77,6 +77,33 @@ public class RoleHooksAreShippedTests
     }
 
     /// <summary>
+    /// THE BIT THAT MAKES bin/ MEAN ANYTHING. The plugin's bin/ is prepended to the Bash tool's
+    /// PATH, which is why every role now calls the helper by bare name — but PATH resolution only
+    /// finds an EXECUTABLE file, and the helper was committed 100644 when it moved there.
+    ///
+    /// Measured 2026-09-06, in a live stream turn: `which channel-append.sh` printed
+    /// "NOT FOUND IN PATH", and the supervisor went on to append to its own channel by hand,
+    /// annotating it "(Entry written without lock because channel-append.sh is not installed)" —
+    /// the exact unlocked write the helper exists to replace, on the busiest channel in the system.
+    ///
+    /// Skipped where the mode does not exist rather than asserted falsely; the git index carries
+    /// 100755, so a checkout on any OS ships it executable.
+    /// </summary>
+    [Fact]
+    public void TheAppendHelper_IsExecutable_OrBinOnPathBuysNothing()
+    {
+        var helper = KitRepoFiles.Find(Path.Combine("kit", "bin", "channel-append.sh"))
+            ?? throw new Exception("kit/bin/channel-append.sh was not found — REFUSING to pass about a file this test never located.");
+
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.True(
+            File.GetUnixFileMode(helper).HasFlag(UnixFileMode.UserExecute),
+            $"{helper} is not executable, so `channel-append.sh` cannot resolve on PATH and every role's instruction to call it by bare name is dead");
+    }
+
+    /// <summary>
     /// A role is entered because the app spawned it. Without this flag the six descriptions sit in
     /// every session's context and a model can decide to become a supervisor on its own.
     /// </summary>

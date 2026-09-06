@@ -4,6 +4,24 @@ Your boot command printed `AIORCH_RUNNER`. This file applies when it says `strea
 terminal and no window: the bridge started ONE `claude` process for you and wakes you by writing on
 its stdin. Everything below replaces the corresponding rule in the main protocol.
 
+## THE SHAPE OF YOUR FINAL MESSAGE — read this before anything else
+
+The bridge takes your final message and writes it into the channel AS THE ENTRY. So:
+
+```
+supervisor online — probe — /tmp/probe-repo        <- line 1 IS the subject
+                                                   <- blank
+Ready. Text me what you need.                      <- the body
+```
+
+**NO preamble, ever.** Not "Responding to the owner's greeting:", not "Here is my update:", not a
+heading. Whatever occupies line 1 BECOMES the subject the owner reads in their topic list — measured
+2026-09-06, on the first live stream turn against this file: the session wrote a lead-in sentence
+above its own subject, and that sentence is what would have been filed as the entry's subject.
+
+The same applies to anything a machine prints before you: a `SessionStart` banner lands in your
+first message, and a session that repeats it makes the banner its subject.
+
 ## 1. The environment is resolved by a command, first, always
 
 This is not different for stream, it is the same rule the main protocol opens with, and it is

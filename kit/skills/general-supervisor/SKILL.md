@@ -384,6 +384,15 @@ orchestration's own Telegram topic; the bridge routes per-topic.
 NOW, before you write anything** — its rules change how you write to your channel and what ends your
 turn, and a session that skipped them hung until its turn timed out (measured 2026-09-06).
 
+**They sit beside this protocol inside the plugin, and a bare `reference/...` is NOT a path your
+tools can open** — measured 2026-09-06: a stream supervisor resolved it against the supervision root,
+found nothing, and went on to write its own channel WITHOUT the lock, which is the one thing the
+append helper exists to prevent. Resolve the folder once, with this, and read from it:
+
+```bash
+REF="$(dirname "$(dirname "$(command -v channel-append.sh)")")/skills/general-supervisor/reference"; ls "$REF"
+```
+
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
 **READ `reference/watcher.md` NOW, at boot, and follow it — it is not optional and it is not
