@@ -271,7 +271,11 @@ public static class OrchestrationRequests_Reader
                     if (mode != null && mode != FULL_MODE && mode != BASIC_MODE)
                         return $"mode must be '{FULL_MODE}' or '{BASIC_MODE}', got '{mode}'";
 
-                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, mode != FULL_MODE, filePath));
+                    // THE TASK TRAVELS WITH THE REQUEST. Optional, because a request written before this
+                    // key existed must still start an orchestration; but its absence is the defect the
+                    // VPS round found, not a shape anybody wants — a crew that boots with nothing to do
+                    // leaves the owner typing the job a second time, into a topic that does not exist yet.
+                    startRequests.Add(StartOrchestrationRequest_Factory.Create(repoQuery, mode != FULL_MODE, root["task"]?.GetValue<string>(), filePath));
                     return null;
                 }
                 case ADD_IMPLEMENTER_ACTION:

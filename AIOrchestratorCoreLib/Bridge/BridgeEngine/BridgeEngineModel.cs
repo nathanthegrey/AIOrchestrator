@@ -3949,13 +3949,43 @@ internal sealed class BridgeEngineModel(
                     ? _launcher.Start_BasicOrchestration(repo.Name, repo.Path)
                     : _launcher.Start_Orchestration(repo.Name, repo.Path);
 
+                // THE TASK IS FILED AFTER THE LAUNCH, NEVER BEFORE, and the order is the whole
+                // mechanism. A bridge-driven session baselines its channels at REGISTRATION
+                // (Running.SessionRunner.BridgeDrivenRunnerModel): anything already in owner-channel.md
+                // when the supervisor is registered is absorbed as HISTORY and starts no turn. Written
+                // here — after Start_Orchestration has returned, so after the registration — the task is
+                // traffic, and it is the first thing the new session is handed.
+                //
+                // FROM owner, because that is whose words these are. The app already appends the owner's
+                // Telegram messages to this file under that author (Append_OwnerEntry is the same call
+                // the inbound bridge makes), so the supervisor meets its first task in exactly the shape
+                // every later one arrives in, and nothing new had to be invented to carry it.
+                var taskFiled = !string.IsNullOrWhiteSpace(request.Task)
+                    && ChannelAppender.Append_OwnerEntry(_paths.Get_OwnerChannelFile(session.OrchId), request.Task!, DateTime.Now);
+
+                if (!string.IsNullOrWhiteSpace(request.Task) && !taskFiled)
+                {
+                    // SAID TO THE OWNER, not swallowed. The channel was held for the whole budget by
+                    // another writer — vanishingly unlikely on a channel created seconds ago, and if it
+                    // ever happens the orchestration is up with nothing to do, which is precisely the
+                    // state that looks like the app working and is not.
+                    _log.Log_Error(session.OrchId, $"The task that came with the start request could not be appended to '{session.OrchId}' owner channel — the orchestration is up but has not been told what to do", null);
+                    Append_GeneralAppEntry(AppEntryAudiences.Owner,
+                        $"orchestration '{session.OrchId}' started WITHOUT its task",
+                        $"Orchestration '{session.OrchId}' is up, but its owner channel was locked and the task could not be written into it. Tell it what you need in its own topic.");
+                }
+
                 var crew = request.IsBasic
                     ? "One solo session spawned — no supervisor, no implementers; you talk to it directly."
                     : "Supervisor and implementer imp-1 spawned;";
 
+                var task = taskFiled
+                    ? " Its task is already in its owner channel and it starts on it."
+                    : string.Empty;
+
                 Append_GeneralAppEntry(AppEntryAudiences.Owner,
                     $"orchestration '{session.OrchId}' started",
-                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). {crew} its Telegram topic appears on its first channel entry.");
+                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). {crew} its Telegram topic appears on its first channel entry.{task}");
             }
             catch (Exception ex)
             {

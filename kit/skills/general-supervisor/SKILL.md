@@ -295,9 +295,19 @@ rejection reason). The app reads `config.json` LIVE, so a request right after yo
 - **Start an orchestration** — when the owner says "I need to work on <something>":
   1. Resolve <something> to the configured repo (colloquial mapping is YOUR job, see above).
   2. **WRITE THE REQUEST FILE FIRST, AND ONLY THEN TELL THE OWNER.** Drop
-     `{"action":"start-orchestration","repo":"<exact repo name>"}` — the app allocates the
-     orchestration id automatically (repo-slug-n, incremental); you never pick ids — and let the
-     app's own `orchestration '<id>' started` entry be what the owner reads as confirmation.
+     `{"action":"start-orchestration","repo":"<exact repo name>","task":"<what the owner asked, in their words>"}`
+     — the app allocates the orchestration id automatically (repo-slug-n, incremental); you never pick
+     ids — and let the app's own `orchestration '<id>' started` entry be what the owner reads as
+     confirmation.
+
+     **ALWAYS CARRY THE `task`.** It is the owner's request in the owner's words, and the app writes it
+     into the new orchestration's `owner-channel.md` as its first `FROM owner` entry — the same author
+     it uses for every message the owner types into a topic. That entry is what the new session boots
+     onto. Omit it and a crew comes up with a supervisor, an implementer and a reviewer and nothing to
+     do, and the owner has to say the whole thing a second time (measured 2026-09-06, the first live
+     round from the phone). Relay, do not rewrite: pass what they asked for, not your paraphrase of it.
+     **This does not licence you to touch that channel** — the other orchestrations' channels stay
+     READ-ONLY to you, exactly as below. The APP writes it; the field is how your words get there.
 
      **This order is the whole point and it used to be the other way round.** Announcing first
      leaves a window between the promise and the act, and anything that ends your turn inside it —

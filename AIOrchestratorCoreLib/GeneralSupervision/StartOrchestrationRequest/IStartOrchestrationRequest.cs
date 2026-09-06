@@ -20,6 +20,21 @@ public interface IStartOrchestrationRequest
     /// </summary>
     bool IsBasic { get; }
 
+    /// <summary>
+    /// THE OWNER'S OWN WORDS, carried with the request so the orchestration is born with something to
+    /// do. Optional and usually present: the concierge writes the file the moment the owner says what
+    /// they want, and dropping the "what" on the floor is how a full crew came up on 2026-09-06 with a
+    /// supervisor, an implementer and a reviewer and nothing to work on.
+    ///
+    /// <para>
+    /// IT IS NOT THE GENERAL SUPERVISOR'S TO WRITE, and this field is what keeps that true. The new
+    /// orchestration's owner-channel.md stays READ-ONLY to it, as its protocol says; the APP appends
+    /// the task there as a <c>FROM owner</c> entry, which is the same thing it already does with every
+    /// message the owner types into a topic. One writer, one attribution, no new licence.
+    /// </para>
+    /// </summary>
+    string? Task { get; }
+
     /// <summary>The request file, deleted after processing (success or failure) so it never loops.</summary>
     string SourceFilePath { get; }
 }
