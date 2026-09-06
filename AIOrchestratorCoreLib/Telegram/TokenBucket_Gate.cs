@@ -94,6 +94,19 @@ public static class TokenBucket_Gate
     /// </summary>
     public const int MAXIMUM_HONOURED_RETRY_AFTER_SECONDS = 300;
 
+    /// <summary>
+    /// The longest a 429 may hold a single call INSIDE the caller's turn.
+    ///
+    /// <para>
+    /// The mirror tick runs every two seconds and holds a channel-write allowance while it does, so
+    /// a call that sleeps for minutes does not merely delay itself — it stops the mirror, the owner's
+    /// deliveries and the deadline sweep for as long as it sleeps. Telegram's advice is honoured up
+    /// to this much and no further; beyond it the failure goes to the caller, where the per-channel
+    /// backoff already knows what to do with an outcome it could not learn.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan MAXIMUM_INLINE_RETRY_WAIT = TimeSpan.FromSeconds(10);
+
     public static TimeSpan Read_RetryAfter(int? retryAfterSeconds)
     {
         if (retryAfterSeconds == null || retryAfterSeconds.Value <= 0)

@@ -227,7 +227,20 @@ public static class OrchestratorConfig_Loader
 
         foreach (var node in array)
         {
-            var value = node?.GetValue<string>();
+            // PER ELEMENT, and unguarded this was the same defect the numeric readers below were
+            // just fixed for — one non-string entry took the whole load down, and the load is on the
+            // app's startup path. `"highRiskPatterns": ["push", "deploy", 3]` is a plausible
+            // hand-edit; it must cost that entry, not the app.
+            string? value;
+
+            try
+            {
+                value = node?.GetValue<string>();
+            }
+            catch
+            {
+                continue;
+            }
 
             if (!string.IsNullOrWhiteSpace(value))
                 values.Add(value);
@@ -264,6 +277,10 @@ public static class OrchestratorConfig_Loader
         }
     }
 
+    /// <summary>
+    /// Guarded for the reason the numeric readers are: a value of the wrong type is a typo in one
+    /// setting, and a typo must never be able to stop the app from starting.
+    /// </summary>
     static bool? Get_Bool_OrNull(JsonObject? root, string key)
     {
         if (root == null)
@@ -273,6 +290,13 @@ public static class OrchestratorConfig_Loader
         if (node == null)
             return null;
 
-        return node.GetValue<bool>();
+        try
+        {
+            return node.GetValue<bool>();
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

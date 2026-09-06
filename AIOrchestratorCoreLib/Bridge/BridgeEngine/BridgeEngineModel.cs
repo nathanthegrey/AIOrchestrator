@@ -685,12 +685,22 @@ internal sealed class BridgeEngineModel(
     readonly IClock _clock = clock;
 
     /// <summary>
-    /// High-risk decisions the owner has TAPPED and not yet confirmed by typing the code back, one
-    /// per orchestration. Keyed by orchestration because that is the scope the owner's next message
-    /// arrives in: the code is typed into the topic, and the topic is the orchestration.
+    /// High-risk decisions the owner has TAPPED and not yet confirmed by typing the code back.
+    ///
+    /// <para>
+    /// A LIST, NOT A MAP KEYED BY ORCHESTRATION, and the map was a defect. Keyed by orchestration it
+    /// documented "newest wins" — but the older question's message is still on screen showing ITS
+    /// code, its buttons are already consumed, and it is still open. So: two high-risk questions in
+    /// one topic, tap both, scroll back and type the first code, and the answer is "that is not the
+    /// code" for a decision the app itself put on the screen. Several can be live at once and the
+    /// typed code is matched against all of them in that topic — the codes are distinct, so there is
+    /// no ambiguity to resolve.
+    /// </para>
+    /// <para>
+    /// Guarded by _ownerStateLock, like the open questions it shadows.
+    /// </para>
     /// </summary>
-    readonly Dictionary<string, PendingConfirmationRecord> _pendingConfirmations =
-        restoredState.PendingConfirmations.ToDictionary(confirmation => confirmation.OrchId);
+    readonly List<PendingConfirmationRecord> _pendingConfirmations = [.. restoredState.PendingConfirmations];
 
     /// <summary>
     /// When the dispatcher may start work again, or null while it is running. Persisted, because a
@@ -994,13 +1004,15 @@ internal sealed class BridgeEngineModel(
         // which nothing stops sixty sessions failing identically. See DispatchPause_Gate.
         await Update_DispatchPause_Async(cancellationToken);
 
-        var dispatchPaused = Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, _clock.UtcNow);
+        bool dispatchPaused;
+
+        lock (_ownerStateLock)
+            dispatchPaused = Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, _clock.UtcNow);
 
         // DEFERRED, NOT DROPPED, while paused. Request files stay on disk untouched, so the work the
         // owner asked for happens the moment the window resets — the protocol is already re-entrant
         // and that is what makes deferring free here.
-        if (!dispatchPaused)
-            Process_PendingRequests();
+        Process_PendingRequests(dispatchPaused);
 
         // After closes are processed, so a freshly-closed session is not immediately revived.
         // A respawn is a LAUNCH: while the account is out of allowance it buys a session that
@@ -2623,7 +2635,14 @@ internal sealed class BridgeEngineModel(
     Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> Read_CurrentLimitWindows()
     {
         Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> maxPercents = [];
-        var nowUtc = DateTime.UtcNow;
+
+        // FROM THE INJECTED CLOCK, both readings, because this method decides which windows are still
+        // live and the pause decides what to do about them — two clocks for one decision is two ways
+        // to disagree. In production the injected clock IS the system clock, so nothing changes; what
+        // it buys is that "the window came back and dispatch resumed" is a property a test can move
+        // the clock across instead of waiting out.
+        var nowUtc = _clock.UtcNow;
+        var nowLocal = nowUtc.ToLocalTime();
 
         // Only probe files with a window that has not already reset. Probe files are never
         // deleted, so without this the alert scan folded five-day-old closed orchestrations into
@@ -2631,7 +2650,7 @@ internal sealed class BridgeEngineModel(
         // alerting entirely.
         // Read_Text_Safe rather than File.ReadAllText: a live session rewriting its probe file
         // used to throw a sharing violation out of this loop and abort the whole check.
-        foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, DateTime.Now))
+        foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, nowLocal))
         {
             var windows = Limits.LimitData_Parser.Extract_LimitWindows(UsageTotals_Reader.Read_Text_Safe(usageFile));
 
@@ -3112,7 +3131,7 @@ internal sealed class BridgeEngineModel(
                 {
                     await Send_QuestionWithButtons_Async(
                         threadId, questionPrompt, optionLabels, append.Channel,
-                        directives.Deadline, directives.DefaultOptionIndex, cancellationToken);
+                        directives.Deadline, directives.DefaultOptionIndex, entry.Body, cancellationToken);
                 }
 
                 foreach (var photoPath in photoPaths)
@@ -3288,6 +3307,7 @@ internal sealed class BridgeEngineModel(
         Channels.DiscoveredChannel.IDiscoveredChannel channel,
         TimeSpan? deadline,
         int? defaultOptionIndex,
+        string riskSurfaceBody,
         CancellationToken cancellationToken)
     {
         var client = _telegramClient
@@ -3311,7 +3331,19 @@ internal sealed class BridgeEngineModel(
         // patterns are English words an agent writes, and matching a translation of them would make
         // the guard depend on which language the owner happens to read in.
         var guardrails = _configProvider.Get_Current().Guardrails;
-        var isHighRisk = HighRisk_Classifier.Is_HighRisk(questionPrompt, guardrails.HighRiskPatterns);
+
+        // THE OPTIONS AND THE BODY COUNT TOO, and reading the question line alone was a hole with a
+        // natural shape: `QUESTION: How should I proceed?` / `OPTION: Push the release branch to
+        // main` / `OPTION: Hold` classified as safe, and one tap on a pocketed phone delivered the
+        // push with no code. QuestionPrompt_Builder also caps a derived question at one sentence and
+        // strips fenced blocks, so a ```rm -rf``` shown to the owner was invisible here as well.
+        //
+        // A false positive costs one typed code. A false negative costs the operation this whole
+        // gate exists for, so the surface being matched is deliberately the widest one the owner
+        // actually reads.
+        var isHighRisk = HighRisk_Classifier.Is_HighRisk(
+            Compose_RiskSurface(questionPrompt, optionLabels, riskSurfaceBody),
+            guardrails.HighRiskPatterns);
 
         // A HIGH-RISK QUESTION LOSES ITS DEFAULT HERE, at the point of asking, rather than being
         // trusted not to have one. The agent may well have written DEFAULT: 1 on a push question in
@@ -3351,7 +3383,9 @@ internal sealed class BridgeEngineModel(
 
             if (isHighRisk)
             {
-                var matched = HighRisk_Classifier.Find_MatchedPattern_OrNull(questionPrompt, guardrails.HighRiskPatterns);
+                var matched = HighRisk_Classifier.Find_MatchedPattern_OrNull(
+                    Compose_RiskSurface(questionPrompt, optionLabels, riskSurfaceBody),
+                    guardrails.HighRiskPatterns);
                 _log.Log_Info(channel.OrchId, $"Question classified HIGH RISK (matched '{matched}') — a tap will require the read-back code");
             }
 
@@ -3371,6 +3405,16 @@ internal sealed class BridgeEngineModel(
         // crash between them would leave a keyboard on the phone with no question behind it, or a
         // question with no way to answer by tapping.
         Persist_EngineState();
+    }
+
+    /// <summary>
+    /// Everything a high-risk pattern may be found in: the question, every option label, and the
+    /// entry body the question came from. ONE composition, used by both the decision and the log
+    /// line that explains it — two would be two places for the surface to drift.
+    /// </summary>
+    static string Compose_RiskSurface(string questionPrompt, IReadOnlyList<string> optionLabels, string body)
+    {
+        return $"{questionPrompt}\n{string.Join('\n', optionLabels)}\n{body}";
     }
 
     /// <summary>
@@ -3639,7 +3683,18 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    void Process_PendingRequests()
+    /// <summary>
+    /// <paramref name="dispatchPaused"/> defers ONLY the requests that start work.
+    ///
+    /// <para>
+    /// It gated all of them for one commit, which was wrong in the direction that matters: closing an
+    /// orchestration, closing a member and setting DND cost nothing, and the first two FREE sessions.
+    /// So the owner, looking at an app that had stopped by itself because the account was spent, typed
+    /// /close and watched nothing happen — with /limits explaining the pause but not why their close
+    /// had vanished. A pause that also removes the ability to stop things is not a safety measure.
+    /// </para>
+    /// </summary>
+    void Process_PendingRequests(bool dispatchPaused)
     {
         var pending = OrchestrationRequests_Reader.Read_Pending(_paths);
 
@@ -3655,9 +3710,14 @@ internal sealed class BridgeEngineModel(
             Delete_RequestFile(malformedRequest.FilePath);
         }
 
-        Process_StartRequests(pending);
-        Process_AddImplementerRequests(pending);
-        Process_PromoteOrchestrationRequests(pending);
+        // THE THREE THAT SPAWN. Left on disk while paused, so they run at the resume.
+        if (!dispatchPaused)
+        {
+            Process_StartRequests(pending);
+            Process_AddImplementerRequests(pending);
+            Process_PromoteOrchestrationRequests(pending);
+        }
+
         Process_CloseImplementerRequests(pending);
         Process_CloseOrchestrationRequests(pending);
         Process_SetTelegramMutedRequests(pending);
@@ -4655,6 +4715,14 @@ internal sealed class BridgeEngineModel(
 
         Clear_OpenQuestions(confirmation.OrchId);
         Clear_AwaitingAnswerFlag(confirmation.OrchId);
+        Discard_PendingConfirmations(confirmation.OrchId);
+
+        // THE ONE MUTATION SITE THAT DID NOT SAVE, and the only one — every other write to the five
+        // persisted maps is followed by a save on some path. Without it a closed orchestration's
+        // questions came back from the snapshot on the next restart, went past their deadline, and
+        // had `question DEFAULTED on timeout` written into the owner channel of an orchestration that
+        // had been closed hours earlier: a stale snapshot reanimating a dead session.
+        Persist_EngineState();
 
         var result = confirmation.Confirms
             ? Execute_ConfirmedClose(confirmation)
@@ -6822,12 +6890,21 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     string? Describe_DispatchPause_OrNull()
     {
-        var pausedUntilUtc = _dispatchPausedUntilUtc;
+        DateTime? pausedUntilUtc;
+        string? reason;
+
+        // Read under the lock the writer takes — see Update_DispatchPause_Async for why a 16-byte
+        // field read from the other loop is not free.
+        lock (_ownerStateLock)
+        {
+            pausedUntilUtc = _dispatchPausedUntilUtc;
+            reason = _dispatchPauseReason;
+        }
 
         if (!Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, _clock.UtcNow))
             return null;
 
-        return $"⏸ DISPATCH PAUSED — {_dispatchPauseReason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {pausedUntilUtc:HH:mm} UTC.";
+        return $"⏸ DISPATCH PAUSED — {reason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {pausedUntilUtc:HH:mm} UTC.";
     }
 
     /// <summary>
@@ -8467,8 +8544,18 @@ internal sealed class BridgeEngineModel(
         var syntheticMessage = TelegramOwnerMessage_Factory.Create(
             tap.UpdateId, tap.MessageId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
 
-        // The group is consumed and the question is closed: both are decisions, and they are saved
-        // BEFORE the answer is routed, because routing is what can fail.
+        // SAVED BEFORE THE ANSWER IS ROUTED, and the reason is a TRADE rather than a safety net —
+        // the comment that used to sit here ("routing is what can fail") named the wrong half.
+        //
+        // Crash between these two lines and the answer is lost: buttons consumed, question closed,
+        // the message already edited to show the choice. Crash the other way round and the answer is
+        // delivered while the keyboard survives the restart, so the owner can take the SAME decision
+        // twice — and the decisions that reach this line include pushes and deploys.
+        //
+        // A lost answer is recoverable and visible: the supervisor is still blocked, the stall alert
+        // fires, and the owner is asked again. A double push is neither. So this order is chosen
+        // knowing what it costs; the thing that would remove the trade altogether is a durable
+        // outbox, which is a bigger change than this stage.
         Persist_EngineState();
 
         await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
@@ -8501,17 +8588,12 @@ internal sealed class BridgeEngineModel(
         PendingButtonRecord registered,
         CancellationToken cancellationToken)
     {
-        var orchId = Resolve_OrchId_ForThread_OrNull(registered.ThreadId ?? tap.MessageThreadId);
-
-        if (orchId == null)
-        {
-            // Without an orchestration there is no topic to read the typed code from, so the
-            // confirmation could never be completed. Refusing OUT LOUD beats arming something that
-            // can only ever lapse.
-            _log.Log_Warning(GLOBAL_ORCH_ID, "A high-risk tap arrived in a topic with no open orchestration — it was refused rather than parked");
-            await Send_DirectReply_BestEffort_Async(client, tap.MessageThreadId, "That decision belongs to no open orchestration — please type your answer.", cancellationToken);
-            return;
-        }
+        // THE GENERAL TOPIC IS A SCOPE LIKE ANY OTHER HERE, and treating it as "no orchestration" was
+        // a defect that hit the common case: the general supervisor is precisely the session that
+        // discusses shipping and deploying, so its questions are the ones most likely to be high
+        // risk — and every one of them answered "that decision belongs to no open orchestration",
+        // for ever, with the keyboard already consumed and the buttons coming back on every restart.
+        var orchId = Resolve_DecisionScope_ForThread(registered.ThreadId ?? tap.MessageThreadId);
 
         var guardrails = _configProvider.Get_Current().Guardrails;
         var code = ConfirmationCode.Generate();
@@ -8529,18 +8611,19 @@ internal sealed class BridgeEngineModel(
 
         lock (_ownerStateLock)
         {
-            // ONE AT A TIME PER ORCHESTRATION, and the newest wins. Two live codes in one topic
-            // would make a typed four-digit message ambiguous, which is the one thing this flow
-            // cannot afford to be.
+            // THE QUESTION STAYS OPEN, and this is the fix to the worst thing a tap could do.
             //
-            // `?? 0` used to stand where the null check does: it removed the entry keyed on message
-            // id ZERO, which is not this question and may be someone else's, while leaving this
-            // question open — a question that is both awaiting a code and still listed as
-            // unanswered, on the one flow where being in two states at once is least affordable.
-            if (tap.MessageId != null)
-                _openQuestions.Remove(tap.MessageId.Value);
-
-            _pendingConfirmations[orchId] = confirmation;
+            // Removing it here meant a high-risk question with `DEADLINE: 30m` — whose whole contract
+            // is "denied at 30 minutes" — became invisible to the deadline sweep the moment it was
+            // tapped. The owner taps, sees the code, is interrupted, never types it: the code lapses
+            // in ten minutes and NOTHING notices, the awaiting-answer flag is never cleared, and the
+            // supervisor's hook denies every tool call for ever. A tap was the one gesture that
+            // converted a bounded question into an unbounded one, which is the exact inversion the
+            // deadline exists to prevent.
+            //
+            // Left open, the sweep still denies it on time and takes the confirmation down with it.
+            _pendingConfirmations.RemoveAll(existing => existing.MessageId == confirmation.MessageId && existing.OrchId == orchId);
+            _pendingConfirmations.Add(confirmation);
         }
 
         // Saved BEFORE the edit: a crash between the two leaves a code the app still honours and a
@@ -8579,6 +8662,33 @@ internal sealed class BridgeEngineModel(
         _log.Log_Info(orchId, "High-risk decision tapped — awaiting the read-back code before the answer is delivered");
     }
 
+    /// <summary>
+    /// The scope a DECISION belongs to: an orchestration id, or the General channel's own id when the
+    /// tap arrived in the General topic (which carries no thread id — the absence IS how this app
+    /// tells it apart).
+    ///
+    /// <para>
+    /// Separate from <see cref="Resolve_OrchId_ForThread_OrNull"/> deliberately, and adding it fixed a
+    /// defect in the common case rather than an edge: that method answers "which SESSION owns this
+    /// topic" and General owns none, which is right for /pending's scoping and wrong for a decision.
+    /// The general supervisor is precisely the session that discusses shipping and deploying, so its
+    /// questions are the ones most likely to be high risk — and every one of them used to answer
+    /// "that decision belongs to no open orchestration", for ever, with the keyboard already
+    /// consumed and the buttons coming back on every restart.
+    /// </para>
+    /// </summary>
+    string Resolve_DecisionScope_ForThread(long? messageThreadId)
+    {
+        return Resolve_OrchId_ForThread_OrNull(messageThreadId) ?? ChannelDiscovery.GENERAL_ORCH_ID;
+    }
+
+    /// <summary>Drops every pending read-back for a scope — used when its session ends.</summary>
+    void Discard_PendingConfirmations(string orchId)
+    {
+        lock (_ownerStateLock)
+            _pendingConfirmations.RemoveAll(confirmation => confirmation.OrchId == orchId);
+    }
+
     /// <summary>Which orchestration a Telegram topic belongs to, or null for General and unknowns.</summary>
     string? Resolve_OrchId_ForThread_OrNull(long? messageThreadId)
     {
@@ -8610,60 +8720,55 @@ internal sealed class BridgeEngineModel(
         ITelegramOwnerMessage message,
         CancellationToken cancellationToken)
     {
-        var orchId = Resolve_OrchId_ForThread_OrNull(message.MessageThreadId);
-
-        if (orchId == null)
-            return false;
+        var orchId = Resolve_DecisionScope_ForThread(message.MessageThreadId);
+        var looksLikeACode = ConfirmationCode.Looks_LikeACode(message.Text);
 
         PendingConfirmationRecord? confirmation;
+        bool anyLiveInThisTopic;
 
         lock (_ownerStateLock)
         {
-            if (!_pendingConfirmations.TryGetValue(orchId, out confirmation))
-                return false;
+            // MATCHED AGAINST EVERY LIVE READ-BACK IN THIS TOPIC, not against one. The codes are
+            // distinct, so scrolling back to an earlier question and typing ITS code resolves to
+            // that question — which is what the owner means and what the screen still shows them.
+            // Keyed by orchestration with "newest wins", the first of two taps became unanswerable
+            // by tap, unanswerable by code, and still displaying a code the app had discarded.
+            confirmation = _pendingConfirmations.FirstOrDefault(candidate =>
+                candidate.OrchId == orchId
+                && _clock.UtcNow < candidate.ExpiresUtc
+                && ConfirmationCode.Matches(message.Text, candidate.Code));
+
+            anyLiveInThisTopic = _pendingConfirmations.Any(candidate =>
+                candidate.OrchId == orchId && _clock.UtcNow < candidate.ExpiresUtc);
+
+            if (confirmation != null)
+            {
+                _pendingConfirmations.Remove(confirmation);
+
+                // The decision is taken, so the question it belongs to is answered. It was left OPEN
+                // while the read-back ran, on purpose — see Begin_HighRiskConfirmation_Async.
+                if (confirmation.MessageId != null)
+                    _openQuestions.Remove(confirmation.MessageId.Value);
+            }
         }
 
-        var looksLikeACode = ConfirmationCode.Looks_LikeACode(message.Text);
-
-        if (_clock.UtcNow >= confirmation.ExpiresUtc)
+        if (confirmation == null)
         {
-            lock (_ownerStateLock)
-                _pendingConfirmations.Remove(orchId);
-
-            Persist_EngineState();
-
-            // SWALLOWED ONLY IF IT WAS AN ATTEMPT. A lapsed confirmation must not eat an ordinary
-            // message the owner sent minutes later about something else entirely.
-            if (!looksLikeACode)
+            // NOT A CODE, OR NOTHING LIVE TO MATCH IT AGAINST. Either way the message is ordinary and
+            // must reach the session untouched: the owner types "hang on" and then the code, and a
+            // lapsed read-back must not eat something they sent an hour later about something else.
+            if (!looksLikeACode || !anyLiveInThisTopic)
                 return false;
 
-            _log.Log_Warning(orchId, "A high-risk read-back code arrived after its window closed — the decision was NOT taken");
-            // NOT "tap the option again". Showing the code EDITS the question message, and a plain
-            // edit sends no reply_markup — which Telegram reads as "remove the keyboard". So by the
-            // time this runs there is no button left to tap, and telling them to tap one is telling
-            // them to do something the app has already made impossible. Typing is the route that
-            // still exists, and it is the fallback every other refusal here points at.
-            await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🔐 That code has expired and nothing was done. Type your answer, or ask again for fresh options.", cancellationToken);
-            return true;
-        }
-
-        if (!ConfirmationCode.Matches(message.Text, confirmation.Code))
-        {
-            if (!looksLikeACode)
-                return false;
-
-            // THE CONFIRMATION SURVIVES A WRONG CODE, within its own window: a mistyped digit must
-            // cost a retype, not the whole decision. The window is what bounds the attempts.
-            _log.Log_Warning(orchId, "A high-risk read-back code did not match — the decision is still pending");
+            // THE READ-BACK SURVIVES A WRONG CODE, within its own window: a mistyped digit costs a
+            // retype, not the decision. The window is what bounds the attempts.
+            _log.Log_Warning(orchId, "A high-risk read-back code did not match any live decision — nothing was taken");
             await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🔐 That is not the code. Check the message above and try again.", cancellationToken);
             return true;
         }
 
-        lock (_ownerStateLock)
-            _pendingConfirmations.Remove(orchId);
-
-        // Saved BEFORE the answer is routed, for the reason the tap path states: routing is what can
-        // fail, and a confirmation left live after its decision was taken could take it twice.
+        // Saved before the answer is routed, for the trade the tap path spells out: losing an answer
+        // is recoverable and visible, taking a push twice is not.
         Persist_EngineState();
 
         _log.Log_Info(orchId, "High-risk decision CONFIRMED by read-back code — the answer is being delivered");
@@ -8706,7 +8811,7 @@ internal sealed class BridgeEngineModel(
         lock (_ownerStateLock)
         {
             questions = [.. _openQuestions.Values];
-            confirmations = [.. _pendingConfirmations.Values];
+            confirmations = [.. _pendingConfirmations];
         }
 
         // IN A TOPIC, ONLY THAT TOPIC'S. Asked inside an orchestration the owner means "what is
@@ -8741,8 +8846,27 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Resolve_QuestionDeadlines_Async(CancellationToken cancellationToken)
     {
-        List<OpenQuestionRecord> due;
         var nowUtc = _clock.UtcNow;
+
+        // LAPSED READ-BACKS ARE SWEPT HERE, not only when the owner happens to type again. Their only
+        // other evaluation is on an inbound message, so a code nobody ever typed sat in the state
+        // file for ever and /pending printed "the code has EXPIRED" on every restart with no path to
+        // clear it. The question it belongs to is deliberately left alone: it is still open, still
+        // bounded by its own deadline, and still answerable by typing.
+        List<PendingConfirmationRecord> lapsed;
+
+        lock (_ownerStateLock)
+        {
+            lapsed = [.. _pendingConfirmations.Where(confirmation => nowUtc >= confirmation.ExpiresUtc)];
+
+            foreach (var confirmation in lapsed)
+                _pendingConfirmations.Remove(confirmation);
+        }
+
+        foreach (var confirmation in lapsed)
+            _log.Log_Warning(confirmation.OrchId, "A high-risk read-back window closed with no code typed — nothing was taken, and the question is still open");
+
+        List<OpenQuestionRecord> due;
 
         lock (_ownerStateLock)
         {
@@ -8753,7 +8877,12 @@ internal sealed class BridgeEngineModel(
         }
 
         if (due.Count == 0)
+        {
+            if (lapsed.Count > 0)
+                Persist_EngineState();
+
             return;
+        }
 
         foreach (var question in due)
         {
@@ -8817,6 +8946,11 @@ internal sealed class BridgeEngineModel(
         {
             if (!_openQuestions.Remove(question.MessageId))
                 return;
+
+            // A READ-BACK BELONGS TO ITS QUESTION AND DIES WITH IT. Left behind, it would keep a live
+            // code for a decision that has just been denied on timeout — the owner types the code
+            // they can still see on screen and takes an answer the app has already refused.
+            _pendingConfirmations.RemoveAll(confirmation => confirmation.MessageId == question.MessageId);
         }
 
         lock (_buttonLock)
@@ -8926,55 +9060,101 @@ internal sealed class BridgeEngineModel(
     {
         var nowUtc = _clock.UtcNow;
 
-        if (_dispatchPausedUntilUtc != null && !Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, nowUtc))
+        DateTime? pausedUntilUtc;
+        string? previousReason;
+
+        // GUARDED, because the mirror loop writes these and the inbound loop reads them for /limits.
+        // A DateTime? is 16 bytes and its store is not atomic on any platform, so an unsynchronised
+        // read could print — or PERSIST — a torn instant that then survives the restart.
+        lock (_ownerStateLock)
         {
-            var reason = _dispatchPauseReason ?? "the window reset";
-
-            _dispatchPausedUntilUtc = null;
-            _dispatchPauseReason = null;
-            Persist_EngineState();
-
-            _log.Log_Info(GLOBAL_ORCH_ID, Limits.DispatchPause_Gate.Describe_Resume(reason));
-            await Send_GeneralNotice_BestEffort_Async(Limits.DispatchPause_Gate.Describe_Resume(reason), cancellationToken);
-            return;
+            pausedUntilUtc = _dispatchPausedUntilUtc;
+            previousReason = _dispatchPauseReason;
         }
 
-        // Already paused: nothing to decide until it lifts. Re-reading the probes here would let a
+        // Still inside the window: nothing to decide. Re-reading the probes here would let a
         // still-high percentage extend the pause indefinitely past the reset it was measured
         // against, which is how a five-hour pause becomes a permanent one.
-        if (_dispatchPausedUntilUtc != null)
+        if (Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, nowUtc))
             return;
 
-        // THROTTLED LIKE THE ALERT SCAN IT SHARES A READER WITH. Reading the probes means globbing
-        // the supervision root and parsing one JSON per session; at the 2 s tick rate that is thirty
-        // times a minute for a number that moves once a turn. The alert path has always been on a
-        // 60 s interval and this must be too — the reader was extracted to be shared, not to be
-        // called thirty times as often.
-        if ((_clock.UtcNow - _lastDispatchPauseCheckUtc).TotalSeconds < LIMIT_CHECK_INTERVAL_SECONDS)
+        var wasPaused = pausedUntilUtc != null;
+
+        // THROTTLED LIKE THE ALERT SCAN IT SHARES A READER WITH — reading the probes means globbing
+        // the supervision root and parsing one JSON per session, and at the 2 s tick rate that is
+        // thirty sweeps a minute for a number that moves once a turn. A pause that has just LAPSED is
+        // exempt: it must be re-decided at its own instant, not up to a minute later.
+        if (!wasPaused && (nowUtc - _lastDispatchPauseCheckUtc).TotalSeconds < LIMIT_CHECK_INTERVAL_SECONDS)
             return;
 
-        _lastDispatchPauseCheckUtc = _clock.UtcNow;
+        _lastDispatchPauseCheckUtc = nowUtc;
 
         var thresholdPercent = _configProvider.Get_Current().Guardrails.DispatchPauseThresholdPercent;
 
+        DateTime? pauseUntilUtc = null;
+        string? bindingWindow = null;
+        var bindingPercent = 0d;
+
+        // THE BINDING WINDOW IS THE ONE THAT COMES BACK LAST, not the first one enumerated. Probe
+        // files are globbed, so dictionary order is arbitrary — and picking the first over-threshold
+        // window meant a weekly at 99% resetting in three days could lose to a five-hour at 96%
+        // resetting in twenty minutes. Dispatch would resume on the five-hour's clock, launch
+        // sessions into a weekly allowance that is still spent, and pause again.
         foreach (var pair in Read_CurrentLimitWindows())
         {
-            var pauseUntil = Limits.DispatchPause_Gate.Decide_PauseUntil_OrNull(
+            var candidate = Limits.DispatchPause_Gate.Decide_PauseUntil_OrNull(
                 pair.Value.Percent, pair.Value.WindowResetsAtUtc, thresholdPercent, nowUtc);
 
-            if (pauseUntil == null)
+            if (candidate == null || (pauseUntilUtc != null && candidate.Value <= pauseUntilUtc.Value))
                 continue;
 
-            _dispatchPausedUntilUtc = pauseUntil;
-            _dispatchPauseReason = $"the {pair.Key} window was at {pair.Value.Percent:0.#}%";
+            pauseUntilUtc = candidate;
+            bindingWindow = pair.Key;
+            bindingPercent = pair.Value.Percent;
+        }
+
+        if (pauseUntilUtc != null)
+        {
+            var reason = $"the {bindingWindow} window was at {bindingPercent:0.#}%";
+
+            lock (_ownerStateLock)
+            {
+                _dispatchPausedUntilUtc = pauseUntilUtc;
+                _dispatchPauseReason = reason;
+            }
+
             Persist_EngineState();
 
-            var alert = Limits.DispatchPause_Gate.Describe_Pause(pair.Key, pair.Value.Percent, pauseUntil.Value);
+            // AN EXTENSION IS NOT AN EVENT. A window with no reset stamp gets a 30-minute fallback
+            // pause, so a persistently over-threshold account used to produce a resume message and a
+            // pause message every thirty minutes for ever — a stacking waterfall, which is the one
+            // thing owner-facing repeats must never become. The state changes; the owner is told once
+            // per episode, and /limits still answers whenever they ask.
+            var alert = Limits.DispatchPause_Gate.Describe_Pause(bindingWindow ?? "usage", bindingPercent, pauseUntilUtc.Value);
 
-            _log.Log_Warning(GLOBAL_ORCH_ID, alert);
-            await Send_GeneralNotice_BestEffort_Async(alert, cancellationToken);
+            _log.Log_Warning(GLOBAL_ORCH_ID, wasPaused ? $"Dispatch pause EXTENDED — {alert}" : alert);
+
+            if (!wasPaused)
+                await Send_GeneralNotice_BestEffort_Async(alert, cancellationToken);
+
             return;
         }
+
+        if (!wasPaused)
+            return;
+
+        lock (_ownerStateLock)
+        {
+            _dispatchPausedUntilUtc = null;
+            _dispatchPauseReason = null;
+        }
+
+        Persist_EngineState();
+
+        var resume = Limits.DispatchPause_Gate.Describe_Resume(previousReason ?? "the window reset");
+
+        _log.Log_Info(GLOBAL_ORCH_ID, resume);
+        await Send_GeneralNotice_BestEffort_Async(resume, cancellationToken);
     }
 
     /// <summary>
@@ -12124,7 +12304,7 @@ internal sealed class BridgeEngineModel(
                     NudgedAboutEntry = new Dictionary<string, string>(_nudgedAboutEntry),
                     PendingButtons = buttons,
                     OpenQuestions = [.. _openQuestions.Values],
-                    PendingConfirmations = [.. _pendingConfirmations.Values],
+                    PendingConfirmations = [.. _pendingConfirmations],
                     ConsecutiveRespawns = _watchdog.Get_ConsecutiveRespawns(),
                     ButtonGroupSequence = _buttonGroupSequence,
                     DispatchPausedUntilUtc = _dispatchPausedUntilUtc,

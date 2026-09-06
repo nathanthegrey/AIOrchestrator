@@ -276,7 +276,12 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
 
         var alertsAfterTheFirst = _telegram.Count_Sent_Containing("Dispatch PAUSED");
 
-        // Several more ticks. One alert per episode, not one per tick.
+        // THE CLOCK IS MOVED PAST THE PROBE-READING THROTTLE, and without that this assertion was
+        // satisfied by two routes: the 60-second interval alone kept the count at one, so deleting
+        // the already-paused guard it is meant to pin left the test green. Moved forward — but not
+        // past the resume time — only the guard can hold the count.
+        _clock.Advance(TimeSpan.FromMinutes(2));
+
         await Run_Until_Async(() => false, 6_000);
 
         Assert.Equal(alertsAfterTheFirst, _telegram.Count_Sent_Containing("Dispatch PAUSED"));
@@ -290,7 +295,97 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
             + "its cause, and the owner is asleep when a five-hour window rolls over."
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
 
-        Assert.Null(_engineState.Load_OrEmpty().DispatchPausedUntilUtc);
+        // Settled, not sampled on the tick the alert happened to land on.
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().DispatchPausedUntilUtc == null, 10_000),
+            "the resume alert went out but the pause was still recorded in the persisted state");
+    }
+
+    /// <summary>
+    /// A TAP MUST NOT CONVERT A BOUNDED QUESTION INTO AN UNBOUNDED ONE — the worst thing this stage
+    /// could have done, and it did it for one commit.
+    ///
+    /// <para>
+    /// Opening the read-back used to remove the question from the open set, which is the only place
+    /// the deadline sweep looks. So a high-risk question carrying `DEADLINE: 30m` — whose entire
+    /// contract is "denied at thirty minutes" — became invisible the moment the owner tapped it. The
+    /// code lapsed ten minutes later and nothing noticed; the awaiting-answer flag was never cleared,
+    /// so the supervisor's hook denied every tool call for ever, and /pending printed "the code has
+    /// EXPIRED" on every restart with no way to clear it.
+    /// </para>
+    /// <para>
+    /// The owner here does exactly what a person does: taps, means to type the code, and never gets
+    /// back to it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ATapThatIsNeverConfirmed_StillLetsTheQuestionLapse_InsteadOfBlockingForever()
+    {
+        var session = await Start_WithQuestion_Async(
+            $"QUESTION: {RISKY_QUESTION}\nOPTION: {RISKY_OPTION}\nOPTION: {SAFE_OPTION}\nDEADLINE: 30m",
+            RISKY_OPTION);
+
+        var button = _telegram.Find_ButtonFor(RISKY_OPTION)
+            ?? throw new Exception("the risky option never reached the phone");
+
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(button, questionMessageId));
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Edited_Containing("You are about to"), 20_000),
+            $"the read-back never opened.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        // The code lapses first (10 minutes), the question's own deadline second (30).
+        _clock.Advance(TimeSpan.FromMinutes(31));
+
+        Assert.True(
+            await Run_Until_Async(() => Read_OwnerChannel(session.OrchId).Contains("DENIED on timeout", StringComparison.Ordinal), 20_000),
+            "THE DEFECT: a tapped-but-unconfirmed high-risk question was never resolved — the session "
+            + "blocked on it stays blocked, and nothing anywhere says why."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        // And the option was never delivered: still the supervisor's own OPTION: line, nothing else.
+        Assert.Equal(1, Count_Occurrences(Read_OwnerChannel(session.OrchId), RISKY_OPTION));
+
+        // The lapsed read-back is gone from the state, so /pending cannot print it for ever.
+        Assert.Empty(_engineState.Load_OrEmpty().PendingConfirmations);
+    }
+
+    /// <summary>
+    /// The high-risk list is matched against the OPTIONS too, not only the question line.
+    ///
+    /// <para>
+    /// This is the shape an agent naturally writes — a neutral question with the dangerous verb in
+    /// the choice — and it walked straight past the gate: one tap on a pocketed phone delivered
+    /// "Push the release branch to main" with no code asked for.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AHarmlessQuestionWithAPushOption_IsStillHighRisk_BecauseTheDangerIsInTheChoice()
+    {
+        await Start_WithQuestion_Async(
+            // SHORT ENOUGH TO STAY ON THE BUTTON. Past ~28 characters OptionButtons_Layout moves the
+            // full text into the message body and numbers the buttons, so a longer label would make
+            // this test fail on the layout rule rather than on the rule it is about.
+            "QUESTION: How should I proceed?\nOPTION: Push to main\nOPTION: Hold",
+            "Push to main");
+
+        var button = _telegram.Find_ButtonFor("Push to main")
+            ?? throw new Exception("the option never reached the phone");
+
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(button, questionMessageId));
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Edited_Containing("You are about to"), 20_000),
+            "THE DEFECT: the question line said nothing dangerous, so one tap delivered the push."
+            + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
     }
 
     /// <summary>

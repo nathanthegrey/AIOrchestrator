@@ -511,7 +511,20 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             var statusCode = (int)response.StatusCode;
             var retryAfterSeconds = Read_RetryAfterSeconds_OrNull(body);
 
-            if (statusCode == 429 && attempt < RATE_LIMIT_RETRIES)
+            // RETRIED ONLY FOR THE CALLS THAT CREATE A MESSAGE, and only for a wait short enough to
+            // spend inside a 2 s tick.
+            //
+            // Retrying everything cost far more than it bought. `editMessageText` and
+            // `answerCallbackQuery` come through here unmetered, so a 429 carrying
+            // `retry_after: 300` slept 300 s, retried, slept 300 s and then threw — ten minutes
+            // inside a single mirror tick, holding its channel-write allowance, with nothing
+            // mirrored and no deadline swept for the duration. And for a callback query it was
+            // pointless as well as expensive: Telegram invalidates one after about ten seconds, so
+            // the wait guaranteed the retry would fail while the owner's spinner hung.
+            //
+            // Past the inline cap the failure is handed to the caller, which is where the per-channel
+            // backoff and the outcome classification already live.
+            if (statusCode == 429 && rateLimited && attempt < RATE_LIMIT_RETRIES)
             {
                 var wait = TokenBucket_Gate.Read_RetryAfter(retryAfterSeconds);
 
@@ -520,8 +533,11 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
                 if (wait <= TimeSpan.Zero)
                     wait = TimeSpan.FromSeconds(TokenBucket_Gate.DEFAULT_REFILL_SECONDS / TokenBucket_Gate.DEFAULT_CAPACITY);
 
-                await Task.Delay(wait, cancellationToken);
-                continue;
+                if (wait <= TokenBucket_Gate.MAXIMUM_INLINE_RETRY_WAIT)
+                {
+                    await Task.Delay(wait, cancellationToken);
+                    continue;
+                }
             }
 
             throw new TelegramApiException(statusCode, $"Telegram '{method}' failed with HTTP {statusCode}: {body}", retryAfterSeconds);
