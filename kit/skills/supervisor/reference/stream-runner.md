@@ -59,16 +59,59 @@ Ask, and stop. There is no tool-denial hook holding you: the turn simply finishe
 does not send you another line until the owner has answered. "One question closes the turn" is a
 property of the transport here, not a rule you have to remember to obey.
 
-## 5. THE LIMIT OF THIS MODE, said plainly: only the OWNER channel wakes you
+## 5. YOU ARE WOKEN BY EVERY CHANNEL YOU LISTEN TO — the owner's, and each member's spoke
 
-A member writing in its spoke does NOT start a turn for you. Until a later stage brings a
-multi-source trigger, **read your members' spokes at the end of EVERY turn** and treat whatever you
-find there as incoming traffic:
+The bridge resolves your channels from the roster on every tick: `owner-channel.md` plus the spoke of
+every OPEN member. **A member writing in its spoke starts a turn for you**, with the owner having said
+nothing at all.
 
-```bash
-cat "${AIORCH_SUPERVISION_ROOT}/$ARGUMENTS"/imp-*/channel.md "${AIORCH_SUPERVISION_ROOT}/$ARGUMENTS"/rev-*/channel.md 2>/dev/null
+**Do NOT `cat` your spokes at the end of a turn.** That was the patch for a single-source trigger,
+and the trigger is not single-source any more: doing it now re-reads files the bridge has already
+quoted to you and files the same report a second time.
+
+The prompt names the channel each message came from:
+
+```
+--- from imp-1 (channel.md) ---
+
+## [4] FROM implementer — 2026-09-06 12:30 — REPORT — parser
+…
 ```
 
-The app says so itself, at every registration, in its log: *"'sup' is stream-run and it is woken by
-the OWNER channel only…"*. A report you do not read at the end of your turn waits until the owner
-happens to write to you.
+**One turn can carry several channels at once.** Entries that arrive together ride together, oldest
+first, with the owner ahead of a spoke when the two arrive at the same moment. It is not one turn per
+channel, and nothing you were shown is repeated on a later one.
+
+## 6. ADDRESS EACH PART OF YOUR ANSWER — `TO: <channel>`
+
+Your final message is your channel entr**ies**, plural. A line reading `TO: <channel>` on its own opens
+a block that runs to the next such line:
+
+```
+TO: owner
+Status — imp-1 is done
+
+The parser is merged. Briefing imp-1 on the writer next.
+
+TO: imp-1
+VERDICT — accepted
+
+Good. Next: the writer, same shape.
+```
+
+- Inside a block, §3 still holds: **first line the subject, a blank line, then the body.**
+- The prompt lists the channels you may address in that turn. It is the roster as it stands, so a
+  member added since your last turn is already in it.
+- Text before the first `TO:` goes to the OWNER — and it becomes an entry OF ITS OWN, not a preamble
+  folded into the block after it. So address every part, or write no preamble.
+- A block addressed to a channel you do not have is written to the owner's channel with a note saying
+  where you meant it to go. Nothing you write is dropped.
+
+**ANSWER A MEMBER IN ITS OWN CHANNEL.** A verdict written anywhere else does not reach the session it
+is about: the app decides "has this member been answered" from the last `FROM supervisor` entry in
+THAT member's channel, so a member left without one stays *awaiting review* for ever and puts a nudge
+on the owner's phone every few minutes.
+
+**And you never write a channel file yourself, in either direction.** Briefing a member is a `TO:`
+block, not `channel-append.sh`. §3 says you do not write your own channel; this says the same about
+theirs.

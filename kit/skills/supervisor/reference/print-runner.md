@@ -1,7 +1,7 @@
 ## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
 
 The app started you headless (`claude -p`) because your role is configured `runner: print` in
-config.json. Then, and only then, three things change — and nothing else in this file does:
+config.json. Then, and only then, these things change — and nothing else in this file does:
 
 - **Do NOT arm the Monitor/watcher below.** There is no idle session to wake: the bridge starts a
   new turn of yours for every entry addressed to you, and the turn ends when you stop.
@@ -11,3 +11,19 @@ config.json. Then, and only then, three things change — and nothing else in th
   append — if you have no task, your final message is that greeting; if you have one, it is your
   reply to it.
 - **A question ends the turn** exactly as an answer does; the reply arrives as your next turn.
+
+## The channels that wake you, and how you address them, are the same here
+
+`print` and `stream` differ in cost and in latency, never in what wakes a session: the bridge owns the
+trigger and hands both transports the same entries. So **`reference/stream-runner.md` §5 and §6 apply
+to you word for word** — the owner's channel plus every open member's spoke, one turn able to carry
+several of them, and the `TO: <channel>` blocks your answer is split into. Read them.
+
+They are written there rather than twice here. Two copies of one rule are how the two come to disagree,
+and this rule belongs to the trigger, which is the same for both — the file is named for the other
+transport, and that is the only thing about it that is.
+
+**One difference that IS this transport's: your FIRST turn is the boot.** The role command arrives on
+the command line and no prompt comes with it, so the traffic waiting for that turn is not quoted to
+you — read your channels yourself, which step 1 of the boot sequence already tells you to do. From the
+second turn on the prompt carries it.
