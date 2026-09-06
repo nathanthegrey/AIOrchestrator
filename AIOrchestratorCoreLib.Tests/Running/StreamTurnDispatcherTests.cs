@@ -295,6 +295,11 @@ public class StreamTurnDispatcherTests
         var records = TurnLog_Store.Read_LastRecords(logFile, 500);
 
         Assert.Contains(records, record => record["type"]?.GetValue<string>() == "result");
+
+        // THE TURN'S OWN COST, stamped beside the CLI's process-cumulative figure: /tail reads this
+        // one, so the tail and the channel cannot report two different numbers for one turn.
+        var results = records.Where(record => record["type"]?.GetValue<string>() == "result").ToList();
+        Assert.All(results, record => Assert.NotNull(record[AIOrchestratorCoreLib.Running.StreamTurn.StreamSessionProcess_Words.TURN_COST_KEY]));
         Assert.Contains(records, record => record["subtype"]?.GetValue<string>() == "hook_response");
         Assert.All(records, record => Assert.Equal($"{orchId}/{memberId}/1", TurnLog_Store.Read_RequestId_OrNull(record)));
     }

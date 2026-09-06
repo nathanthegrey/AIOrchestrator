@@ -100,7 +100,10 @@ public static class TurnLog_Formatter
     static string Describe_Result(JsonObject record)
     {
         var isError = Read_Bool_OrFalse(record, "is_error");
-        var cost = Read_Double_OrNull(record, "total_cost_usd");
+        // The turn's OWN cost where the writer knew it (the stream stamps it, print's record is
+        // per turn by construction), never the process's running total — which is what
+        // total_cost_usd is in a stream and what made this line disagree with the channel.
+        var cost = Read_Double_OrNull(record, StreamSessionProcess_Words.TURN_COST_KEY) ?? Read_Double_OrNull(record, "total_cost_usd");
         var durationMs = Read_Double_OrNull(record, "duration_ms");
         var text = Single_Line(Read_String_OrEmpty(record, "result"));
 

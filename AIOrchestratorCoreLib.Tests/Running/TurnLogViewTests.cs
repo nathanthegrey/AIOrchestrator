@@ -50,6 +50,22 @@ public class TurnLogViewTests
     }
 
     [Fact]
+    public void TheCostShownIsTheTURNS_NotTheProcessRunningTotal()
+    {
+        // A stream result states the PROCESS's cumulative cost. The bridge stamps the turn's own
+        // figure beside it, and the tail reads that — otherwise /tail says 0.0422 for a turn the
+        // channel recorded as 0.0056, which is the disagreement decision 10 forbids. Measured live
+        // on 2026-09-06 before the stamp existed.
+        var tail = TurnLog_Formatter.Format_Tail("sup",
+        [
+            Record("""{"type":"result","is_error":false,"result":"ack","total_cost_usd":0.0422,"aiorch_turn_cost_usd":0.0056}"""),
+        ]);
+
+        Assert.Contains("0.0056 USD", tail);
+        Assert.DoesNotContain("0.0422", tail);
+    }
+
+    [Fact]
     public void AnErrorTurnSaysSo_AndAnUnreadableLineIsShownRatherThanDropped()
     {
         var tail = TurnLog_Formatter.Format_Tail("imp-1",

@@ -168,9 +168,16 @@ internal sealed class StreamSessionProcess : IDisposable
 
             if (_lines.Reader.TryRead(out var line))
             {
-                _onRawLine(line);
-
                 var json = StreamEvent_Reader.Parse_OrNull(line);
+
+                // The result is logged ENRICHED, everything else verbatim. The event states the
+                // PROCESS's running cost, and a reader of the log (/tail, /log) has no baseline to
+                // difference it against — so the turn's own figure is stamped on here, beside the
+                // raw one, where it is known. CLAUDE.md decision 10: one reader, one number. Without
+                // it /tail showed 0.0366 then 0.0422 for two turns the channel recorded as 0.0366
+                // and 0.0056, which is the kind of disagreement that costs an afternoon.
+                if (json == null || !StreamEvent_Reader.Is_Result(json))
+                    _onRawLine(line);
 
                 // Not JSON, or JSON this version does not know: skipped, never fatal. The format is
                 // undocumented and a line we cannot read is the expected cost of that.
@@ -187,7 +194,13 @@ internal sealed class StreamSessionProcess : IDisposable
                     continue;
 
                 stopwatch.Stop();
-                return StreamTurnOutcome.Completed(Build_Result(0, timedOut: false, json, stopwatch.Elapsed), rateLimitInfo);
+
+                var result = Build_Result(0, timedOut: false, json, stopwatch.Elapsed);
+
+                json[StreamSessionProcess_Words.TURN_COST_KEY] = result.TotalCostUsd;
+                _onRawLine(json.ToJsonString());
+
+                return StreamTurnOutcome.Completed(result, rateLimitInfo);
             }
 
             if (!IsAlive)
