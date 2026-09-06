@@ -89,6 +89,31 @@ public class EngineStateSerializerTests
                     ExpiresUtc = T0.AddMinutes(10),
                 },
             ],
+            CloseConfirmations =
+            [
+                new CloseConfirmationRecord
+                {
+                    ParkedPath = "/sup/.requests/awaiting-owner/close-1-abc.json",
+                    OrchId = "orch-1",
+                    Kind = "Orchestration",
+                    MemberId = null,
+                    Requester = "supervisor of orch-1",
+                    AskedUtc = T0,
+                    ExpiresUtc = T0.AddHours(12),
+                    PromptMessageId = 557,
+                },
+                new CloseConfirmationRecord
+                {
+                    ParkedPath = "/sup/.requests/awaiting-owner/close-imp-def.json",
+                    OrchId = "orch-2",
+                    Kind = "Implementer",
+                    MemberId = "imp-1",
+                    Requester = "the close-implementer request file",
+                    AskedUtc = T0.AddMinutes(3),
+                    ExpiresUtc = null,
+                    PromptMessageId = null,
+                },
+            ],
             ButtonGroupSequence = 1002,
             DispatchPausedUntilUtc = T0.AddMinutes(15),
             DispatchPauseReason = "usage limit hit at 97%",
@@ -103,6 +128,7 @@ public class EngineStateSerializerTests
         Assert.Equal(expected.PendingButtons, actual.PendingButtons);
         Assert.Equal(expected.OpenQuestions, actual.OpenQuestions);
         Assert.Equal(expected.PendingConfirmations, actual.PendingConfirmations);
+        Assert.Equal(expected.CloseConfirmations, actual.CloseConfirmations);
         Assert.Equal(expected.ButtonGroupSequence, actual.ButtonGroupSequence);
         Assert.Equal(expected.DispatchPausedUntilUtc, actual.DispatchPausedUntilUtc);
         Assert.Equal(expected.DispatchPauseReason, actual.DispatchPauseReason);
@@ -281,5 +307,79 @@ public class EngineStateSerializerTests
         var question = Assert.Single(snapshot.OpenQuestions);
         Assert.True(question.IsHighRisk);
         Assert.Null(question.DefaultOptionIndex);
+    }
+
+    /// <summary>
+    /// THE DROP RULE INVERTS FOR A CLOSE CONFIRMATION, and this pins the inversion rather than
+    /// leaving it to a comment. Everywhere else a half-legible record is dropped, because a defaulted
+    /// field is a decision taken by a bug. A close confirmation decides nothing: it is never restored
+    /// into the live registry and no tap is ever matched against it, so the only harm it can do to a
+    /// human is to VANISH from the file they are reading at 2 a.m. What is legible is kept; only the
+    /// identity — which request, which orchestration — is required.
+    /// </summary>
+    [Fact]
+    public void ACloseConfirmationMissingItsOptionalFields_IsKept_NotDropped()
+    {
+        var json = """
+        {
+          "closeConfirmations": [
+            { "parkedPath": "/sup/.requests/awaiting-owner/close-1.json", "orchId": "orch-1" }
+          ]
+        }
+        """;
+
+        var (snapshot, dropped) = EngineState_Serializer.Parse(json);
+
+        Assert.Equal(0, dropped);
+        var record = Assert.Single(snapshot.CloseConfirmations);
+        Assert.Equal("orch-1", record.OrchId);
+        Assert.Equal("unrecorded", record.Kind);
+        Assert.Null(record.ExpiresUtc);
+        Assert.Null(record.PromptMessageId);
+    }
+
+    /// <summary>
+    /// The floor under that leniency: a row that cannot say WHICH request it is about is not a record
+    /// of anything, so it is dropped and counted like any other unreadable record.
+    /// </summary>
+    [Fact]
+    public void ACloseConfirmationWithNoParkedPath_IsDropped_AndCounted()
+    {
+        var json = """
+        {
+          "closeConfirmations": [
+            { "orchId": "orch-1", "kind": "Orchestration" },
+            { "parkedPath": "/sup/.requests/awaiting-owner/close-2.json", "orchId": "orch-2" }
+          ]
+        }
+        """;
+
+        var (snapshot, dropped) = EngineState_Serializer.Parse(json);
+
+        Assert.Equal(1, dropped);
+        Assert.Equal("orch-2", Assert.Single(snapshot.CloseConfirmations).OrchId);
+    }
+
+    /// <summary>
+    /// A kind this build has never heard of survives the round trip as TEXT. The field is written as
+    /// the enum's name and read back as a string on purpose: a fourth kind added by a newer build must
+    /// come back readable on a rollback rather than being normalised into one of the three we know,
+    /// which would put a wrong noun in front of whoever is reading the file.
+    /// </summary>
+    [Fact]
+    public void ACloseConfirmationOfAnUnknownKind_ComesBackUnchanged()
+    {
+        var json = """
+        {
+          "closeConfirmations": [
+            { "parkedPath": "/sup/.requests/awaiting-owner/x.json", "orchId": "orch-9", "kind": "Rename" }
+          ]
+        }
+        """;
+
+        var (snapshot, dropped) = EngineState_Serializer.Parse(json);
+
+        Assert.Equal(0, dropped);
+        Assert.Equal("Rename", Assert.Single(snapshot.CloseConfirmations).Kind);
     }
 }

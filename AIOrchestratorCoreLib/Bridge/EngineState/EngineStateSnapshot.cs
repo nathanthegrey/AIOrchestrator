@@ -98,6 +98,63 @@ public sealed record PendingConfirmationRecord
 }
 
 /// <summary>
+/// A close / member-close / promotion confirmation that is on the owner's phone right now, written
+/// down so the state file cannot be read as "nothing is pending" while one is.
+///
+/// <para>
+/// DIAGNOSTIC, NOT OPERATIVE — and the difference is the whole record. The durable state of this
+/// family is the PARKED REQUEST FILE (<c>.requests/awaiting-owner/&lt;id&gt;.json</c>); a restart
+/// re-asks with fresh buttons, deliberately, because a prompt nobody can see any more is
+/// indistinguishable from an owner who has not answered. Nothing here is read back into the live
+/// registry, so the tap behaves after a restart exactly as it did before this record existed.
+/// </para>
+/// <para>
+/// SO IT CARRIES NO CALLBACK PAYLOAD, on purpose. A ticket in the file is a keyboard somebody
+/// eventually restores, and restoring it would silently swap which of the two mechanisms is the
+/// truth on a restart — a change to BEHAVIOUR, which is the owner's to make and not a refactor's.
+/// What is here is what a human reading the file at 2 a.m. needs: which request, which
+/// orchestration, what it asks, when it was asked, and when it stops being tappable.
+/// </para>
+/// <para>
+/// ONE RECORD PER PARKED REQUEST, not per button. The live registry keys two entries — confirm and
+/// decline — off one prompt; a reader counting rows would otherwise see two decisions where the
+/// owner sees one question.
+/// </para>
+/// </summary>
+public sealed record CloseConfirmationRecord
+{
+    /// <summary>The identity: the durable record's own path, which is also the sweep's key.</summary>
+    public required string ParkedPath { get; init; }
+
+    public required string OrchId { get; init; }
+
+    /// <summary>
+    /// <c>Orchestration</c> / <c>Implementer</c> / <c>Promotion</c>, as TEXT rather than the enum.
+    /// A kind added by a newer build survives a rollback's round trip instead of being dropped.
+    /// </summary>
+    public required string Kind { get; init; }
+
+    /// <summary>The member being retired; null for anything else.</summary>
+    public string? MemberId { get; init; }
+
+    /// <summary>Who asked, as the request itself recorded it.</summary>
+    public string? Requester { get; init; }
+
+    /// <summary>When the prompt was put on the phone by the host that is writing this.</summary>
+    public DateTime AskedUtc { get; init; }
+
+    /// <summary>
+    /// When the tap stops being honoured — the parked file's own write time plus
+    /// <see cref="GeneralSupervision.CloseConfirmation_Parking.EXPIRY_HOURS"/>. Null when the file
+    /// could not be stat'ed: absent is an answer, a guessed deadline is not.
+    /// </summary>
+    public DateTime? ExpiresUtc { get; init; }
+
+    /// <summary>The Telegram message the buttons are attached to, when one was recorded.</summary>
+    public long? PromptMessageId { get; init; }
+}
+
+/// <summary>
 /// Everything the bridge would otherwise FORGET when the process ends: the decisions it is holding,
 /// the things it has already said once, and the counters that stop it saying them again.
 ///
@@ -117,15 +174,15 @@ public sealed record PendingConfirmationRecord
 /// decision the owner was asked to take, and the memory that they were already asked.
 /// </para>
 /// <para>
-/// ONE OWNER DECISION IS DELIBERATELY NOT HERE, AND IT IS THE ONE THAT LOOKS LIKE A BUG. The
-/// close / member-close / promote confirmations keep their durable record as a PARKED REQUEST FILE
-/// (<c>.requests/awaiting-owner/&lt;id&gt;.json</c>, see <c>CloseConfirmation_Parking</c>): the request
-/// survives, the prompt does not, and the next sweep asks again with fresh buttons. So while one of
-/// those is outstanding this snapshot legitimately holds NO pending button and its file's mtime does
-/// not move — which on 2026-09-06 was read on the VPS as a save that had failed. It had not. Two
-/// mechanisms for one idea is one too many, and the reason it is documented rather than merged is
-/// that merging them changes which of the two is the truth on a restart, and that is a decision about
-/// behaviour rather than about storage.
+/// ONE OWNER DECISION IS HERE AS A RECORD AND NOT AS A TICKET, AND IT IS THE ONE THAT LOOKED LIKE A
+/// BUG. The close / member-close / promote confirmations keep their durable record as a PARKED
+/// REQUEST FILE (<c>.requests/awaiting-owner/&lt;id&gt;.json</c>, see <c>CloseConfirmation_Parking</c>):
+/// the request survives, the prompt does not, and the next sweep asks again with fresh buttons. So
+/// while one of those is outstanding this snapshot holds NO pending button — which on 2026-09-06 was
+/// read on the VPS as a save that had failed. It had not, and now the file says so itself:
+/// <see cref="CloseConfirmations"/> lists them (see that type for why it carries no payload). The
+/// two mechanisms are still two, deliberately — merging them would change which one is the truth on
+/// a restart, and that is a decision about behaviour rather than about storage.
 /// </para>
 /// </summary>
 public sealed record EngineStateSnapshot
@@ -139,6 +196,13 @@ public sealed record EngineStateSnapshot
     public IReadOnlyList<PendingButtonRecord> PendingButtons { get; init; } = [];
     public IReadOnlyList<OpenQuestionRecord> OpenQuestions { get; init; } = [];
     public IReadOnlyList<PendingConfirmationRecord> PendingConfirmations { get; init; } = [];
+
+    /// <summary>
+    /// Close / member-close / promotion prompts live on the phone. WRITTEN AND NEVER RESTORED — see
+    /// <see cref="CloseConfirmationRecord"/>: the engine reads them once, only to tell a first ask
+    /// apart from a re-ask after a restart in its journal, and never to answer a tap with.
+    /// </summary>
+    public IReadOnlyList<CloseConfirmationRecord> CloseConfirmations { get; init; } = [];
 
     /// <summary>Watchdog slot key → consecutive respawns, so a crash loop is not un-counted by a restart.</summary>
     public IReadOnlyDictionary<string, int> ConsecutiveRespawns { get; init; } = new Dictionary<string, int>();

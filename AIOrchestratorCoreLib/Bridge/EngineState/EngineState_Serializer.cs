@@ -28,6 +28,7 @@ public static class EngineState_Serializer
     const string PENDING_BUTTONS = "pendingButtons";
     const string OPEN_QUESTIONS = "openQuestions";
     const string PENDING_CONFIRMATIONS = "pendingConfirmations";
+    const string CLOSE_CONFIRMATIONS = "closeConfirmations";
     const string CONSECUTIVE_RESPAWNS = "consecutiveRespawns";
     const string BUTTON_GROUP_SEQUENCE = "buttonGroupSequence";
     const string DISPATCH_PAUSED_UNTIL = "dispatchPausedUntilUtc";
@@ -65,6 +66,7 @@ public static class EngineState_Serializer
             PendingButtons = Read_Records(root[PENDING_BUTTONS], Read_Button_OrNull, ref dropped),
             OpenQuestions = Read_Records(root[OPEN_QUESTIONS], Read_Question_OrNull, ref dropped),
             PendingConfirmations = Read_Records(root[PENDING_CONFIRMATIONS], Read_Confirmation_OrNull, ref dropped),
+            CloseConfirmations = Read_Records(root[CLOSE_CONFIRMATIONS], Read_CloseConfirmation_OrNull, ref dropped),
             ButtonGroupSequence = Read_Long_OrNull(root[BUTTON_GROUP_SEQUENCE]) ?? 0,
             DispatchPausedUntilUtc = Read_Instant_OrNull(root[DISPATCH_PAUSED_UNTIL]),
             DispatchPauseReason = Read_String_OrNull(root[DISPATCH_PAUSE_REASON]),
@@ -140,6 +142,23 @@ public static class EngineState_Serializer
             });
         }
 
+        var closeConfirmations = new JsonArray();
+
+        foreach (var confirmation in snapshot.CloseConfirmations)
+        {
+            closeConfirmations.Add(new JsonObject
+            {
+                ["parkedPath"] = confirmation.ParkedPath,
+                ["orchId"] = confirmation.OrchId,
+                ["kind"] = confirmation.Kind,
+                ["memberId"] = confirmation.MemberId,
+                ["requester"] = confirmation.Requester,
+                ["askedUtc"] = Write_Instant(confirmation.AskedUtc),
+                ["expiresUtc"] = confirmation.ExpiresUtc == null ? null : Write_Instant(confirmation.ExpiresUtc.Value),
+                ["promptMessageId"] = confirmation.PromptMessageId,
+            });
+        }
+
         var root = new JsonObject
         {
             [OWNER_AWAITING_ANSWER] = awaiting,
@@ -147,6 +166,7 @@ public static class EngineState_Serializer
             [PENDING_BUTTONS] = buttons,
             [OPEN_QUESTIONS] = questions,
             [PENDING_CONFIRMATIONS] = confirmations,
+            [CLOSE_CONFIRMATIONS] = closeConfirmations,
             [CONSECUTIVE_RESPAWNS] = respawns,
             [BUTTON_GROUP_SEQUENCE] = snapshot.ButtonGroupSequence,
             [DISPATCH_PAUSED_UNTIL] = snapshot.DispatchPausedUntilUtc == null ? null : Write_Instant(snapshot.DispatchPausedUntilUtc.Value),
@@ -257,6 +277,37 @@ public static class EngineState_Serializer
             OptionText = optionText,
             QuestionText = questionText,
             ExpiresUtc = expiresUtc.Value,
+        };
+    }
+
+    /// <summary>
+    /// THE DROP RULE INVERTS HERE, and only here. Everywhere else above, a record missing a field is
+    /// dropped rather than defaulted, because a defaulted field is a DECISION taken by a bug — an
+    /// expiry read as <c>default(DateTime)</c> refuses every tap, and read the other way it never
+    /// expires. A close confirmation authorises nothing: it is never restored into the live registry
+    /// and no tap is ever matched against it (see <see cref="CloseConfirmationRecord"/>). So a
+    /// half-legible row can only mislead a human by DISAPPEARING, and the safe direction is to keep
+    /// what is readable. Only the identity is required — a row that cannot say which request it is
+    /// about is not a record of anything.
+    /// </summary>
+    static CloseConfirmationRecord? Read_CloseConfirmation_OrNull(JsonObject entry)
+    {
+        var parkedPath = Read_String_OrNull(entry["parkedPath"]);
+        var orchId = Read_String_OrNull(entry["orchId"]);
+
+        if (parkedPath == null || orchId == null)
+            return null;
+
+        return new CloseConfirmationRecord
+        {
+            ParkedPath = parkedPath,
+            OrchId = orchId,
+            Kind = Read_String_OrNull(entry["kind"]) ?? "unrecorded",
+            MemberId = Read_String_OrNull(entry["memberId"]),
+            Requester = Read_String_OrNull(entry["requester"]),
+            AskedUtc = Read_Instant_OrNull(entry["askedUtc"]) ?? default,
+            ExpiresUtc = Read_Instant_OrNull(entry["expiresUtc"]),
+            PromptMessageId = Read_Long_OrNull(entry["promptMessageId"]),
         };
     }
 

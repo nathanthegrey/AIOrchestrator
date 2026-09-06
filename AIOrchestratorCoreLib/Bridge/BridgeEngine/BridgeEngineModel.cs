@@ -223,17 +223,40 @@ internal sealed class BridgeEngineModel(
     /// and a parked request with no live prompt is simply asked again.
     ///
     /// <para>
-    /// AND IT IS THEREFORE ABSENT FROM <c>.engine-state.json</c>, which is the half nobody had written
-    /// down. That file holds the FIVE maps <c>Persist_EngineState</c> names and this is a sixth; so
-    /// while a close, a member-close or a promotion is waiting on the owner's tap, the state file
-    /// legitimately reads <c>"pendingButtons": []</c> and its mtime does not move. On the VPS on
-    /// 2026-09-06 that was read as a lost save and cost an evening: the buttons were on the phone, the
-    /// file said nothing was pending, and both were correct. The tap on THAT keyboard also does not
-    /// survive the restart — <c>Try_HandleCloseConfirmationTap_Async</c> answers only payloads in this
-    /// dictionary — the sweep simply posts a fresh prompt, which is the one that works.
+    /// IT IS IN <c>.engine-state.json</c> AS A RECORD AND NOT AS A TICKET. Until 2026-09-07 it was not
+    /// in that file at all, which is the half nobody had written down: the file held the FIVE maps
+    /// <c>Persist_EngineState</c> named and this was a sixth, so while a close, a member-close or a
+    /// promotion waited on the owner's tap the state file read <c>"pendingButtons": []</c> and its
+    /// mtime did not move. On the VPS on 2026-09-06 that was read as a lost save and cost an evening:
+    /// the buttons were on the phone, the file said nothing was pending, and both were correct.
+    /// <see cref="CloseConfirmationRecord"/> now says so on disk — WITHOUT the payloads, so nothing
+    /// here can be turned back into a live keyboard by accident. The tap on the pre-restart keyboard
+    /// still does nothing — <c>Try_HandleCloseConfirmationTap_Async</c> answers only payloads in this
+    /// dictionary, which starts empty — and the sweep posts a fresh prompt, which is the one that works.
     /// </para>
     /// </summary>
     readonly Dictionary<string, CloseConfirmation> _closeConfirmations = [];
+
+    /// <summary>
+    /// Prompts that were live when the PREVIOUS process stopped, by parked path — read from the
+    /// restored snapshot and used for exactly one thing: telling a first ask apart from a re-ask
+    /// after a restart in the journal (<c>Describe_AskForTheJournal</c>). NEVER consulted by a tap.
+    ///
+    /// It is emptied entry by entry as each request is re-asked, so the second prompt of one run does
+    /// not keep blaming a restart that happened an hour ago.
+    /// </summary>
+    /// <remarks>
+    /// GROUPED, not <c>ToDictionary</c> straight: this is file content, and a hand-edited or
+    /// double-written file with two rows for one path would throw HERE — in a field initialiser, at
+    /// construction, taking the whole host down over a journal nicety.
+    /// </remarks>
+    readonly Dictionary<string, DateTime> _closeConfirmationsFromABygoneProcess =
+        restoredState.CloseConfirmations
+            .GroupBy(record => record.ParkedPath)
+            .ToDictionary(group => group.Key, group => group.First().AskedUtc);
+
+    /// <summary>Parked paths this run has already prompted for at least once. Journal only, as above.</summary>
+    readonly HashSet<string> _closeConfirmationsAskedInThisRun = [];
 
     /// <summary>
     /// Parked paths whose tap is mid-flight. A decision takes two awaited Telegram calls before its
@@ -252,6 +275,21 @@ internal sealed class BridgeEngineModel(
         public required bool Confirms { get; init; }
 
         public long? PromptMessageId { get; init; }
+
+        /// <summary>
+        /// WHAT THE PROMPT IS ABOUT, copied off the request at ask time rather than re-read at save
+        /// time. <see cref="Persist_EngineState"/> runs under two locks on a hot path; opening N
+        /// parked files there to describe them would put filesystem latency inside them.
+        /// </summary>
+        public required string Kind { get; init; }
+
+        public string? MemberId { get; init; }
+        public string? Requester { get; init; }
+
+        public DateTime AskedUtc { get; init; }
+
+        /// <summary>Null when the parked file could not be stat'ed — never a guessed deadline.</summary>
+        public DateTime? ExpiresUtc { get; init; }
     }
 
     /// <summary>
@@ -4560,12 +4598,38 @@ internal sealed class BridgeEngineModel(
             foreach (var key in _closeConfirmations.Where(pair => pair.Value.OrchId == orchId).Select(pair => pair.Key).ToList())
                 _closeConfirmations.Remove(key);
         }
+
+        // The snapshot follows the registry, or the file keeps naming a prompt that no longer exists
+        // anywhere — the same lie in the other direction.
+        Persist_EngineState();
     }
 
     bool Is_BeingResolved(string parkedPath)
     {
         lock (_closeConfirmationLock)
             return _closeConfirmationsResolving.Contains(parkedPath);
+    }
+
+    /// <summary>
+    /// When the agent parked this request — the same clock <see cref="CloseConfirmation_Parking.Is_Expired"/>
+    /// runs on, so the deadline written into the snapshot is the deadline the tap will be judged by
+    /// rather than a second, nearly-equal one.
+    ///
+    /// NULL RATHER THAN A FALLBACK when it cannot be stat'ed. <c>File.GetLastWriteTimeUtc</c> answers
+    /// the year 1601 for a missing file, and 1601 plus twelve hours is a deadline that reads as
+    /// "expired four centuries ago" in a record whose whole job is to be believed by a human.
+    /// </summary>
+    static DateTime? Read_ParkedSince_OrNull(string parkedPath)
+    {
+        try
+        {
+            return File.Exists(parkedPath) ? File.GetLastWriteTimeUtc(parkedPath) : null;
+        }
+        catch
+        {
+            // Locked, denied, unreadable sector: the cause changes nothing — we cannot date it.
+            return null;
+        }
     }
 
     async Task Ask_OwnerToConfirmClose_Async(string parkedPath, CancellationToken cancellationToken)
@@ -4698,13 +4762,53 @@ internal sealed class BridgeEngineModel(
 
             Remember_TopicMessage(session.TelegramTopicId, messageId);
 
+            var askedUtc = DateTime.UtcNow;
+            var parkedUtc = Read_ParkedSince_OrNull(parkedPath);
+
+            CloseConfirmation Build_Registration(bool confirms) => new()
+            {
+                OrchId = request.OrchId,
+                ParkedPath = parkedPath,
+                Confirms = confirms,
+                PromptMessageId = messageId,
+                Kind = request.Kind.ToString(),
+                MemberId = request.MemberId,
+                Requester = request.Requester,
+                AskedUtc = askedUtc,
+                ExpiresUtc = parkedUtc?.AddHours(CloseConfirmation_Parking.EXPIRY_HOURS),
+            };
+
+            DateTime? promptFromABygoneProcessUtc;
+            bool alreadyAskedInThisRun;
+
             lock (_closeConfirmationLock)
             {
-                _closeConfirmations[confirmData] = new CloseConfirmation { OrchId = request.OrchId, ParkedPath = parkedPath, Confirms = true, PromptMessageId = messageId };
-                _closeConfirmations[declineData] = new CloseConfirmation { OrchId = request.OrchId, ParkedPath = parkedPath, Confirms = false, PromptMessageId = messageId };
+                _closeConfirmations[confirmData] = Build_Registration(confirms: true);
+                _closeConfirmations[declineData] = Build_Registration(confirms: false);
+
+                // CONSUMED, both of them. The restart fact is true once — a second prompt in this run
+                // was dropped by this host, not by a restart, and saying "a restart" for it would put
+                // a wrong cause in the journal that reads exactly like the right one.
+                promptFromABygoneProcessUtc = _closeConfirmationsFromABygoneProcess.TryGetValue(parkedPath, out var bygone)
+                    ? bygone
+                    : null;
+
+                _closeConfirmationsFromABygoneProcess.Remove(parkedPath);
+                alreadyAskedInThisRun = !_closeConfirmationsAskedInThisRun.Add(parkedPath);
             }
 
-            _log.Log_Info(request.OrchId, $"Asked the owner to confirm closing '{request.OrchId}' (asked by {request.Requester})");
+            // OUTSIDE the lock, like every other save on this path: Persist_EngineState takes the
+            // button and owner-state locks and re-takes this one, and a fixed order is only fixed
+            // while nobody nests it from the other side.
+            Persist_EngineState();
+
+            _log.Log_Info(
+                request.OrchId,
+                CloseConfirmationPrompt_Builder.Describe_AskForTheJournal(
+                    request,
+                    parkedUtc == null ? TimeSpan.Zero : askedUtc - parkedUtc.Value,
+                    promptFromABygoneProcessUtc,
+                    alreadyAskedInThisRun));
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -5188,6 +5292,9 @@ internal sealed class BridgeEngineModel(
             foreach (var key in _closeConfirmations.Where(pair => pair.Value.ParkedPath == parkedPath).Select(pair => pair.Key).ToList())
                 _closeConfirmations.Remove(key);
         }
+
+        // As in Forget_CloseConfirmations_For: the file must stop naming a prompt that is gone.
+        Persist_EngineState();
     }
 
     /// <summary>
@@ -12513,6 +12620,36 @@ internal sealed class BridgeEngineModel(
     {
         EngineStateSnapshot snapshot;
 
+        // TAKEN AND RELEASED FIRST, never nested inside the two below. The close-confirmation lock is
+        // held across sweeps and taps that know nothing about the button registry; entering it from
+        // inside _buttonLock here would create the one ordering the rest of this file cannot see, and
+        // the deadlock would surface as a bridge that stops answering the phone.
+        List<CloseConfirmationRecord> closeConfirmations;
+
+        lock (_closeConfirmationLock)
+        {
+            // ONE ROW PER PARKED REQUEST, not per button: the registry keys the confirm and the
+            // decline separately off a single prompt, and a reader counting rows would see two
+            // decisions where the owner sees one question.
+            closeConfirmations =
+            [
+                .. _closeConfirmations.Values
+                    .GroupBy(confirmation => confirmation.ParkedPath)
+                    .Select(group => group.First())
+                    .Select(confirmation => new CloseConfirmationRecord
+                    {
+                        ParkedPath = confirmation.ParkedPath,
+                        OrchId = confirmation.OrchId,
+                        Kind = confirmation.Kind,
+                        MemberId = confirmation.MemberId,
+                        Requester = confirmation.Requester,
+                        AskedUtc = confirmation.AskedUtc,
+                        ExpiresUtc = confirmation.ExpiresUtc,
+                        PromptMessageId = confirmation.PromptMessageId,
+                    }),
+            ];
+        }
+
         lock (_buttonLock)
         {
             List<PendingButtonRecord> buttons = [];
@@ -12534,6 +12671,7 @@ internal sealed class BridgeEngineModel(
                     PendingButtons = buttons,
                     OpenQuestions = [.. _openQuestions.Values],
                     PendingConfirmations = [.. _pendingConfirmations],
+                    CloseConfirmations = closeConfirmations,
                     ConsecutiveRespawns = _watchdog.Get_ConsecutiveRespawns(),
                     ButtonGroupSequence = _buttonGroupSequence,
                     DispatchPausedUntilUtc = _dispatchPausedUntilUtc,
