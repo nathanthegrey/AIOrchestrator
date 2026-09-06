@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Bridge.Decisions;
+using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
 using AIOrchestratorCoreLib.Channels;
@@ -28,6 +30,7 @@ using AIOrchestratorCoreLib.Tailing.CompletedChannelAppend;
 using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Termination;
+using AIOrchestratorCoreLib.Time.Clock;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram.TelegramCallbackTap;
 using AIOrchestratorCoreLib.Telegram.TelegramOwnerMessage;
@@ -48,7 +51,10 @@ internal sealed class BridgeEngineModel(
     ISessionWatchdog watchdog,
     IMessageTranslator translator,
     IVoiceTranscriber transcriber,
-    long initialLastUpdateId) : IBridgeEngine
+    long initialLastUpdateId,
+    IEngineStateStore engineStateStore,
+    EngineStateSnapshot restoredState,
+    IClock clock) : IBridgeEngine
 {
     /// <summary>In-memory inline-button registry cap — taps on evicted buttons get an "expired" toast.</summary>
     const int BUTTON_REGISTRY_CAP = 300;
@@ -155,8 +161,16 @@ internal sealed class BridgeEngineModel(
     readonly ISessionWatchdog _watchdog = watchdog;
     readonly IMessageTranslator _translator = translator;
     readonly IVoiceTranscriber _transcriber = transcriber;
-    readonly Dictionary<string, (long? ThreadId, string OptionText, long GroupId, string QuestionText)> _buttonOptions = [];
-    readonly Queue<string> _buttonOrder = new();
+    /// <summary>
+    /// Live option buttons, keyed by their callback payload — RESTORED from disk, which is the
+    /// change. A keyboard on the owner's phone outlives this process; before the restore, every
+    /// question asked before a restart answered "expired" to a tap the owner had every reason to
+    /// believe in, and the only way to answer was to notice that and type instead.
+    /// </summary>
+    readonly Dictionary<string, PendingButtonRecord> _buttonOptions =
+        restoredState.PendingButtons.ToDictionary(button => button.Data);
+
+    readonly Queue<string> _buttonOrder = new(restoredState.PendingButtons.Select(button => button.Data));
 
     /// <summary>"&lt;file&gt;|&lt;line&gt;" of every malformed header already reported — say it once, not every tick.</summary>
     readonly HashSet<string> _reportedMalformedHeaders = [];
@@ -177,8 +191,15 @@ internal sealed class BridgeEngineModel(
     readonly HashSet<string> _screenedIndexCrossings = [];
 
     readonly Lock _buttonLock = new();
-    long _buttonSequence;
-    long _buttonGroupSequence;
+
+    /// <summary>
+    /// Restored, so a group id cannot be reissued to a new question while an old keyboard bearing
+    /// it is still on screen — which would let one tap consume another question's siblings. The
+    /// per-button counter that used to sit beside this is gone: the payload is a nonce now
+    /// (<see cref="CallbackToken"/>), and a counter restarting at zero every launch was half of
+    /// what made a stale button dangerous.
+    /// </summary>
+    long _buttonGroupSequence = restoredState.ButtonGroupSequence;
 
     /// <summary>
     /// Live close-confirmation prompts, keyed by their callback data. Deliberately NOT the shared
@@ -286,10 +307,14 @@ internal sealed class BridgeEngineModel(
     /// other re-arms a RESPAWN — because the nudge gate was borrowing a map that already carried two
     /// meanings. It never needed to: this one has exactly one meaning and drives nothing else.
     ///
-    /// Lost on restart, which costs ONE extra nudge per member. Visible, cheap, self-correcting —
-    /// and the alternative is a third meaning in the map that can respawn a session.
+    /// NO LONGER LOST ON RESTART. It used to be, and the note here read "costs ONE extra nudge per
+    /// member. Visible, cheap, self-correcting" — which was true of ONE restart and false of the
+    /// situation that actually produces restarts. The app is closed and reopened to rebuild it, and
+    /// every reopen re-nudged every member about a thing it had already nudged them about, on
+    /// exactly the channels running longest. It is persisted now; the alternative considered and
+    /// still rejected is a third meaning in the map that can respawn a session.
     /// </summary>
-    readonly Dictionary<string, string> _nudgedAboutEntry = [];
+    readonly Dictionary<string, string> _nudgedAboutEntry = new(restoredState.NudgedAboutEntry);
 
     /// <summary>
     /// When this orchestration last incurred a LEDGER DEBT — the due-by signal for PLAN.md.
@@ -513,21 +538,6 @@ internal sealed class BridgeEngineModel(
     /// <summary>Target channel → the WAIT acknowledgement being kept up to date while held.</summary>
     readonly Dictionary<string, HoldReceipt> _holdReceipts = [];
 
-    sealed class OpenQuestion
-    {
-        public string OrchId = "";
-        public string Text = "";
-        public DateTime AskedUtc;
-
-        /// <summary>
-        /// The button group this question's keyboard belongs to, so an answer that did NOT come
-        /// through that keyboard can still take it down. A tap knows its group from the ticket it
-        /// arrived on; a typed answer knows only the orchestration, and without this it had no route
-        /// back to the buttons it had just answered.
-        /// </summary>
-        public long ButtonGroupId;
-    }
-
     /// <summary>
     /// How long an unanswered question freezes the conversation. Long enough to make "a question
     /// stops the turn" real; short enough that an owner who never answers is not starved of
@@ -562,10 +572,20 @@ internal sealed class BridgeEngineModel(
     /// Its whole purpose is to guarantee an answer always reaches them, so it is owned by the mirror
     /// path alone — sharing _pendingOwnerReplies for this dropped every answer.
     /// </summary>
-    readonly HashSet<string> _ownerAwaitingAnswer = [];
+    readonly HashSet<string> _ownerAwaitingAnswer = [.. restoredState.OwnerAwaitingAnswer];
 
-    /// <summary>Telegram message id → a question the owner has NOT answered yet.</summary>
-    readonly Dictionary<long, OpenQuestion> _openQuestions = [];
+    /// <summary>
+    /// Telegram message id → a question the owner has NOT answered yet, restored across a restart.
+    ///
+    /// <para>
+    /// The record carries the button group so an answer that did NOT come through that keyboard can
+    /// still take it down: a tap knows its group from the ticket it arrived on, a typed answer knows
+    /// only the orchestration, and without this it had no route back to the buttons it had just
+    /// answered. It also carries the deadline and default — see <see cref="OpenQuestionRecord"/>.
+    /// </para>
+    /// </summary>
+    readonly Dictionary<long, OpenQuestionRecord> _openQuestions =
+        restoredState.OpenQuestions.ToDictionary(question => question.MessageId);
 
     sealed class AwayTracker
     {
@@ -655,6 +675,30 @@ internal sealed class BridgeEngineModel(
 
     long _lastUpdateId = initialLastUpdateId;
     DateTime _lastLimitCheckUtc = DateTime.MinValue;
+
+    readonly IEngineStateStore _engineStateStore = engineStateStore;
+
+    /// <summary>
+    /// Injected for the deadline sweep and the dispatcher pause ONLY — see <see cref="IClock"/> for
+    /// why this is not adopted across the file's other hundred-odd clock reads.
+    /// </summary>
+    readonly IClock _clock = clock;
+
+    /// <summary>
+    /// High-risk decisions the owner has TAPPED and not yet confirmed by typing the code back, one
+    /// per orchestration. Keyed by orchestration because that is the scope the owner's next message
+    /// arrives in: the code is typed into the topic, and the topic is the orchestration.
+    /// </summary>
+    readonly Dictionary<string, PendingConfirmationRecord> _pendingConfirmations =
+        restoredState.PendingConfirmations.ToDictionary(confirmation => confirmation.OrchId);
+
+    /// <summary>
+    /// When the dispatcher may start work again, or null while it is running. Persisted, because a
+    /// pause the app forgets on restart is a pause that lifts by crashing — and a limit that
+    /// crash-loops the sessions is exactly the situation in which the app gets restarted.
+    /// </summary>
+    DateTime? _dispatchPausedUntilUtc = restoredState.DispatchPausedUntilUtc;
+    string? _dispatchPauseReason = restoredState.DispatchPauseReason;
 
     /// <summary>App-wide Do-Not-Disturb: everything is kept and replayed when it goes off.</summary>
     volatile bool _telegramMuted;
@@ -935,10 +979,30 @@ internal sealed class BridgeEngineModel(
         // is a defined path (logged, and the owner's message goes back in its buffer).
         using var tickAllowance = ChannelWrite_Lock.Open_TickAllowance(ChannelWrite_Lock.DEFAULT_TICK_ALLOWANCE);
 
-        Process_PendingRequests();
+        // ABOVE EVERYTHING THAT SPENDS THE ACCOUNT, and above the DND gate far below. A pause is
+        // not a message: it is the app deciding not to spend an allowance it is about to exhaust,
+        // and DND means "do not disturb me", not "stop managing the account". Putting the decision
+        // under the mute would mean the one state in which nobody is watching is also the state in
+        // which nothing stops sixty sessions failing identically. See DispatchPause_Gate.
+        await Update_DispatchPause_Async(cancellationToken);
+
+        var dispatchPaused = Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, _clock.UtcNow);
+
+        // DEFERRED, NOT DROPPED, while paused. Request files stay on disk untouched, so the work the
+        // owner asked for happens the moment the window resets — the protocol is already re-entrant
+        // and that is what makes deferring free here.
+        if (!dispatchPaused)
+            Process_PendingRequests();
 
         // After closes are processed, so a freshly-closed session is not immediately revived.
-        _watchdog.Check_AndRestart_DeadSessions();
+        // A respawn is a LAUNCH: while the account is out of allowance it buys a session that
+        // fails on its first turn, and a crash-loop counter that climbs for a cause that has
+        // nothing to do with the session. Work already running is never touched.
+        if (!dispatchPaused)
+        {
+            _watchdog.Check_AndRestart_DeadSessions();
+            Persist_EngineState_IfRespawnCountsMoved();
+        }
 
         // Before anything that could write to a channel: the flag is what keeps a supervisor's
         // watcher silent, and a tick that appends before reconciling it would litter the meeting.
@@ -975,6 +1039,14 @@ internal sealed class BridgeEngineModel(
         // history (rev-6 F2). Same reasoning as the two calls above it — inbound flows, lapsing sends
         // nothing — and it is the sweeps minus their reporting.
         Baseline_UnseenChannels_Silently();
+
+        // ABOVE THE GATE, for the reason the pause above it is: a deadline is a clock event, not a
+        // disturbance. The message that carried the deadline TOLD the owner what would happen at it,
+        // so honouring it while they are muted is keeping that promise; freezing it would mean a
+        // mute silently converts every bounded question into an unbounded one. What it produces —
+        // a channel entry and an edit to a message already on the screen — generates no
+        // notification, and the entry replays in the catch-up burst like everything else.
+        await Resolve_QuestionDeadlines_Async(cancellationToken);
         // ABOVE THE DND GATE ON PURPOSE. This writes a local file for the supervisor's own terminal
         // status line and sends nothing anywhere. Below the gate it would freeze the moment the owner
         // pressed 🔕 — and DND means "pause OUTBOUND Telegram", not "stop the app from telling this
@@ -1671,6 +1743,11 @@ internal sealed class BridgeEngineModel(
 
                     _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
                     _nudgedAboutEntry[memberKey] = conversationIdentity;
+
+                    // The anti-loop memory is only worth having if it outlives the process: the app
+                    // is closed and reopened to rebuild it, and a forgotten memory re-nudges every
+                    // member about a thing it has already nudged them about.
+                    Persist_EngineState();
 
                     continue;
                 }
@@ -2525,6 +2602,59 @@ internal sealed class BridgeEngineModel(
     /// General topic when a usage limit crosses 90/95/97/98/99/100% (deduplicated per limit window).
     /// If this Claude Code version's statusline payload carries no limit data, this idles silently.
     /// </summary>
+    /// <summary>
+    /// The account's worst live reading per usage window, from the status-line probe files.
+    ///
+    /// <para>
+    /// ONE READER, TWO CONSUMERS (decision 12). The alert scan and the dispatcher pause ask exactly
+    /// the same question of exactly the same files, and a second copy of this loop is a second place
+    /// for the two window-selection rules below to drift — at which point the app could pause on one
+    /// reading and alert about another.
+    /// </para>
+    /// </summary>
+    Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> Read_CurrentLimitWindows()
+    {
+        Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> maxPercents = [];
+        var nowUtc = DateTime.UtcNow;
+
+        // Only probe files with a window that has not already reset. Probe files are never
+        // deleted, so without this the alert scan folded five-day-old closed orchestrations into
+        // "the account right now" — which is how .limit-alerts.json latched at 100% and stopped
+        // alerting entirely.
+        // Read_Text_Safe rather than File.ReadAllText: a live session rewriting its probe file
+        // used to throw a sharing violation out of this loop and abort the whole check.
+        foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, DateTime.Now))
+        {
+            var windows = Limits.LimitData_Parser.Extract_LimitWindows(UsageTotals_Reader.Read_Text_Safe(usageFile));
+
+            foreach (var pair in windows)
+            {
+                // PER WINDOW, not per file. The file-level gate above keeps a file when ANY of
+                // its windows is live, so a spent five_hour was riding in on a live weekly's
+                // stamp and could still fire an alert about an allowance already handed back.
+                // Same predicate /limits uses, not a second copy of it.
+                if (RateLimits_Reader.Is_ExpiredWindow(pair.Value.WindowResetsAtUtc, nowUtc))
+                    continue;
+
+                if (!maxPercents.TryGetValue(pair.Key, out var known))
+                {
+                    maxPercents[pair.Key] = pair.Value;
+                    continue;
+                }
+
+                // The same rule /limits uses, through the same comparison: a newer window
+                // replaces an older one outright, and only readings of the SAME window compete
+                // on percentage.
+                var instance = Limits.WindowInstance_Order.Compare_Instance(pair.Value.WindowResetsAtUtc, known.WindowResetsAtUtc);
+
+                if (instance > 0 || (instance == 0 && pair.Value.Percent > known.Percent))
+                    maxPercents[pair.Key] = pair.Value;
+            }
+        }
+
+        return maxPercents;
+    }
+
     async Task Check_UsageLimits_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null || _telegramMuted)
@@ -2537,43 +2667,7 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> maxPercents = [];
-            var nowUtc = DateTime.UtcNow;
-
-            // Only probe files with a window that has not already reset. Probe files are never
-            // deleted, so without this the alert scan folded five-day-old closed orchestrations into
-            // "the account right now" — which is how .limit-alerts.json latched at 100% and stopped
-            // alerting entirely.
-            // Read_Text_Safe rather than File.ReadAllText: a live session rewriting its probe file
-            // used to throw a sharing violation out of this loop and abort the whole check.
-            foreach (var usageFile in RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, DateTime.Now))
-            {
-                var windows = Limits.LimitData_Parser.Extract_LimitWindows(UsageTotals_Reader.Read_Text_Safe(usageFile));
-
-                foreach (var pair in windows)
-                {
-                    // PER WINDOW, not per file. The file-level gate above keeps a file when ANY of
-                    // its windows is live, so a spent five_hour was riding in on a live weekly's
-                    // stamp and could still fire an alert about an allowance already handed back.
-                    // Same predicate /limits uses, not a second copy of it.
-                    if (RateLimits_Reader.Is_ExpiredWindow(pair.Value.WindowResetsAtUtc, nowUtc))
-                        continue;
-
-                    if (!maxPercents.TryGetValue(pair.Key, out var known))
-                    {
-                        maxPercents[pair.Key] = pair.Value;
-                        continue;
-                    }
-
-                    // The same rule /limits uses, through the same comparison: a newer window
-                    // replaces an older one outright, and only readings of the SAME window compete
-                    // on percentage.
-                    var instance = Limits.WindowInstance_Order.Compare_Instance(pair.Value.WindowResetsAtUtc, known.WindowResetsAtUtc);
-
-                    if (instance > 0 || (instance == 0 && pair.Value.Percent > known.Percent))
-                        maxPercents[pair.Key] = pair.Value;
-                }
-            }
+            var maxPercents = Read_CurrentLimitWindows();
 
             if (maxPercents.Count == 0)
                 return;
@@ -2959,6 +3053,13 @@ internal sealed class BridgeEngineModel(
             var optionLabels = Extract_MarkerLines(ref text, "OPTION");
             var questionLines = Extract_MarkerLines(ref text, "QUESTION");
 
+            // What happens if the owner never answers. Both optional, both agent-written and
+            // therefore untrusted — QuestionDirectives_Parser drops anything it cannot read rather
+            // than guessing, and a DEFAULT without a DEADLINE is dropped as meaningless.
+            var deadlineValues = Extract_MarkerLines(ref text, QuestionDirectives_Parser.DEADLINE_MARKER);
+            var defaultValues = Extract_MarkerLines(ref text, QuestionDirectives_Parser.DEFAULT_MARKER);
+            var directives = QuestionDirectives_Parser.Parse(deadlineValues, defaultValues, optionLabels.Count);
+
             // Built from the ENGLISH text, before the Italian layer rewrites it: an explicit
             // QUESTION: line and a derived one then get translated the same way, together.
             var questionPrompt = optionLabels.Count > 0 ? QuestionPrompt_Builder.Build(questionLines, text) : null;
@@ -3000,7 +3101,11 @@ internal sealed class BridgeEngineModel(
                 // options hanging off the bottom of one arrive on a phone as a wall of text with
                 // taps underneath and no visible question. They get their own short message.
                 if (questionPrompt != null)
-                    await Send_QuestionWithButtons_Async(threadId, questionPrompt, optionLabels, append.Channel, cancellationToken);
+                {
+                    await Send_QuestionWithButtons_Async(
+                        threadId, questionPrompt, optionLabels, append.Channel,
+                        directives.Deadline, directives.DefaultOptionIndex, cancellationToken);
+                }
 
                 foreach (var photoPath in photoPaths)
                     await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel.OrchId, cancellationToken);
@@ -3015,6 +3120,8 @@ internal sealed class BridgeEngineModel(
                     {
                         _ownerAwaitingAnswer.Remove(append.Channel.OrchId);
                     }
+
+                    Persist_EngineState();
                 }
             }
             // THE TOKEN DECIDES WHETHER THIS IS A SHUTDOWN, never the exception type — the same rule
@@ -3171,6 +3278,8 @@ internal sealed class BridgeEngineModel(
         string questionPrompt,
         IReadOnlyList<string> optionLabels,
         Channels.DiscoveredChannel.IDiscoveredChannel channel,
+        TimeSpan? deadline,
+        int? defaultOptionIndex,
         CancellationToken cancellationToken)
     {
         var client = _telegramClient
@@ -3190,9 +3299,25 @@ internal sealed class BridgeEngineModel(
         var layout = Telegram.OptionButtons_Layout.Build(optionLabels);
         var promptWithOptions = layout.OptionListText == null ? prompt : $"{prompt}\n\n{layout.OptionListText}";
 
-        var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithOptions, out var buttonGroupId);
+        // CLASSIFIED FROM THE ENGLISH, before the Italian layer rewrote the prompt above — the
+        // patterns are English words an agent writes, and matching a translation of them would make
+        // the guard depend on which language the owner happens to read in.
+        var guardrails = _configProvider.Get_Current().Guardrails;
+        var isHighRisk = HighRisk_Classifier.Is_HighRisk(questionPrompt, guardrails.HighRiskPatterns);
 
-        var messageId = await client.Send_MessageWithButtons_Async(threadId, promptWithOptions, buttons, cancellationToken);
+        // A HIGH-RISK QUESTION LOSES ITS DEFAULT HERE, at the point of asking, rather than being
+        // trusted not to have one. The agent may well have written DEFAULT: 1 on a push question in
+        // good faith; nothing downstream may act on it.
+        var effectiveDefaultIndex = isHighRisk ? null : defaultOptionIndex;
+
+        var askedUtc = _clock.UtcNow;
+        var deadlineUtc = deadline == null ? (DateTime?)null : askedUtc + deadline.Value;
+
+        var promptWithTerms = Compose_QuestionTerms(promptWithOptions, optionLabels, isHighRisk, deadlineUtc, effectiveDefaultIndex);
+
+        var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithTerms, isHighRisk, out var buttonGroupId);
+
+        var messageId = await client.Send_MessageWithButtons_Async(threadId, promptWithTerms, buttons, cancellationToken);
 
         Remember_TopicMessage(threadId, messageId);
 
@@ -3203,13 +3328,23 @@ internal sealed class BridgeEngineModel(
         {
             lock (_ownerStateLock)
             {
-                _openQuestions[messageId.Value] = new OpenQuestion
+                _openQuestions[messageId.Value] = new OpenQuestionRecord
                 {
+                    MessageId = messageId.Value,
                     OrchId = channel.OrchId,
-                    Text = promptWithOptions,
-                    AskedUtc = DateTime.UtcNow,
+                    Text = promptWithTerms,
+                    AskedUtc = askedUtc,
                     ButtonGroupId = buttonGroupId,
+                    DeadlineUtc = deadlineUtc,
+                    DefaultOptionIndex = effectiveDefaultIndex,
+                    IsHighRisk = isHighRisk,
                 };
+            }
+
+            if (isHighRisk)
+            {
+                var matched = HighRisk_Classifier.Find_MatchedPattern_OrNull(questionPrompt, guardrails.HighRiskPatterns);
+                _log.Log_Info(channel.OrchId, $"Question classified HIGH RISK (matched '{matched}') — a tap will require the read-back code");
             }
 
             // It asked; now it stops. The hook refuses every tool until the owner answers — unless
@@ -3223,6 +3358,57 @@ internal sealed class BridgeEngineModel(
                     _log.Log_Info(channel.OrchId, "Terminal mode: question asked WITHOUT the awaiting-answer block — the owner is in this session's terminal");
             }
         }
+
+        // The question, its buttons and its deadline are one decision and are saved together: a
+        // crash between them would leave a keyboard on the phone with no question behind it, or a
+        // question with no way to answer by tapping.
+        Persist_EngineState();
+    }
+
+    /// <summary>
+    /// Appends the TERMS of the question to its own text: what happens if nobody answers, and
+    /// whether a tap will be enough.
+    ///
+    /// <para>
+    /// IN THE MESSAGE, NOT ONLY IN THE APP. A deadline the owner cannot see is a decision taken
+    /// behind their back — they scroll past a question, it lapses, and the first they know of it is
+    /// the consequence. Stating it is what makes the default legitimate.
+    /// </para>
+    /// <para>
+    /// It also becomes the text every later edit is built from — the reminder, the answered record,
+    /// the timeout notice — so the terms stay attached to the question in the chat history rather
+    /// than living only in a field.
+    /// </para>
+    /// </summary>
+    static string Compose_QuestionTerms(
+        string promptWithOptions,
+        IReadOnlyList<string> optionLabels,
+        bool isHighRisk,
+        DateTime? deadlineUtc,
+        int? defaultOptionIndex)
+    {
+        List<string> terms = [];
+
+        if (isHighRisk)
+            terms.Add("🔐 High risk — a tap is not enough: you will be asked to type a 4-digit code shown here.");
+
+        if (deadlineUtc != null)
+        {
+            if (defaultOptionIndex != null && defaultOptionIndex.Value < optionLabels.Count)
+            {
+                // The owner counts from 1, as the numbered list under the question does.
+                terms.Add($"⏳ If you do not answer by {deadlineUtc.Value:HH:mm} UTC, option {defaultOptionIndex.Value + 1} ({optionLabels[defaultOptionIndex.Value]}) is taken.");
+            }
+            else
+            {
+                terms.Add($"⏳ If you do not answer by {deadlineUtc.Value:HH:mm} UTC, this is DENIED (timeout).");
+            }
+        }
+
+        if (terms.Count == 0)
+            return promptWithOptions;
+
+        return $"{promptWithOptions}\n\n{string.Join('\n', terms)}";
     }
 
     /// <summary>
@@ -3232,12 +3418,25 @@ internal sealed class BridgeEngineModel(
     /// a phone button — the label may now be shortened and numbered, while the text handed back to
     /// the session stays whole.
     /// </summary>
-    IReadOnlyList<(string Data, string Label)> Register_Buttons(long? threadId, IReadOnlyList<string> optionTexts, IReadOnlyList<string> buttonLabels, string questionText, out long groupId)
+    IReadOnlyList<(string Data, string Label)> Register_Buttons(
+        long? threadId,
+        IReadOnlyList<string> optionTexts,
+        IReadOnlyList<string> buttonLabels,
+        string questionText,
+        bool isHighRisk,
+        out long groupId)
     {
         if (buttonLabels.Count != optionTexts.Count)
             throw new Exception($"Register_Buttons got {buttonLabels.Count} labels for {optionTexts.Count} options — they are matched by index");
 
         List<(string Data, string Label)> buttons = [];
+
+        // ONE NONCE FOR THE WHOLE QUESTION, and the index is what distinguishes the options. That is
+        // what makes a payload readable — "nonce X, option 2" — without a lookup, and it keeps every
+        // sibling of one keyboard obviously related in the log.
+        var nonce = CallbackToken.New_Nonce();
+
+        var expiresUtc = _clock.UtcNow.AddMinutes(_configProvider.Get_Current().Guardrails.ButtonExpiryMinutes);
 
         lock (_buttonLock)
         {
@@ -3247,10 +3446,19 @@ internal sealed class BridgeEngineModel(
 
             for (var index = 0; index < optionTexts.Count; index++)
             {
-                _buttonSequence++;
-                var data = $"opt-{_buttonSequence}";
+                var data = CallbackToken.Build(nonce, index);
 
-                _buttonOptions[data] = (threadId, optionTexts[index], _buttonGroupSequence, questionText);
+                _buttonOptions[data] = new PendingButtonRecord
+                {
+                    Data = data,
+                    ThreadId = threadId,
+                    OptionText = optionTexts[index],
+                    GroupId = _buttonGroupSequence,
+                    QuestionText = questionText,
+                    ExpiresUtc = expiresUtc,
+                    IsHighRisk = isHighRisk,
+                };
+
                 _buttonOrder.Enqueue(data);
                 buttons.Add((data, buttonLabels[index]));
             }
@@ -3259,10 +3467,23 @@ internal sealed class BridgeEngineModel(
             // the supervisor receives is the full instruction, which is why the two differ here.
             // Tapping it consumes the group like any other choice, so the supervisor answers and
             // then re-asks with fresh buttons.
-            _buttonSequence++;
-            var detailData = $"opt-{_buttonSequence}";
+            var detailData = CallbackToken.Build(nonce, optionTexts.Count);
 
-            _buttonOptions[detailData] = (threadId, OwnerPush_Policy.MORE_DETAIL_REQUEST, _buttonGroupSequence, questionText);
+            _buttonOptions[detailData] = new PendingButtonRecord
+            {
+                Data = detailData,
+                ThreadId = threadId,
+                OptionText = OwnerPush_Policy.MORE_DETAIL_REQUEST,
+                QuestionText = questionText,
+                GroupId = _buttonGroupSequence,
+                ExpiresUtc = expiresUtc,
+
+                // ASKING FOR DETAIL IS NEVER HIGH RISK, whatever the question is about. It takes no
+                // decision — it asks the supervisor to explain — so putting a code in front of it
+                // would make the safe way out of a dangerous question the hardest button to press.
+                IsHighRisk = false,
+            };
+
             _buttonOrder.Enqueue(detailData);
             buttons.Add((detailData, OwnerPush_Policy.MORE_DETAIL_LABEL));
 
@@ -4967,6 +5188,20 @@ internal sealed class BridgeEngineModel(
                     // A `/pc` still ends every OTHER topic's terminal mode — they cannot sit at two.
                     Flip_OtherTerminals_IfPresenceCommand(message.MessageThreadId, command == "pc");
 
+                    // THE READ-BACK, HANDLED HERE AND NOT IN Route_OwnerMessage_Async, deliberately.
+                    // A tapped option arrives at Route as a SYNTHETIC owner message carrying the
+                    // option's own text, so a check placed there could be satisfied by an option
+                    // whose label happens to be four digits — a tap completing a confirmation the
+                    // same tap was supposed to require a second gesture for. Here the message is
+                    // genuinely typed, by definition.
+                    if (command == null
+                        && message.VoiceFileId == null
+                        && message.PhotoFileId == null
+                        && await Try_CompleteHighRiskConfirmation_Async(client, message, cancellationToken))
+                    {
+                        continue;
+                    }
+
                     // Telegram's own command menu only allows [a-z0-9_], so the menu entries are
                     // mute_all/dnd_all while a hand-typed mute-all works just as well.
                     if (command == "pc")
@@ -4988,7 +5223,12 @@ internal sealed class BridgeEngineModel(
                     }
                     else if (command == "pending")
                     {
-                        routableMessages.Add(Build_GeneralCommandMessage(message, "List every pending question that awaits me, and which topic to answer each in."));
+                        // ANSWERED BY THE APP, not by the general supervisor. It used to be routed as
+                        // an English instruction, which meant the list cost a model turn, arrived
+                        // whenever that session next ran, and was reconstructed from channel files by
+                        // something that might be mid-turn on something else. The app is holding the
+                        // decisions in a field — the same argument /progress already won.
+                        await Send_PendingDecisions_Async(client, message.MessageThreadId, cancellationToken);
                     }
                     // "left" is an ALIAS, not a second implementation: it is the word the owner used
                     // ("a slash command that lets me know what's left"), and two commands reading one
@@ -6537,10 +6777,20 @@ internal sealed class BridgeEngineModel(
         var now = DateTime.Now;
         var windows = RateLimits_Reader.Read_WorstAcrossSessions(RateLimits_Reader.Find_UsageFiles_WithLiveWindow(_paths, now), now);
 
+        // FIRST LINE WHEN IT IS ON. The owner asks /limits precisely when things feel stuck, and
+        // "the app has stopped starting sessions until 19:40" is the answer to the question they are
+        // actually asking — it must not sit under the percentages, or below a "nothing to report".
+        var pauseLine = Describe_DispatchPause_OrNull();
+
         if (windows.Count == 0)
-            return "no CURRENT limit windows to report — either every window on disk has already reset, or this Claude Code version's status line carries no limit data at all (the automatic alerts read the same probe files, so they are idle for whichever reason applies)";
+        {
+            return pauseLine ?? "no CURRENT limit windows to report — either every window on disk has already reset, or this Claude Code version's status line carries no limit data at all (the automatic alerts read the same probe files, so they are idle for whichever reason applies)";
+        }
 
         List<string> lines = [];
+
+        if (pauseLine != null)
+            lines.Add(pauseLine);
 
         foreach (var window in windows)
         {
@@ -6556,6 +6806,20 @@ internal sealed class BridgeEngineModel(
         lines.Add($"(account-wide, all models — seen from: {string.Join(" | ", windows.Select(w => w.Models).Distinct())})");
 
         return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// The dispatcher pause as one line, or null when it is running. Reads the same fields the tick
+    /// writes — never a second computation of whether it is paused.
+    /// </summary>
+    string? Describe_DispatchPause_OrNull()
+    {
+        var pausedUntilUtc = _dispatchPausedUntilUtc;
+
+        if (!Limits.DispatchPause_Gate.Is_Paused(pausedUntilUtc, _clock.UtcNow))
+            return null;
+
+        return $"⏸ DISPATCH PAUSED — {_dispatchPauseReason ?? "a usage limit was reached"}. No new sessions are started or respawned; work already running finishes. Resuming at {pausedUntilUtc:HH:mm} UTC.";
     }
 
     /// <summary>
@@ -8077,16 +8341,25 @@ internal sealed class BridgeEngineModel(
         if (await Try_HandleTopicCommandTap_Async(client, tap, cancellationToken))
             return;
 
-        (long? ThreadId, string OptionText, long GroupId, string QuestionText) registered;
-        bool found;
+        PendingButtonRecord? registered;
+        TapOutcomes outcome;
 
         lock (_buttonLock)
         {
-            found = _buttonOptions.TryGetValue(tap.Data, out registered);
+            var found = _buttonOptions.TryGetValue(tap.Data, out registered);
+
+            outcome = PendingDecision_Gate.Classify(
+                tap.Data,
+                found,
+                registered?.ExpiresUtc ?? default,
+                registered?.IsHighRisk ?? false,
+                _clock.UtcNow);
 
             // SINGLE-USE: the first tap consumes the WHOLE option group — a second tap (or a
-            // sibling button) resolves to "expired" instead of double-firing a decision.
-            if (found)
+            // sibling button) resolves to "no longer open" instead of double-firing a decision.
+            // A LAPSED group is consumed too: leaving it registered means every later tap pays
+            // another expiry check on a decision that can never be taken again.
+            if (registered != null && outcome != TapOutcomes.Unknown && outcome != TapOutcomes.NotOurs)
             {
                 List<string> groupKeys = [.. _buttonOptions.Where(pair => pair.Value.GroupId == registered.GroupId).Select(pair => pair.Key)];
 
@@ -8095,10 +8368,27 @@ internal sealed class BridgeEngineModel(
             }
         }
 
+        // SAID, NOT SWALLOWED — and said with the reason. A payload that parses as one of ours and
+        // matches no live decision is either a keyboard the owner scrolled back to, or a replayed
+        // token; either way the app just refused to act on a tap, which is a thing that must appear
+        // somewhere a human can find it. This is the class of event the single "expired" answer used
+        // to hide, because a consumed button and an invented one read identically.
+        if (outcome is TapOutcomes.Unknown or TapOutcomes.Expired)
+        {
+            var parsed = CallbackToken.Parse_OrNull(tap.Data);
+            var describedToken = parsed == null ? "an unrecognised payload" : $"nonce {parsed.Value.Nonce} option {parsed.Value.OptionIndex}";
+
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                outcome == TapOutcomes.Expired
+                    ? $"Callback REFUSED ({describedToken}): the decision had expired. The owner was asked to type their choice."
+                    : $"Callback REFUSED ({describedToken}): no live decision holds it — already answered, or replayed. The owner was asked to type their choice.");
+        }
+
         try
         {
             // Must always be answered or the button spinner hangs on the phone.
-            await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, found ? "✓" : "expired — please type your choice", cancellationToken);
+            await client.Answer_CallbackQuery_Async(tap.CallbackQueryId, PendingDecision_Gate.Describe_ForOwner(outcome), cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES, as at the ~30 other sites in this file. An HttpClient timeout
         // surfaces as TaskCanceledException with the token NOT cancelled, and rethrowing it here
@@ -8115,8 +8405,21 @@ internal sealed class BridgeEngineModel(
             _log.Log_Warning(GLOBAL_ORCH_ID, $"answerCallbackQuery failed: {ex.Message}");
         }
 
-        if (!found)
+        if (registered == null || outcome is TapOutcomes.Unknown or TapOutcomes.Expired or TapOutcomes.NotOurs)
+        {
+            // The group was consumed above on an expiry, so the persisted state has to follow it
+            // down — otherwise a restart brings the dead keyboard back.
+            if (outcome == TapOutcomes.Expired)
+                Persist_EngineState();
+
             return;
+        }
+
+        if (outcome == TapOutcomes.NeedsConfirmation)
+        {
+            await Begin_HighRiskConfirmation_Async(client, tap, registered, cancellationToken);
+            return;
+        }
 
         // Rewrite the question message to RECORD the choice ("❓ … / ✅ deep"). Telegram's tap
         // acknowledgement is a transient toast and the keyboard vanishes, so without this the chat
@@ -8156,7 +8459,494 @@ internal sealed class BridgeEngineModel(
         var syntheticMessage = TelegramOwnerMessage_Factory.Create(
             tap.UpdateId, tap.MessageId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
 
+        // The group is consumed and the question is closed: both are decisions, and they are saved
+        // BEFORE the answer is routed, because routing is what can fail.
+        Persist_EngineState();
+
         await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
+    }
+
+    /// <summary>
+    /// THE SECOND GESTURE. A tap on a high-risk option does not take the decision — it opens a
+    /// read-back: the message is edited to show a four-digit code, and only that code, typed back
+    /// into the topic, releases the answer to the session.
+    ///
+    /// <para>
+    /// WHY A TAP IS NOT ENOUGH HERE. Every other decision in this system is recoverable by asking
+    /// again. A push, a deploy, a spend or a recursive delete is not, and the device it is taken on
+    /// is a phone that spends its day unlocked in a pocket or on a desk. The rule is the aviation
+    /// read-back: the second action must be deliberate and must be composed by the person looking at
+    /// the screen, which a tap on a notification is not.
+    /// </para>
+    /// <para>
+    /// THE MESSAGE IS EDITED, NEVER REPLACED (decision 14). The code appears on the question the
+    /// owner is already looking at, so there is nothing to scroll for and nothing new to notify.
+    /// </para>
+    /// <para>
+    /// THE CODE IS NEVER LOGGED. It goes into the Telegram message and into the state file, and
+    /// nowhere else — see <see cref="ConfirmationCode"/> for why that boundary is where it is.
+    /// </para>
+    /// </summary>
+    async Task Begin_HighRiskConfirmation_Async(
+        ITelegramApiClient client,
+        ITelegramCallbackTap tap,
+        PendingButtonRecord registered,
+        CancellationToken cancellationToken)
+    {
+        var orchId = Resolve_OrchId_ForThread_OrNull(registered.ThreadId ?? tap.MessageThreadId);
+
+        if (orchId == null)
+        {
+            // Without an orchestration there is no topic to read the typed code from, so the
+            // confirmation could never be completed. Refusing OUT LOUD beats arming something that
+            // can only ever lapse.
+            _log.Log_Warning(GLOBAL_ORCH_ID, "A high-risk tap arrived in a topic with no open orchestration — it was refused rather than parked");
+            await Send_DirectReply_BestEffort_Async(client, tap.MessageThreadId, "That decision belongs to no open orchestration — please type your answer.", cancellationToken);
+            return;
+        }
+
+        var guardrails = _configProvider.Get_Current().Guardrails;
+        var code = ConfirmationCode.Generate();
+
+        var confirmation = new PendingConfirmationRecord
+        {
+            Code = code,
+            ThreadId = registered.ThreadId ?? tap.MessageThreadId,
+            MessageId = tap.MessageId,
+            OrchId = orchId,
+            OptionText = registered.OptionText,
+            QuestionText = registered.QuestionText,
+            ExpiresUtc = _clock.UtcNow.AddMinutes(guardrails.HighRiskCodeExpiryMinutes),
+        };
+
+        lock (_ownerStateLock)
+        {
+            // ONE AT A TIME PER ORCHESTRATION, and the newest wins. Two live codes in one topic
+            // would make a typed four-digit message ambiguous, which is the one thing this flow
+            // cannot afford to be.
+            _openQuestions.Remove(tap.MessageId ?? 0);
+            _pendingConfirmations[orchId] = confirmation;
+        }
+
+        // Saved BEFORE the edit: a crash between the two leaves a code the app still honours and a
+        // message that does not show it, which the owner recovers from by tapping again. The reverse
+        // — a code on screen that the app has never heard of — cannot be recovered from at all.
+        Persist_EngineState();
+
+        if (tap.MessageId != null)
+        {
+            try
+            {
+                await client.Edit_MessageText_Async(
+                    tap.MessageId.Value,
+                    QuestionPrompt_Builder.Build_ConfirmationText(registered.QuestionText, registered.OptionText, code, guardrails.HighRiskCodeExpiryMinutes),
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // The code exists and is live; what failed is showing it. Sending it as its own
+                // message is the one case where a new message beats an edit — without it the owner
+                // is holding a decision they have no way to complete.
+                _log.Log_Warning(orchId, $"High-risk confirmation edit failed: {ex.Message} — sending the code as a message instead");
+
+                await Send_DirectReply_BestEffort_Async(
+                    client,
+                    confirmation.ThreadId,
+                    QuestionPrompt_Builder.Build_ConfirmationText(registered.QuestionText, registered.OptionText, code, guardrails.HighRiskCodeExpiryMinutes),
+                    cancellationToken);
+            }
+        }
+
+        _log.Log_Info(orchId, "High-risk decision tapped — awaiting the read-back code before the answer is delivered");
+    }
+
+    /// <summary>Which orchestration a Telegram topic belongs to, or null for General and unknowns.</summary>
+    string? Resolve_OrchId_ForThread_OrNull(long? messageThreadId)
+    {
+        if (messageThreadId == null)
+            return null;
+
+        var session = _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
+
+        return session == null || session.ClosedUtc != null ? null : session.OrchId;
+    }
+
+    /// <summary>
+    /// Completes — or refuses — a high-risk decision the owner has tapped, from the code they typed.
+    ///
+    /// <para>
+    /// Returns true when the message WAS the second gesture (right code, wrong code, or a code
+    /// arriving too late) and must therefore not also reach the session as ordinary chat. Returns
+    /// false for anything else, so a message that merely happens to be sent while a confirmation is
+    /// open flows through untouched.
+    /// </para>
+    /// <para>
+    /// AN UNRELATED MESSAGE DOES NOT CANCEL THE CONFIRMATION. The owner types "hang on" and then the
+    /// code; cancelling on the first would make the flow unusable for the one person it exists for.
+    /// It lapses on its own clock instead, which is the only thing that can end it besides the code.
+    /// </para>
+    /// </summary>
+    async Task<bool> Try_CompleteHighRiskConfirmation_Async(
+        ITelegramApiClient client,
+        ITelegramOwnerMessage message,
+        CancellationToken cancellationToken)
+    {
+        var orchId = Resolve_OrchId_ForThread_OrNull(message.MessageThreadId);
+
+        if (orchId == null)
+            return false;
+
+        PendingConfirmationRecord? confirmation;
+
+        lock (_ownerStateLock)
+        {
+            if (!_pendingConfirmations.TryGetValue(orchId, out confirmation))
+                return false;
+        }
+
+        var looksLikeACode = ConfirmationCode.Looks_LikeACode(message.Text);
+
+        if (_clock.UtcNow >= confirmation.ExpiresUtc)
+        {
+            lock (_ownerStateLock)
+                _pendingConfirmations.Remove(orchId);
+
+            Persist_EngineState();
+
+            // SWALLOWED ONLY IF IT WAS AN ATTEMPT. A lapsed confirmation must not eat an ordinary
+            // message the owner sent minutes later about something else entirely.
+            if (!looksLikeACode)
+                return false;
+
+            _log.Log_Warning(orchId, "A high-risk read-back code arrived after its window closed — the decision was NOT taken");
+            await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🔐 That code has expired and nothing was done. Tap the option again if you still want it.", cancellationToken);
+            return true;
+        }
+
+        if (!ConfirmationCode.Matches(message.Text, confirmation.Code))
+        {
+            if (!looksLikeACode)
+                return false;
+
+            // THE CONFIRMATION SURVIVES A WRONG CODE, within its own window: a mistyped digit must
+            // cost a retype, not the whole decision. The window is what bounds the attempts.
+            _log.Log_Warning(orchId, "A high-risk read-back code did not match — the decision is still pending");
+            await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🔐 That is not the code. Check the message above and try again.", cancellationToken);
+            return true;
+        }
+
+        lock (_ownerStateLock)
+            _pendingConfirmations.Remove(orchId);
+
+        // Saved BEFORE the answer is routed, for the reason the tap path states: routing is what can
+        // fail, and a confirmation left live after its decision was taken could take it twice.
+        Persist_EngineState();
+
+        _log.Log_Info(orchId, "High-risk decision CONFIRMED by read-back code — the answer is being delivered");
+
+        if (confirmation.MessageId != null)
+        {
+            try
+            {
+                await client.Edit_MessageText_Async(
+                    confirmation.MessageId.Value,
+                    QuestionPrompt_Builder.Build_AnsweredText(confirmation.QuestionText, confirmation.OptionText),
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Cosmetic: the decision is taken either way, and the session is about to be told.
+                _log.Log_Warning(orchId, $"Confirmed-question edit failed: {ex.Message}");
+            }
+        }
+
+        var syntheticMessage = TelegramOwnerMessage_Factory.Create(
+            message.UpdateId, message.MessageId, 0, 0, confirmation.ThreadId ?? message.MessageThreadId, confirmation.OptionText, null, null);
+
+        await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
+        return true;
+    }
+
+    /// <summary>
+    /// /pending — every decision waiting on the owner, answered from the app's own state.
+    /// </summary>
+    async Task Send_PendingDecisions_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        List<OpenQuestionRecord> questions;
+        List<PendingConfirmationRecord> confirmations;
+
+        lock (_ownerStateLock)
+        {
+            questions = [.. _openQuestions.Values];
+            confirmations = [.. _pendingConfirmations.Values];
+        }
+
+        // IN A TOPIC, ONLY THAT TOPIC'S. Asked inside an orchestration the owner means "what is
+        // waiting on me HERE"; asked in General they mean everything. The same scope rule /progress
+        // and /cost already follow.
+        var orchId = Resolve_OrchId_ForThread_OrNull(messageThreadId);
+
+        if (orchId != null)
+        {
+            questions = [.. questions.Where(question => question.OrchId == orchId)];
+            confirmations = [.. confirmations.Where(confirmation => confirmation.OrchId == orchId)];
+        }
+
+        var text = PendingDecisions_Report.Build(questions, confirmations, _clock.UtcNow);
+
+        await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reminds, defaults or denies every question whose window has moved on.
+    ///
+    /// <para>
+    /// THE REMINDER IS AN EDIT (decision 14) and happens once. A default is applied by DELIVERING
+    /// the option's own text to the session exactly as a tap would, so nothing downstream needs to
+    /// know the difference — and an app entry says, in the channel the owner reads back, that it was
+    /// a timeout rather than them.
+    /// </para>
+    /// <para>
+    /// BEST-EFFORT PER QUESTION. One question whose Telegram edit fails must not stop the sweep from
+    /// reaching the next one; the decision has already been taken in state by then.
+    /// </para>
+    /// </summary>
+    async Task Resolve_QuestionDeadlines_Async(CancellationToken cancellationToken)
+    {
+        List<OpenQuestionRecord> due;
+        var nowUtc = _clock.UtcNow;
+
+        lock (_ownerStateLock)
+        {
+            due = [.. _openQuestions.Values.Where(question =>
+                QuestionDeadline_Planner.Decide(
+                    question.AskedUtc, question.DeadlineUtc, question.ReminderSent,
+                    question.IsHighRisk, question.DefaultOptionIndex, nowUtc) != QuestionDeadlineActions.None)];
+        }
+
+        if (due.Count == 0)
+            return;
+
+        foreach (var question in due)
+        {
+            var action = QuestionDeadline_Planner.Decide(
+                question.AskedUtc, question.DeadlineUtc, question.ReminderSent,
+                question.IsHighRisk, question.DefaultOptionIndex, nowUtc);
+
+            try
+            {
+                if (action == QuestionDeadlineActions.Remind)
+                    await Remind_AboutQuestion_Async(question, nowUtc, cancellationToken);
+                else
+                    await Close_QuestionOnDeadline_Async(question, action, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(question.OrchId, $"Question deadline handling failed: {ex.Message}");
+            }
+        }
+
+        Persist_EngineState();
+    }
+
+    async Task Remind_AboutQuestion_Async(OpenQuestionRecord question, DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        lock (_ownerStateLock)
+        {
+            // MARKED FIRST, so a failing edit cannot turn the once-only reminder into a per-tick
+            // one. A reminder that is missed is a reminder; a reminder every two seconds is the
+            // waterfall decision 14 exists to prevent.
+            if (!_openQuestions.TryGetValue(question.MessageId, out var live))
+                return;
+
+            _openQuestions[question.MessageId] = live with { ReminderSent = true };
+        }
+
+        var client = _telegramClient;
+
+        if (client == null || question.DeadlineUtc == null)
+            return;
+
+        var remaining = question.DeadlineUtc.Value - nowUtc;
+
+        await client.Edit_MessageText_Async(
+            question.MessageId,
+            QuestionPrompt_Builder.Build_TimedOutText(question.Text, $"Still waiting — about {Math.Max(1, (int)remaining.TotalMinutes)} minutes left."),
+            cancellationToken);
+    }
+
+    async Task Close_QuestionOnDeadline_Async(OpenQuestionRecord question, QuestionDeadlineActions action, CancellationToken cancellationToken)
+    {
+        var appliedDefault = action == QuestionDeadlineActions.ApplyDefault;
+
+        string? chosenOptionText = null;
+
+        lock (_ownerStateLock)
+        {
+            if (!_openQuestions.Remove(question.MessageId))
+                return;
+        }
+
+        lock (_buttonLock)
+        {
+            List<PendingButtonRecord> groupButtons = [.. _buttonOptions.Values.Where(button => button.GroupId == question.ButtonGroupId)];
+
+            if (appliedDefault && question.DefaultOptionIndex != null)
+            {
+                // The option's own text, taken from the button that would have delivered it — so a
+                // default and a tap hand the session the identical words, and there is no second
+                // place where "what option 2 means" is decided.
+                var index = question.DefaultOptionIndex.Value;
+                var parsedIndexes = groupButtons
+                    .Select(button => (Button: button, Parsed: CallbackToken.Parse_OrNull(button.Data)))
+                    .Where(pair => pair.Parsed != null && pair.Parsed.Value.OptionIndex == index)
+                    .ToList();
+
+                chosenOptionText = parsedIndexes.Count == 1 ? parsedIndexes[0].Button.OptionText : null;
+            }
+
+            foreach (var button in groupButtons)
+                _buttonOptions.Remove(button.Data);
+        }
+
+        // A DEFAULT THAT CANNOT BE RESOLVED BECOMES A DENY, never a guess. The buttons are the only
+        // record of what the option said, and if the registry has already evicted them there is
+        // nothing left to deliver — answering with the wrong option is worse than answering nothing.
+        if (appliedDefault && chosenOptionText == null)
+        {
+            appliedDefault = false;
+            _log.Log_Warning(question.OrchId, "A question's default could not be resolved to an option — it was DENIED on timeout instead of guessed");
+        }
+
+        var outcome = appliedDefault
+            ? $"No answer by the deadline — option {question.DefaultOptionIndex + 1} was taken automatically."
+            : "No answer by the deadline — DENIED (timeout).";
+
+        _log.Log_Warning(question.OrchId, $"Question closed on its deadline: {outcome}");
+
+        // THE CHANNEL IS THE RECORD. It is what the owner reads back in the catch-up burst, and what
+        // the away digest is built from — so a decision taken in their absence is visible in the
+        // same place every other decision is, rather than only in a Telegram edit they may never
+        // scroll to.
+        Append_OrchestrationAppEntry(
+            question.OrchId,
+            AppEntryAudiences.Owner,
+            appliedDefault ? "question DEFAULTED on timeout" : "question DENIED on timeout",
+            $"{outcome}\n\nThe question was: {question.Text}");
+
+        if (_telegramClient != null)
+        {
+            try
+            {
+                await _telegramClient.Edit_MessageText_Async(
+                    question.MessageId,
+                    QuestionPrompt_Builder.Build_TimedOutText(question.Text, outcome),
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Warning(question.OrchId, $"Timed-out question edit failed: {ex.Message}");
+            }
+        }
+
+        // The SESSION is told either way: an implementer blocked on a question needs the deny as
+        // much as it needs the default, or the deadline merely moves the stall somewhere quieter.
+        var session = _store.Get_Session_OrNull(question.OrchId);
+
+        var syntheticMessage = TelegramOwnerMessage_Factory.Create(
+            0, null, 0, 0, session?.TelegramTopicId,
+            appliedDefault
+                ? chosenOptionText ?? ""
+                : "No — the deadline passed with no answer from me. Treat this as a refusal and say what you need instead.",
+            null, null);
+
+        await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
+    }
+
+    /// <summary>
+    /// Pauses the dispatcher when the account is at or over the configured share of a usage window,
+    /// and resumes it when the window resets.
+    ///
+    /// <para>
+    /// ONE ALERT, WITH A TIME ON IT. Sixty sessions hitting the same limit produce sixty identical
+    /// failures today; this produces one message saying when the allowance comes back. The alert is
+    /// outbound and is therefore suppressed while muted — but the pause and the resume are not
+    /// messages and happen regardless, which is why this method sits above the DND gate.
+    /// </para>
+    /// </summary>
+    async Task Update_DispatchPause_Async(CancellationToken cancellationToken)
+    {
+        var nowUtc = _clock.UtcNow;
+
+        if (_dispatchPausedUntilUtc != null && !Limits.DispatchPause_Gate.Is_Paused(_dispatchPausedUntilUtc, nowUtc))
+        {
+            var reason = _dispatchPauseReason ?? "the window reset";
+
+            _dispatchPausedUntilUtc = null;
+            _dispatchPauseReason = null;
+            Persist_EngineState();
+
+            _log.Log_Info(GLOBAL_ORCH_ID, Limits.DispatchPause_Gate.Describe_Resume(reason));
+            await Send_GeneralNotice_BestEffort_Async(Limits.DispatchPause_Gate.Describe_Resume(reason), cancellationToken);
+            return;
+        }
+
+        // Already paused: nothing to decide until it lifts. Re-reading the probes here would let a
+        // still-high percentage extend the pause indefinitely past the reset it was measured
+        // against, which is how a five-hour pause becomes a permanent one.
+        if (_dispatchPausedUntilUtc != null)
+            return;
+
+        var thresholdPercent = _configProvider.Get_Current().Guardrails.DispatchPauseThresholdPercent;
+
+        foreach (var pair in Read_CurrentLimitWindows())
+        {
+            var pauseUntil = Limits.DispatchPause_Gate.Decide_PauseUntil_OrNull(
+                pair.Value.Percent, pair.Value.WindowResetsAtUtc, thresholdPercent, nowUtc);
+
+            if (pauseUntil == null)
+                continue;
+
+            _dispatchPausedUntilUtc = pauseUntil;
+            _dispatchPauseReason = $"the {pair.Key} window was at {pair.Value.Percent:0.#}%";
+            Persist_EngineState();
+
+            var alert = Limits.DispatchPause_Gate.Describe_Pause(pair.Key, pair.Value.Percent, pauseUntil.Value);
+
+            _log.Log_Warning(GLOBAL_ORCH_ID, alert);
+            await Send_GeneralNotice_BestEffort_Async(alert, cancellationToken);
+            return;
+        }
+    }
+
+    /// <summary>
+    /// An app-wide notice into the General topic. Suppressed while muted — it is outbound, and DND
+    /// means exactly that; the state change it reports has already happened either way.
+    /// </summary>
+    async Task Send_GeneralNotice_BestEffort_Async(string text, CancellationToken cancellationToken)
+    {
+        var client = _telegramClient;
+
+        if (client == null || _telegramMuted)
+            return;
+
+        await Send_DirectReply_BestEffort_Async(client, null, text, cancellationToken);
     }
 
     async Task Delete_ServiceMessage_BestEffort_Async(ITelegramApiClient client, long messageId, CancellationToken cancellationToken)
@@ -8697,6 +9487,10 @@ internal sealed class BridgeEngineModel(
                 _buttonOptions.Remove(ticket);
         }
 
+        // The question is closed and its keyboard is dead in state; without this a restart brings
+        // both back and the owner can tap an answer they have already given in words.
+        Persist_EngineState();
+
         if (_telegramClient == null)
             return;
 
@@ -9080,6 +9874,12 @@ internal sealed class BridgeEngineModel(
             // Whatever the supervisor says next is the answer to this, and it MUST reach them.
             _ownerAwaitingAnswer.Add(orchId);
         }
+
+        // R1 SURVIVES A RESTART TOO, which it did not before. The flag is what makes the answer to
+        // the owner's own question push instead of being re-read as narration, and losing it while
+        // an answer was still in flight dropped that answer silently — the exact failure R1 names,
+        // reached by closing the app instead of by a failed send.
+        Persist_EngineState();
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
@@ -10393,6 +11193,9 @@ internal sealed class BridgeEngineModel(
                 _openQuestions.Remove(entry.MessageId);
         }
 
+        if (parked.Count > 0)
+            Persist_EngineState();
+
         foreach (var entry in parked)
         {
             try
@@ -11230,6 +12033,85 @@ internal sealed class BridgeEngineModel(
         {
             BridgeState_Store.Save(_paths, _tailer.Get_OffsetsSnapshot(), _lastUpdateId);
         }
+    }
+
+    /// <summary>
+    /// Writes the bridge's DECISION state to disk — every open question, every live button, every
+    /// high-risk confirmation in flight, the nudge memory, the crash-loop counters and the
+    /// dispatcher pause.
+    ///
+    /// <para>
+    /// CALLED AT EACH DECISION EVENT, not on a timer. These change a handful of times an hour, not
+    /// thirty times a minute like the cursor beside them, so writing on the event costs nothing and
+    /// removes the window a tick-based save would leave: a tap taken in the two seconds before the
+    /// next tick is exactly the tap most likely to be followed by whatever killed the process.
+    /// </para>
+    /// <para>
+    /// TAKES BOTH LOCKS, IN THIS ORDER, and never calls anything that takes them again. The button
+    /// registry and the owner-state maps are guarded separately and are read together only here;
+    /// fixing the order in one place is what keeps that from becoming a deadlock the first time
+    /// somebody adds a second reader.
+    /// </para>
+    /// <para>
+    /// NEVER THROWS: the store swallows and reports its own write failures, because everything in
+    /// the snapshot is still live in these fields and this process is unaffected by a disk that
+    /// cannot take it.
+    /// </para>
+    /// </summary>
+    void Persist_EngineState()
+    {
+        EngineStateSnapshot snapshot;
+
+        lock (_buttonLock)
+        {
+            List<PendingButtonRecord> buttons = [];
+
+            // Written in _buttonOrder, not dictionary order, so the FIFO eviction the cap depends on
+            // survives a restart in the same order it had before it.
+            foreach (var data in _buttonOrder)
+            {
+                if (_buttonOptions.TryGetValue(data, out var button))
+                    buttons.Add(button);
+            }
+
+            lock (_ownerStateLock)
+            {
+                snapshot = new EngineStateSnapshot
+                {
+                    OwnerAwaitingAnswer = [.. _ownerAwaitingAnswer],
+                    NudgedAboutEntry = new Dictionary<string, string>(_nudgedAboutEntry),
+                    PendingButtons = buttons,
+                    OpenQuestions = [.. _openQuestions.Values],
+                    PendingConfirmations = [.. _pendingConfirmations.Values],
+                    ConsecutiveRespawns = _watchdog.Get_ConsecutiveRespawns(),
+                    ButtonGroupSequence = _buttonGroupSequence,
+                    DispatchPausedUntilUtc = _dispatchPausedUntilUtc,
+                    DispatchPauseReason = _dispatchPauseReason,
+                };
+            }
+        }
+
+        _engineStateStore.Save(snapshot);
+    }
+
+    /// <summary>
+    /// The crash-loop counters as they were last persisted, so a tick that changed nothing does not
+    /// rewrite the state file thirty times a minute. A COUNT AND A SUM rather than the dictionary
+    /// itself: the only transition that matters here is a counter going up, and both move when one
+    /// does.
+    /// </summary>
+    (int Slots, long Total) _persistedRespawnCounts;
+
+    void Persist_EngineState_IfRespawnCountsMoved()
+    {
+        var counters = _watchdog.Get_ConsecutiveRespawns();
+        var signature = (counters.Count, counters.Values.Sum(count => (long)count));
+
+        if (signature == _persistedRespawnCounts)
+            return;
+
+        _persistedRespawnCounts = signature;
+        Persist_EngineState();
     }
 
     void Raise_OrchestrationActivity(string orchId)

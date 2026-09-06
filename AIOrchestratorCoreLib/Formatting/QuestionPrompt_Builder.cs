@@ -111,6 +111,28 @@ public static class QuestionPrompt_Builder
         return $"{questionText}\n\n✅ answered: {Preview_OrDefault(ownerText)}";
     }
 
+    /// <summary>
+    /// The question message after a HIGH-RISK option has been tapped: the choice is shown as
+    /// PROPOSED, not taken, with the four digits that will take it.
+    ///
+    /// <para>
+    /// IT NAMES THE OPERATION BACK. "You are about to: &lt;option&gt;" is the read-back — the owner
+    /// confirms what they are approving, not merely that they meant to press something. That is the
+    /// whole content of the second gesture, and it is why the option text is repeated here even
+    /// though it is already on the button they just pressed.
+    /// </para>
+    /// </summary>
+    public static string Build_ConfirmationText(string questionText, string chosenLabel, string code, int expiryMinutes)
+    {
+        return $"{questionText}\n\n🔐 You are about to: {chosenLabel}\n\nReply with the code {code} within {expiryMinutes} minutes to confirm. Anything else leaves it undone.";
+    }
+
+    /// <summary>The record left on a question that nobody answered before its deadline.</summary>
+    public static string Build_TimedOutText(string questionText, string outcome)
+    {
+        return $"{questionText}\n\n⏳ {outcome}";
+    }
+
     static string Preview_OrDefault(string ownerText)
     {
         var firstLine = (ownerText ?? "")
