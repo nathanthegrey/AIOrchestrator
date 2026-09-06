@@ -84,9 +84,11 @@ extract_block() {
 
 run_role() {
   local role="$1" channel_rel="$2" orch_rel="$3" phrase="$4"
-  local src="$SKILLS_DIR/$role/SKILL.md"
+  # The watcher loop lives in the role's reference file since the protocols were split; the
+  # SKILL.md that owns it only carries the imperative pointer to read it.
+  local src="$SKILLS_DIR/$role/reference/watcher.md"
 
-  [ -f "$src" ] || die "$role/SKILL.md is not in $SKILLS_DIR — cannot test the loop it ships"
+  [ -f "$src" ] || die "$role/reference/watcher.md is not in $SKILLS_DIR — cannot test the loop it ships"
 
   local block
   block="$(extract_block "$src")"
