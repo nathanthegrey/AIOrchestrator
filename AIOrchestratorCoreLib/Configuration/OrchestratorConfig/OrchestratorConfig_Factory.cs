@@ -27,13 +27,20 @@ public static class OrchestratorConfig_Factory
         bool? telegramItalianLayer,
         bool? telegramStatusScreenshots,
         string? voiceTranscribeCommand,
-        long? orchestrationTokenBudget)
+        long? orchestrationTokenBudget,
+
+        // OPTIONAL, AND ONLY THIS ONE. Every other parameter is required because every caller knows
+        // its value; this key is hand-edited in config.json and no window has a field for it, so the
+        // Settings window builds a config without one — and the loader, which is the only reader that
+        // can have one, passes it explicitly. Save() never serialises the key, so a config built
+        // without it cannot erase it from disk.
+        PlanBackendSettings? planBackend = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken, telegramItalianLayer,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
-            RunnerConfigs_Factory.Create_Default());
+            RunnerConfigs_Factory.Create_Default(), planBackend);
     }
 
     /// <summary>
@@ -54,7 +61,8 @@ public static class OrchestratorConfig_Factory
         bool? telegramStatusScreenshots,
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
-        IRunnerConfigs runners)
+        IRunnerConfigs runners,
+        PlanBackendSettings? planBackend = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -69,7 +77,8 @@ public static class OrchestratorConfig_Factory
             telegramStatusScreenshots ?? DEFAULT_TELEGRAM_STATUS_SCREENSHOTS,
             voiceTranscribeCommand,
             orchestrationTokenBudget,
-            runners);
+            runners,
+            planBackend);
     }
 
     public static IOrchestratorConfig Create_Empty()
@@ -96,7 +105,8 @@ public static class OrchestratorConfig_Factory
             source.TelegramStatusScreenshots,
             source.VoiceTranscribeCommand,
             source.OrchestrationTokenBudget,
-            source.Runners);
+            source.Runners,
+            source.PlanBackend);
     }
 
     /// <summary>
@@ -119,6 +129,7 @@ public static class OrchestratorConfig_Factory
             telegramStatusScreenshots,
             source.VoiceTranscribeCommand,
             source.OrchestrationTokenBudget,
-            source.Runners);
+            source.Runners,
+            source.PlanBackend);
     }
 }

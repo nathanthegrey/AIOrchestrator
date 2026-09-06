@@ -35,9 +35,21 @@ public static class OrchestratorConfig_Loader
             Get_Bool_OrNull(configRoot, "telegramStatusScreenshots"),
             Get_String_OrNull(configRoot, "voiceTranscribeCommand"),
             Get_Long_OrNull(configRoot, "orchestrationTokenBudget"),
-            RunnerConfigs_Json.Parse(configRoot));
+            RunnerConfigs_Json.Parse(configRoot),
+            Parse_PlanBackend_OrNull(configRoot));
     }
 
+    /// <summary>
+    /// Saves the settings this app OWNS, onto whatever the file already contained.
+    ///
+    /// <para>
+    /// IT MERGES RATHER THAN REPLACES, and that is a fix rather than a refinement: this method used to
+    /// build a fresh object and write it, so every key it did not know about was deleted the first
+    /// time anything saved — the Settings window, the repo list, the /italian toggle. A hand-edited
+    /// key (planBackend is the first, and will not be the last) survived exactly until the owner next
+    /// pressed a button. Unknown keys are now carried through untouched.
+    /// </para>
+    /// </summary>
     public static void Save(IOrchestratorConfig config, ISupervisionPaths paths)
     {
         Directory.CreateDirectory(paths.Root);
@@ -52,7 +64,10 @@ public static class OrchestratorConfig_Loader
             });
         }
 
-        var configRoot = new JsonObject
+        // The file as it stands, so keys nobody here knows about are kept.
+        var configRoot = Read_JsonObject_OrNull(paths.ConfigFile) ?? [];
+
+        foreach (var (key, value) in new JsonObject
         {
             ["repos"] = reposArray,
             ["supervisorModel"] = config.SupervisorModel,
@@ -65,16 +80,22 @@ public static class OrchestratorConfig_Loader
             ["telegramStatusScreenshots"] = config.TelegramStatusScreenshots,
             ["voiceTranscribeCommand"] = config.VoiceTranscribeCommand,
             ["orchestrationTokenBudget"] = config.OrchestrationTokenBudget,
-        };
+
+            // planBackend IS DELIBERATELY ABSENT from this list. It is hand-edited, no window builds
+            // one, and IOrchestratorConfig.PlanBackend is null in every config the app constructs
+            // itself — writing it would mean erasing the owner's own key on the next save.
+        }.ToList())
+        {
+            configRoot[key] = value?.DeepClone();
+        }
 
         RunnerConfigs_Json.Write(configRoot, config.Runners);
 
         File.WriteAllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));
 
-        var secretsRoot = new JsonObject
-        {
-            ["telegramBotToken"] = config.TelegramBotToken,
-        };
+        var secretsRoot = Read_JsonObject_OrNull(paths.SecretsFile) ?? [];
+
+        secretsRoot["telegramBotToken"] = config.TelegramBotToken;
 
         File.WriteAllText(paths.SecretsFile, secretsRoot.ToJsonString(JsonWriting.INDENTED));
     }
@@ -116,6 +137,26 @@ public static class OrchestratorConfig_Loader
         }
 
         return repos;
+    }
+
+    /// <summary>
+    /// The <c>planBackend</c> object, or null when the key is absent — which is every config.json
+    /// written before this existed and every one whose owner never opted in.
+    /// </summary>
+    static PlanBackendSettings? Parse_PlanBackend_OrNull(JsonObject? configRoot)
+    {
+        if (configRoot?["planBackend"] is not JsonObject backendRoot)
+            return null;
+
+        var kind = Get_String_OrNull(backendRoot, "kind");
+
+        if (string.IsNullOrWhiteSpace(kind))
+            return null;
+
+        return new PlanBackendSettings(
+            kind,
+            Get_String_OrNull(backendRoot, "assembly"),
+            Get_String_OrNull(backendRoot, "type"));
     }
 
     static string? Get_String_OrNull(JsonObject? root, string key)

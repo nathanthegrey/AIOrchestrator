@@ -16,7 +16,8 @@ internal sealed class OrchestratorConfigModel(
     bool telegramStatusScreenshots,
     string? voiceTranscribeCommand,
     long? orchestrationTokenBudget,
-    IRunnerConfigs runners) : IOrchestratorConfig
+    IRunnerConfigs runners,
+    PlanBackendSettings? planBackend) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -31,6 +32,7 @@ internal sealed class OrchestratorConfigModel(
     public string? VoiceTranscribeCommand { get; } = voiceTranscribeCommand;
     public long? OrchestrationTokenBudget { get; } = orchestrationTokenBudget;
     public IRunnerConfigs Runners { get; } = runners;
+    public PlanBackendSettings? PlanBackend { get; } = planBackend;
 
     public bool Is_TelegramConfigured()
     {

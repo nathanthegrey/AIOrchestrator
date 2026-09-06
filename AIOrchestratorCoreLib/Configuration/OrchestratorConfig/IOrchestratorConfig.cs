@@ -57,6 +57,11 @@ public interface IOrchestratorConfig
     /// terminal everywhere, so an existing config.json changes nothing.
     /// </summary>
     IRunnerConfigs Runners { get; }
+    /// Which plan backend this machine runs. Null — the ordinary case — means PLAN.md alone, exactly
+    /// as before the seam existed. Hand-edited in config.json; no window writes it, which is why
+    /// <see cref="OrchestratorConfig_Loader"/> never serialises the key back out.
+    /// </summary>
+    PlanBackendSettings? PlanBackend { get; }
 
     bool Is_TelegramConfigured();
 }
