@@ -18,7 +18,7 @@ public sealed class RecordingPlanBackend : IPlanBackend
 
     public List<(string OrchId, string RequestId, string LedgerRowRef)> Acknowledged { get; } = [];
 
-    public List<(string OrchId, string LedgerRowRef, PlanRowEvidence Evidence)> Closed { get; } = [];
+    public List<(string OrchId, string RequestId, string LedgerRowRef, PlanRowEvidence Evidence)> Closed { get; } = [];
 
     public List<(string OrchId, string Summary)> OrchestrationsClosed { get; } = [];
 
@@ -44,12 +44,12 @@ public sealed class RecordingPlanBackend : IPlanBackend
         Acknowledged.Add((orchId, requestId, ledgerRowRef));
     }
 
-    public void Report_RowClosed(string orchId, string ledgerRowRef, PlanRowEvidence evidence)
+    public void Report_RowClosed(string orchId, string requestId, string ledgerRowRef, PlanRowEvidence evidence)
     {
         if (ThrowOnReportClosed != null)
             throw ThrowOnReportClosed;
 
-        Closed.Add((orchId, ledgerRowRef, evidence));
+        Closed.Add((orchId, requestId, ledgerRowRef, evidence));
     }
 
     public void Report_OrchestrationClosed(string orchId, string summary)

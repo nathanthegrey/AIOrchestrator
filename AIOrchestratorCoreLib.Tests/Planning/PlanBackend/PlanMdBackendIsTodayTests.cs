@@ -9,6 +9,11 @@ namespace AIOrchestratorCoreLib.Tests.Planning.PlanBackend;
 /// THE DEFAULT BACKEND IS TODAY, UNCHANGED — the one property the whole seam is judged on. An
 /// installation that configures nothing must not gain a file, lose a file, or see one character of
 /// its PLAN.md move.
+///
+/// Production never even reaches the step with this backend — <see cref="PlanBackendSync_Decider"/>
+/// returns false for it first, which its own tests pin. This is the layer below that: even if the step
+/// IS reached, it does nothing. Both are asserted because they are two different ways for the claim to
+/// be false.
 /// </summary>
 public class PlanMdBackendIsTodayTests : IDisposable
 {

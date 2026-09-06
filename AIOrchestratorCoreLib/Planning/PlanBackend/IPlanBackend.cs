@@ -19,13 +19,15 @@ namespace AIOrchestratorCoreLib.Planning.PlanBackend;
 /// configures no backend behaves byte for byte as it did before this interface existed.
 /// </para>
 /// <para>
-/// IDEMPOTENCE IS DEFENDED ON BOTH SIDES. The app persists what it has already ingested and already
-/// reported (see <see cref="PlanBackend_StateStore"/>), so a restart, a re-read of the same ledger,
-/// or the same transition seen on two consecutive ticks produce ONE call — that is the defence at
-/// the point of effect (decision 21). An implementation must still be idempotent for a repeated
-/// <paramref name="requestId"/> or ledger row reference, because the app's state file is written
-/// AFTER the call and a process killed in between will retry: at-least-once is what the wire
-/// guarantees, exactly-once is what the two sides together deliver.
+/// IDEMPOTENCE IS DEFENDED ON BOTH SIDES, and the app's half is not symmetric. It persists what it
+/// has already ingested and already reported (<see cref="PlanBackendState_Store"/>), so a restart, a
+/// re-read of the same ledger, or the same transition seen on two consecutive passes produce ONE
+/// call. For a CLOSURE the record is written after the call, so a process killed in between retries
+/// it; for an ACKNOWLEDGEMENT the record is written before the call — a row in the owner's plan must
+/// never be duplicated — and the retry is explicit: a tracked request with no acknowledgement stamp
+/// is acknowledged again on the next pass. Either way an implementation must tolerate a repeated
+/// requestId or row reference: at-least-once is what the wire guarantees, exactly-once is what the
+/// two sides together deliver.
 /// </para>
 /// <para>
 /// IMPLEMENTATIONS LIVE OUTSIDE THIS REPOSITORY. One is loaded by name from config.json (see
@@ -57,8 +59,15 @@ public interface IPlanBackend
     /// That ledger line is now <c>[x]</c>. It is a REPORT, not a closure: "merged is not verified"
     /// holds across the boundary too, so an implementation submits the evidence for whoever decides
     /// upstream rather than closing the row itself.
+    ///
+    /// <para>
+    /// It carries the REQUEST ID as well as the row reference. The app is holding both at the call
+    /// site, and an upstream system addresses its own rows by id — leaving it to reverse-map a
+    /// free-text ledger line back to an issue key was the one thing in this contract an adapter could
+    /// not have worked around.
+    /// </para>
     /// </summary>
-    void Report_RowClosed(string orchId, string ledgerRowRef, PlanRowEvidence evidence);
+    void Report_RowClosed(string orchId, string requestId, string ledgerRowRef, PlanRowEvidence evidence);
 
     /// <summary>The orchestration is closed. Sent once, with a one-line reading of its final ledger.</summary>
     void Report_OrchestrationClosed(string orchId, string summary);

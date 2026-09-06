@@ -41,8 +41,8 @@ public static class LedgerTransition_Wording
     /// </summary>
     public static string Describe_Recap(string displayName, IPlanProgress progress)
     {
-        var delivered = progress.Lines
-            .Where(line => !line.IsSubTask && line.Marker == "x")
+        var delivered = PlanLedger_Lines.Top_Level(progress)
+            .Where(line => line.Marker == "x")
             .Select(line => $"{FINISHED_GLYPH} {line.Text}")
             .ToList();
 

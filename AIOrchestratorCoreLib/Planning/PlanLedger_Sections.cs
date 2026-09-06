@@ -66,6 +66,36 @@ public static class PlanLedger_Sections
         return false;
     }
 
+    /// <summary>
+    /// A named section's line range as [Start, End) — Start is the heading itself, End the next heading
+    /// of any level or the end of the file. (-1, -1) when the file has no such section.
+    ///
+    /// It lives here because the same traversal was being written a fourth time: the parser and the
+    /// shape validator each walk this structure, and a writer that has to find one section walks it
+    /// twice more. Heading structure is this class's subject; anyone asking "where does that section
+    /// start and stop" should be asking it rather than re-deriving the answer.
+    /// </summary>
+    public static (int Start, int End) Find_SectionRange(IReadOnlyList<string> lines, string headingPrefix)
+    {
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var title = Read_HeadingTitle_OrNull(lines[index]);
+
+            if (title == null || !title.StartsWith(headingPrefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            for (var end = index + 1; end < lines.Count; end++)
+            {
+                if (Read_HeadingTitle_OrNull(lines[end]) != null)
+                    return (index, end);
+            }
+
+            return (index, lines.Count);
+        }
+
+        return (-1, -1);
+    }
+
     /// <summary>Whether this line is a heading of any level — the thing that ENDS a section.</summary>
     public static bool Is_Heading(string line)
     {

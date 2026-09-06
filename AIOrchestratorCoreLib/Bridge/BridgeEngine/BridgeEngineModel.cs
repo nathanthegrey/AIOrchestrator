@@ -305,6 +305,22 @@ internal sealed class BridgeEngineModel(
     /// then did exactly what an unenforced protocol step gets done: the owner asked for six things
     /// over two hours and the bar read 3/3 throughout (2026-08-14).
     /// </summary>
+    /// <summary>
+    /// The plan backend in force, loaded from config.json and reloaded only when those settings change.
+    /// <see cref="PlanBackendSettings"/> is a value, so the comparison is value equality.
+    /// </summary>
+    IPlanBackend? _planBackend;
+    PlanBackendSettings? _planBackendSettings;
+    bool _planBackendLoaded;
+    DateTime _planBackendLastSyncUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// One plan-backend pass at a time. The pass runs OFF the tick thread (a backend is third-party
+    /// code that leaves the machine), and a second one starting while the first is still waiting on a
+    /// socket would put two writers on the same PLAN.md.
+    /// </summary>
+    int _planBackendPassRunning;
+
     readonly Dictionary<string, DateTime> _ledgerDebtSinceUtc = [];
     readonly HashSet<string> _ledgerBehindReportedOrchIds = [];
     readonly Dictionary<string, string> _reportedLedgerShapeByOrchId = [];
@@ -993,8 +1009,9 @@ internal sealed class BridgeEngineModel(
         // It reads what a plan backend says was approved upstream, writes those requests into PLAN.md,
         // and reports lines that have closed — none of which is Telegram traffic, and all of which
         // must keep working while the owner is not being disturbed and on machines with no bot token
-        // at all. With no backend configured (the default) it returns before touching a single file.
-        Sync_PlanBackends();
+        // at all. With no backend configured (the default) it returns without touching a file, and
+        // when there is one the pass runs off this thread so a slow adapter cannot stall the tick.
+        Start_PlanBackendPass();
 
         // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
         // in one catch-up burst (including supervisors' questions that waited for the owner).
@@ -5527,52 +5544,51 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Publishes each live orchestration's ledger reading for the supervisor's terminal status line.
-    /// Local files only — nothing here talks to Telegram, which is why it runs above the DND gate.
-    ///
-    /// WHAT TO DO lives in <see cref="Planning.ProgressArtefact_Decider"/>; this is left with doing
-    /// it. The engine is `internal sealed` with no `InternalsVisibleTo`, so a rule decided in here
-    /// cannot be reached by the suite at all — which is how three guards were once deleted at once
-    /// without reddening anything.
-    /// </summary>
-    /// <summary>
-    /// How often an external plan backend is asked what was approved upstream. NOT the tick rate: the
-    /// tick is 2 seconds and this call leaves the machine, so at tick rate a single orchestration
-    /// would put 1,800 requests an hour against somebody else's planning system. A request the owner
-    /// approved is not urgent to the minute; a ledger line that closed is reported on the same beat.
-    /// </summary>
-    const int PLAN_BACKEND_SYNC_SECONDS = 60;
-
-    IPlanBackend? _planBackend;
-    PlanBackendSettings? _planBackendSettings;
-    bool _planBackendLoaded;
-    DateTime _planBackendLastSyncUtc = DateTime.MinValue;
-
-    /// <summary>
     /// THE SEAM'S ONE CALL SITE — every orchestration's round trip with its plan backend, once a
-    /// minute. Everything it decides lives in <see cref="PlanBackend_Step"/>, which the suite can
-    /// reach; what stays here is the loop, the cadence and the log line.
+    /// minute. Everything it decides lives in <see cref="PlanBackend_Step"/> and
+    /// <see cref="PlanBackendSync_Decider"/>, which the suite can reach; what stays here is the loop
+    /// and the log line.
     ///
     /// <para>
-    /// THE DEFAULT PATH RETURNS BEFORE ANY I/O. <see cref="PlanMdBackend"/> is the null object — it
-    /// lists nothing and reports nothing — so calling the step for it would spend two file probes per
-    /// orchestration per minute to reach the same nothing. An installation that configures no backend
-    /// therefore behaves exactly as it did before this existed, which is the property the whole seam
-    /// is judged on.
+    /// IT DOES NOT RUN ON THE TICK. An adapter is code from outside this repository, called
+    /// synchronously and with no timeout it could be held to; on the mirror tick — whose own docstring
+    /// warns that one slow step "could spend ~15 s of waiting inside a 2 s loop, stalling the poll, the
+    /// mirror, the tailer, compaction and the status push behind it" — a single blocked HTTP call would
+    /// stall the owner's messages. So the tick STARTS the pass and returns; a pass already running is
+    /// simply not started again. Nothing here is ordered against the rest of the tick.
     /// </para>
     /// </summary>
-    void Sync_PlanBackends()
+    void Start_PlanBackendPass()
     {
         var backend = Resolve_PlanBackend();
 
-        if (backend is PlanMdBackend)
+        if (!PlanBackendSync_Decider.Should_Sync(backend, _planBackendLastSyncUtc, DateTime.UtcNow))
             return;
 
-        if ((DateTime.UtcNow - _planBackendLastSyncUtc).TotalSeconds < PLAN_BACKEND_SYNC_SECONDS)
+        if (Interlocked.CompareExchange(ref _planBackendPassRunning, 1, 0) != 0)
             return;
 
         _planBackendLastSyncUtc = DateTime.UtcNow;
 
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                Sync_PlanBackends(backend);
+            }
+            catch (Exception ex)
+            {
+                _log.Log_Error(GLOBAL_ORCH_ID, "Plan backend pass failed", ex);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _planBackendPassRunning, 0);
+            }
+        });
+    }
+
+    void Sync_PlanBackends(IPlanBackend backend)
+    {
         foreach (var session in _store.Load_All())
         {
             try
@@ -5590,7 +5606,7 @@ internal sealed class BridgeEngineModel(
                 {
                     _log.Log_Info(
                         session.OrchId,
-                        $"Plan backend: {outcome.RequestsIngested} request(s) ingested, {outcome.RowsReportedClosed} row(s) reported closed"
+                        $"Plan backend: {outcome.RequestsIngested} request(s) ingested, {outcome.RequestsAcknowledged} acknowledged, {outcome.RowsReportedClosed} row(s) reported closed"
                             + (outcome.OrchestrationClosedReported ? ", orchestration closure reported" : ""));
                 }
 
@@ -5600,7 +5616,7 @@ internal sealed class BridgeEngineModel(
             catch (Exception ex)
             {
                 // One orchestration's backend must not cost every other one its synchronisation —
-                // the same containment Refresh_ProgressArtefacts uses one method below.
+                // the same containment Refresh_ProgressArtefacts uses below.
                 _log.Log_Error(session.OrchId, "Plan backend sync failed", ex);
             }
         }
@@ -5610,14 +5626,14 @@ internal sealed class BridgeEngineModel(
     /// Reloaded only when the configured settings actually change — <see cref="PlanBackend_Loader"/>
     /// touches the filesystem and reflection, which is not a per-tick cost. A failed load is announced
     /// ONCE and then runs as PLAN.md alone: repeating a warning every minute for a path that will not
-    /// fix itself is the waterfall this app exists to prevent, and saying nothing at all would leave
-    /// the owner believing their planning system is connected.
+    /// fix itself is the waterfall this app exists to prevent, and saying nothing at all would leave the
+    /// owner believing their planning system is connected.
     /// </summary>
     IPlanBackend Resolve_PlanBackend()
     {
         var settings = _configProvider.Get_Current().PlanBackend;
 
-        if (_planBackendLoaded && Nullable.Equals(settings, _planBackendSettings))
+        if (!PlanBackendSync_Decider.Needs_Reload(_planBackendLoaded, _planBackendSettings, settings))
             return _planBackend!;
 
         var load = PlanBackend_Loader.Load(settings);
@@ -5635,27 +5651,27 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// WHAT THE APP CAN HONESTLY SAY about a line reaching [x]: the conversation entry that was live
-    /// when it saw the marker change. It is an observation, not a verification — see
-    /// <see cref="PlanRowEvidence"/> — and it is built LAZILY, only for a row actually being reported,
-    /// because parsing a channel on the chance that something closed is a read per orchestration per
-    /// minute for a message that is almost never sent.
+    /// The conversation entry live when a closed row was seen. Built LAZILY by the step — only for a
+    /// pass that actually has a row to report — because parsing a channel on the chance that something
+    /// closed is a read per orchestration per minute for a message that is almost never sent. The
+    /// FORMAT is <see cref="PlanRowEvidence_Builder"/>'s, where a test can reach it.
     /// </summary>
     PlanRowEvidence Build_LedgerClosureEvidence(string orchId)
     {
-        var entries = ChannelEntry_Parser.Parse_All(Read_FileText_Safe(_paths.Get_OwnerChannelFile(orchId)));
-
-        if (entries.Count == 0)
-            return new PlanRowEvidence(DateTime.UtcNow, null, null);
-
-        var last = entries[^1];
-
-        return new PlanRowEvidence(
-            DateTime.UtcNow,
-            $"owner-channel #{last.Index} FROM {last.Author}",
-            last.Subject);
+        return PlanRowEvidence_Builder.Build(
+            ChannelEntry_Parser.Parse_All(Read_FileText_Safe(_paths.Get_OwnerChannelFile(orchId))),
+            DateTime.UtcNow);
     }
 
+    /// <summary>
+    /// Publishes each live orchestration's ledger reading for the supervisor's terminal status line.
+    /// Local files only — nothing here talks to Telegram, which is why it runs above the DND gate.
+    ///
+    /// WHAT TO DO lives in <see cref="Planning.ProgressArtefact_Decider"/>; this is left with doing
+    /// it. The engine is `internal sealed` with no `InternalsVisibleTo`, so a rule decided in here
+    /// cannot be reached by the suite at all — which is how three guards were once deleted at once
+    /// without reddening anything.
+    /// </summary>
     void Refresh_ProgressArtefacts()
     {
         foreach (var session in _store.Load_All())

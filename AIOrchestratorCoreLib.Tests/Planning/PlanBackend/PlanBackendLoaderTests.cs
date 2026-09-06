@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Configuration;
 using AIOrchestratorCoreLib.Planning.PlanBackend;
 using Xunit;
 
@@ -29,14 +30,20 @@ public class PlanBackendLoaderTests
         Assert.Null(load.Error);
     }
 
-    /// <summary>A kind nobody recognises is not an error worth stopping for — it is not external.</summary>
+    /// <summary>
+    /// A TYPO IS NOT A DEFAULT. "externa1" used to read as the default and produce no error at all —
+    /// the owner edits config.json, restarts, and their planning system is simply not connected with
+    /// nothing anywhere saying why. That is the silent downgrade this loader's whole docstring exists
+    /// to forbid, reachable by one slipped character in a hand-edited file.
+    /// </summary>
     [Fact]
-    public void AnUnknownKindMeansPlanMdAlone()
+    public void AnUnrecognisedKindIsAnErrorRatherThanASilentDefault()
     {
-        var load = PlanBackend_Loader.Load(new PlanBackendSettings("something-else", null, null));
+        var load = PlanBackend_Loader.Load(new PlanBackendSettings("externa1", null, null));
 
         Assert.IsType<PlanMdBackend>(load.Backend);
-        Assert.Null(load.Error);
+        Assert.Contains("not recognised", load.Error);
+        Assert.Contains("running on PLAN.md alone", load.Error);
     }
 
     /// <summary>External with nothing to load: named, not guessed at.</summary>

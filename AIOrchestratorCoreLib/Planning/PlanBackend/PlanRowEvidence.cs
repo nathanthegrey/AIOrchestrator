@@ -11,7 +11,7 @@ namespace AIOrchestratorCoreLib.Planning.PlanBackend;
 /// same one the ledger itself makes: <c>[x]</c> means finished and evidenced, never reviewed.
 /// </para>
 /// </summary>
-/// <param name="ObservedUtc">When the app saw the transition — not when the work finished.</param>
+/// <param name="ObservedUtc">When the app BUILT this evidence, which is when it noticed — up to a pass later than the marker actually changed, and never when the work finished.</param>
 /// <param name="ChannelEntryRef">The conversation entry live at that moment, e.g. "owner-channel #84 FROM supervisor", or null when the channel could not be read.</param>
 /// <param name="Excerpt">That entry's subject line, shortened. Null when there is no entry.</param>
 public sealed record PlanRowEvidence(DateTime ObservedUtc, string? ChannelEntryRef, string? Excerpt);

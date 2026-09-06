@@ -1,11 +1,37 @@
+using AIOrchestratorCoreLib.Planning.PlanProgress;
+
 namespace AIOrchestratorCoreLib.Planning.PlanBackend;
 
+/// <summary>What writing one approved request into a plan did, or why it did nothing.</summary>
+public enum PlanRequestWriteOutcomes
+{
+    /// <summary>The plan gained a row, a ledger line, or both.</summary>
+    Written,
+
+    /// <summary>Everything this request needs was already in the plan — an earlier tick wrote it.</summary>
+    AlreadyPresent,
+
+    /// <summary>Nothing was written and nothing may be tracked. <c>Refusal</c> says why, in words.</summary>
+    Refused,
+}
+
 /// <summary>The plan as it reads after one approved request was written into it.</summary>
-/// <param name="PlanText">The whole file's new text. Equal to the input when nothing was written.</param>
-/// <param name="LedgerRowRef">The ledger line's text — the handle everything downstream uses.</param>
+/// <param name="Outcome">Written, already present, or refused.</param>
+/// <param name="PlanText">The whole file's new text. Equal to the input unless the outcome is Written.</param>
+/// <param name="LedgerRowRef">The ledger line's text — the handle everything downstream uses. Empty when refused.</param>
 /// <param name="OwnerRequestNumber">The row number given in the OWNER REQUESTS table, or 0 when no row was added.</param>
-/// <param name="Changed">False when the request was already in the plan and nothing needed writing.</param>
-public readonly record struct PlanRequestWrite(string PlanText, string LedgerRowRef, int OwnerRequestNumber, bool Changed);
+/// <param name="Refusal">Why nothing was written, when the outcome is Refused. Null otherwise.</param>
+public readonly record struct PlanRequestWrite(
+    PlanRequestWriteOutcomes Outcome,
+    string PlanText,
+    string LedgerRowRef,
+    int OwnerRequestNumber,
+    string? Refusal)
+{
+    public bool Changed => Outcome == PlanRequestWriteOutcomes.Written;
+
+    public bool Trackable => Outcome != PlanRequestWriteOutcomes.Refused;
+}
 
 /// <summary>
 /// Writes ONE approved upstream request into a PLAN.md, exactly where a supervisor would have written
@@ -16,15 +42,21 @@ public readonly record struct PlanRequestWrite(string PlanText, string LedgerRow
 /// own words, never renumbered — and it is deliberately invisible to <see cref="PlanLedger_Parser"/>,
 /// so writing one cannot move the progress bar. But a request that only ever exists as a table row can
 /// never be reported closed either: nothing about a prose "status" cell is machine-readable, and the
-/// one closure signal this codebase has is a ledger marker turning <c>x</c>. So the ledger line is
-/// what makes the round trip possible, and it is legitimate work in the denominator by construction —
+/// one closure signal this codebase has is a ledger marker turning <c>x</c>. So the ledger line is what
+/// makes the round trip possible, and it is legitimate work in the denominator by construction —
 /// decision 22's rule is that a ledger line must trace to an owner request, and this one traces to the
 /// row written beside it in the same breath.
 /// </para>
 /// <para>
 /// A PURE FUNCTION OVER THE FILE'S TEXT. It reads and returns strings and touches no disk, so every
 /// shape a hand-written plan can be in — no OWNER REQUESTS section, a section with no table, a table
-/// whose numbers skip, a plan that is nothing but a seed — is a test rather than a field report.
+/// whose numbers skip, CRLF, a plan that is nothing but a seed — is a test rather than a field report.
+/// </para>
+/// <para>
+/// IT REFUSES RATHER THAN GUESSES. A request whose title already names a line that is DONE or NOT
+/// DOING is not written: attaching to it would make the very next tick report that request closed,
+/// upstream, for work finished before the request existed. Refusing names the collision instead, which
+/// a person can act on.
 /// </para>
 /// <para>
 /// IT NEVER RENUMBERS AND NEVER DELETES. The next row number is one past the highest already there,
@@ -40,44 +72,131 @@ public static class PlanRequest_Writer
     public const string TABLE_SEPARATOR_ROW = "|---|---|---|---|";
 
     /// <summary>
-    /// The status a freshly-ingested request carries. It says what is TRUE FOR THE OWNER — the thing
-    /// is in the plan and nobody has started it — rather than anything about a branch, which is the
-    /// table's own rule. Whoever runs the orchestration edits it from here on.
+    /// How an ingested row names its upstream request — a DELIMITED token, matched whole.
+    ///
+    /// The first version matched the bare id anywhere in the row, which is a substring search against a
+    /// line containing a row number, a clock time and the owner's own words: an id of "42" matched the
+    /// timestamp "09:42". The row was then judged present and skipped while the ledger line was still
+    /// written — a line in the owner's denominator with no request to trace to, which is decision 22
+    /// inverted. CLOSED at both ends for the same reason one end was not enough: "(upstream:REQ-1)" is
+    /// otherwise a prefix of "(upstream:REQ-11)".
+    /// </summary>
+    public const string UPSTREAM_TOKEN_PREFIX = "(upstream:";
+
+    /// <summary>
+    /// The status a freshly-ingested request carries. It says what is TRUE FOR THE OWNER — the thing is
+    /// in the plan and nobody has started it — rather than anything about a branch, which is the table's
+    /// own rule. Whoever runs the orchestration edits it from here on, and
+    /// <see cref="Describe_ReportedStatus"/> replaces it when the line closes.
     /// </summary>
     public static string Describe_InitialStatus(string requestId)
     {
-        return $"approved upstream ({requestId}) — in the ledger, not started";
+        return $"approved upstream {Build_Token(requestId)} — in the ledger, not started";
+    }
+
+    /// <summary>
+    /// What the row says once its ledger line has closed and the backend has been told.
+    ///
+    /// The app writes this because the app wrote the row. Left at "not started" for ever, an ingested
+    /// row answers "nobody is on this" at every check-in the supervisor is required to run over the
+    /// whole table — so the app would be manufacturing permanent false alarms on the one artefact whose
+    /// purpose is catching neglected requests.
+    /// </summary>
+    public static string Describe_ReportedStatus(string requestId)
+    {
+        return $"done in the ledger, reported upstream {Build_Token(requestId)}";
+    }
+
+    public static string Build_Token(string requestId)
+    {
+        return $"{UPSTREAM_TOKEN_PREFIX}{Escape_Cell(requestId)})";
     }
 
     public static PlanRequestWrite Write_Request(string planText, ApprovedPlanRequest request, DateTime whenLocal)
     {
+        var source = planText ?? string.Empty;
         var ledgerRowRef = Flatten(request.Title);
 
         if (ledgerRowRef.Length == 0)
-            return new PlanRequestWrite(planText, ledgerRowRef, 0, Changed: false);
+            return Refuse(source, $"request '{request.RequestId}' has no title, so it cannot become a ledger line");
 
-        List<string> lines = [.. (planText ?? string.Empty).Split('\n')];
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+            return Refuse(source, "an approved request arrived with no id, so nothing could be tracked against it");
 
-        // ALREADY THERE means already written by an earlier tick whose state file never landed, or by
-        // a supervisor who typed the same line. Either way the request is in the plan and adding a
-        // second copy of it would be the one damage this class can do.
-        var alreadyInLedger = Has_LedgerLine(lines, ledgerRowRef);
+        var newline = Detect_Newline(source);
+        List<string> lines = Split_Lines(source);
+
+        // ALREADY THERE means an earlier tick wrote it and its state file never landed, or a supervisor
+        // typed the same line. Either way the request is in the plan and a second copy of it is the one
+        // damage this class can do. TOP-LEVEL ONLY, exactly as the closure check reads it: matching a
+        // SUB-task here would suppress the line while the reporter — which never looks at sub-tasks —
+        // waited for a closure that could not arrive.
+        var existing = Find_ExistingLine_OrNull(lines, ledgerRowRef);
+
+        if (existing is { Marker: "x" or "-" })
+        {
+            return Refuse(
+                source,
+                $"'{ledgerRowRef}' already exists in the ledger marked [{existing.Value.Marker}], so it would be reported closed for work that predates the request");
+        }
 
         var ownerRequestNumber = 0;
 
         if (!Has_OwnerRequestRow(lines, request.RequestId))
             ownerRequestNumber = Append_OwnerRequestRow(lines, request, whenLocal);
 
-        if (!alreadyInLedger)
+        var wroteLedgerLine = existing == null;
+
+        if (wroteLedgerLine)
             Insert_LedgerLine(lines, ledgerRowRef);
 
-        var changed = ownerRequestNumber > 0 || !alreadyInLedger;
+        var changed = ownerRequestNumber > 0 || wroteLedgerLine;
 
         return new PlanRequestWrite(
-            changed ? string.Join("\n", lines) : planText ?? string.Empty,
+            changed ? PlanRequestWriteOutcomes.Written : PlanRequestWriteOutcomes.AlreadyPresent,
+            changed ? string.Join(newline, lines) : source,
             ledgerRowRef,
             ownerRequestNumber,
-            changed);
+            null);
+    }
+
+    /// <summary>
+    /// Rewrites one ingested row's status cell. Returns the input unchanged when the row is not there —
+    /// a supervisor may have removed it, and re-adding it would be this class arguing with the person
+    /// who owns the file.
+    /// </summary>
+    public static (string PlanText, bool Changed) Set_RowStatus(string planText, string requestId, string status)
+    {
+        var source = planText ?? string.Empty;
+        var newline = Detect_Newline(source);
+
+        var lines = Split_Lines(source);
+
+        var (start, end) = PlanLedger_Sections.Find_SectionRange(lines, PlanLedger_Sections.OWNER_REQUESTS_HEADING_PREFIX);
+
+        if (start < 0)
+            return (source, false);
+
+        var token = Build_Token(requestId);
+
+        for (var index = start; index < end; index++)
+        {
+            if (!Is_TableRow(lines[index]) || !lines[index].Contains(token, StringComparison.Ordinal))
+                continue;
+
+            var cells = Read_Cells(lines[index]);
+
+            if (cells.Count < 4)
+                return (source, false);
+
+            cells[^1] = $" {status} ";
+
+            lines[index] = $"|{string.Join('|', cells)}|";
+
+            return (string.Join(newline, lines), true);
+        }
+
+        return (source, false);
     }
 
     /// <summary>
@@ -92,34 +211,56 @@ public static class PlanRequest_Writer
         return string.Join(' ', text.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
     }
 
+    static PlanRequestWrite Refuse(string planText, string refusal)
+    {
+        return new PlanRequestWrite(PlanRequestWriteOutcomes.Refused, planText, string.Empty, 0, refusal);
+    }
+
+    /// <summary>
+    /// The file's own line ending. Read once, and used once — every line is carried WITHOUT its
+    /// carriage return and the ending is put back by the final join, so no path can produce a file with
+    /// two kinds of line break in it. Splicing the return in by hand was that bug: a plan whose last
+    /// line was empty gained one LF-only blank line at the join.
+    /// </summary>
+    static string Detect_Newline(string text)
+    {
+        return text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+    }
+
+    static List<string> Split_Lines(string text)
+    {
+        return [.. text.Split('\n').Select(line => line.TrimEnd('\r'))];
+    }
+
     /// <summary>A pipe inside a cell ends the cell. Escaped, so the owner's own words survive the table.</summary>
     static string Escape_Cell(string text)
     {
         return Flatten(text).Replace("|", "\\|");
     }
 
-    static bool Has_LedgerLine(IReadOnlyList<string> lines, string ledgerRowRef)
+    static PlanLedgerLine? Find_ExistingLine_OrNull(IReadOnlyList<string> lines, string ledgerRowRef)
     {
         var progress = PlanLedger_Parser.Parse_OrNull(string.Join("\n", lines));
 
-        return progress != null && progress.Lines.Any(line => line.Text == ledgerRowRef);
+        return progress == null ? null : PlanLedger_Lines.Find_TopLevel_OrNull(progress, ledgerRowRef);
     }
 
     /// <summary>
-    /// Keyed on the REQUEST ID, which the status cell carries — the words can be edited by whoever
-    /// runs the orchestration (and are meant to be, as the status changes), so matching on them would
-    /// re-add a row the first time somebody touched it.
+    /// Keyed on the delimited upstream token this writer emits itself — never on the raw id, and never
+    /// on the words, which whoever runs the orchestration is expected to edit as the status changes.
     /// </summary>
     static bool Has_OwnerRequestRow(IReadOnlyList<string> lines, string requestId)
     {
-        var (start, end) = Find_OwnerRequestsSection(lines);
+        var (start, end) = PlanLedger_Sections.Find_SectionRange(lines, PlanLedger_Sections.OWNER_REQUESTS_HEADING_PREFIX);
 
         if (start < 0)
             return false;
 
+        var token = Build_Token(requestId);
+
         for (var index = start; index < end; index++)
         {
-            if (Is_TableRow(lines[index]) && lines[index].Contains(requestId, StringComparison.Ordinal))
+            if (Is_TableRow(lines[index]) && lines[index].Contains(token, StringComparison.Ordinal))
                 return true;
         }
 
@@ -129,7 +270,7 @@ public static class PlanRequest_Writer
     /// <summary>Returns the row number written, and appends the section itself when the plan has none.</summary>
     static int Append_OwnerRequestRow(List<string> lines, ApprovedPlanRequest request, DateTime whenLocal)
     {
-        var (start, end) = Find_OwnerRequestsSection(lines);
+        var (start, end) = PlanLedger_Sections.Find_SectionRange(lines, PlanLedger_Sections.OWNER_REQUESTS_HEADING_PREFIX);
 
         if (start < 0)
         {
@@ -174,16 +315,24 @@ public static class PlanRequest_Writer
         return number;
     }
 
+    /// <summary>
+    /// EVERY cell escaped, the id included. The id used to be interpolated raw into the status cell
+    /// while only the owner's words were escaped, so an id carrying a pipe wrote a five-cell row under a
+    /// four-column header.
+    /// </summary>
     static string Build_Row(int number, ApprovedPlanRequest request, DateTime whenLocal)
     {
         return $"| {number} | {whenLocal:HH:mm} | {Escape_Cell(request.Words)} | {Describe_InitialStatus(request.RequestId)} |";
     }
 
     /// <summary>
-    /// At the END OF THE LEDGER, which is the last line before the first non-ledger heading — not the
-    /// end of the file, where it would land inside PARKED or OWNER REQUESTS and be invisible to the
-    /// bar. That stranding is a defect <see cref="PlanShape_Validator"/> exists to complain about; a
-    /// writer that produced it would be filing complaints against itself.
+    /// At the end of the ledger — immediately above the first non-ledger heading, or at the end of the
+    /// file when there is none.
+    ///
+    /// SAID AS IT BEHAVES, not as it intends: in a plan whose PARKED section sits in the middle (the
+    /// shape <see cref="PlanShape_Validator"/> records from `ai-orchestrator-3`, heading at line 253 of
+    /// 550) the line lands there, above hundreds of later ledger lines. That is still inside the
+    /// ledger's own region and still counted; it is simply not the bottom of the file.
     /// </summary>
     static void Insert_LedgerLine(List<string> lines, string ledgerRowRef)
     {
@@ -208,39 +357,50 @@ public static class PlanRequest_Writer
         lines.Add(taskLine);
     }
 
-    /// <summary>The section's line range as [start, end) — start is the heading line, end the next heading or EOF.</summary>
-    static (int Start, int End) Find_OwnerRequestsSection(IReadOnlyList<string> lines)
-    {
-        for (var index = 0; index < lines.Count; index++)
-        {
-            var title = PlanLedger_Sections.Read_HeadingTitle_OrNull(lines[index]);
-
-            if (title == null || !title.StartsWith(PlanLedger_Sections.OWNER_REQUESTS_HEADING_PREFIX, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            for (var end = index + 1; end < lines.Count; end++)
-            {
-                if (PlanLedger_Sections.Read_HeadingTitle_OrNull(lines[end]) != null)
-                    return (index, end);
-            }
-
-            return (index, lines.Count);
-        }
-
-        return (-1, -1);
-    }
-
     static bool Is_TableRow(string line)
     {
         return line.TrimStart().StartsWith('|');
     }
 
+    /// <summary>The cells between the outer pipes, escaped pipes left alone.</summary>
+    static List<string> Read_Cells(string line)
+    {
+        var trimmed = line.TrimEnd('\r').Trim();
+        var inner = trimmed.Trim('|');
+
+        List<string> cells = [];
+        var current = new System.Text.StringBuilder();
+
+        for (var index = 0; index < inner.Length; index++)
+        {
+            if (inner[index] == '\\' && index + 1 < inner.Length && inner[index + 1] == '|')
+            {
+                current.Append("\\|");
+                index++;
+                continue;
+            }
+
+            if (inner[index] == '|')
+            {
+                cells.Add(current.ToString());
+                current.Clear();
+                continue;
+            }
+
+            current.Append(inner[index]);
+        }
+
+        cells.Add(current.ToString());
+
+        return cells;
+    }
+
     /// <summary>The leading cell as a number, or 0 — a hand-written "| — |" must not stop the count.</summary>
     static int Read_RowNumber(string line)
     {
-        var cells = line.Trim().Trim('|').Split('|');
+        var cells = Read_Cells(line);
 
-        return cells.Length > 0 && int.TryParse(cells[0].Trim(), out var number) ? number : 0;
+        return cells.Count > 0 && int.TryParse(cells[0].Trim(), out var number) ? number : 0;
     }
 
     static int Skip_TrailingBlankLines(IReadOnlyList<string> lines, int start, int end)

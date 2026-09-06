@@ -29,7 +29,7 @@ public sealed class PlanMdBackend : IPlanBackend
     {
     }
 
-    public void Report_RowClosed(string orchId, string ledgerRowRef, PlanRowEvidence evidence)
+    public void Report_RowClosed(string orchId, string requestId, string ledgerRowRef, PlanRowEvidence evidence)
     {
     }
 

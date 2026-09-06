@@ -130,6 +130,11 @@ public class PlanBackendRoundTripTests : IDisposable
 
         Assert.Equal(ORCH_ID, call.OrchId);
         Assert.Equal("add the export button", call.LedgerRowRef);
+
+        // THE REQUEST ID TRAVELS WITH IT. An upstream system addresses its own rows by id; leaving it
+        // to reverse-map a free-text ledger line back to an issue key is the one thing in this contract
+        // an adapter could not have worked around.
+        Assert.Equal("FIN-D-100", call.RequestId);
         Assert.Equal("owner-channel #12 FROM supervisor", call.Evidence.ChannelEntryRef);
     }
 
@@ -201,24 +206,179 @@ public class PlanBackendRoundTripTests : IDisposable
     }
 
     /// <summary>
-    /// PARKED IS NEVER SYNCHRONISED. A discovery nobody asked for is local by definition (decision 22),
-    /// so a parked item that happens to be marked done reaches no backend — and a plan whose parked
-    /// section grows produces no ingestion either.
+    /// PARKED IS NEVER SYNCHRONISED — pinned on a TRACKED line, which is the only way this assertion
+    /// means anything. Asserting that some unrelated parked item is not reported passes for a second
+    /// reason (it was never a request), so it would stay green with the parser's section handling
+    /// deleted. Here the line moved under PARKED is one the backend is genuinely waiting on: if the
+    /// parser stopped skipping the section, this goes red.
     /// </summary>
     [Fact]
-    public void AParkedItemIsNotAnUpstreamRow()
+    public void ATrackedLineMovedUnderParkedIsNotReportedClosed()
     {
         Sync();
 
-        File.WriteAllText(
-            _paths.Get_PlanFile(ORCH_ID),
-            Plan().Replace(
+        // The supervisor decides it is not the endeavour after all and parks it, marked done.
+        var parked = Plan()
+            .Replace("- [ ] add the export button\n", string.Empty)
+            .Replace(
                 "## PARKED — found, not asked for",
-                "## PARKED — found, not asked for\n\n- [x] the tailer's retry count is unbounded"));
+                "## PARKED — found, not asked for\n\n- [x] add the export button");
+
+        File.WriteAllText(_paths.Get_PlanFile(ORCH_ID), parked);
+
+        var outcome = Sync();
+
+        Assert.Equal(0, outcome.RowsReportedClosed);
+        Assert.Empty(_backend.Closed);
+    }
+
+    /// <summary>
+    /// AN ACKNOWLEDGEMENT THAT THREW IS RETRIED, and this is the affordance the first version built and
+    /// never used: the state file is written before the call, so a throw leaves a request that is in the
+    /// plan and unacknowledged for ever — the skip guard read "do I know this id", not "did the call
+    /// land". Upstream never learned the request had been taken on.
+    /// </summary>
+    [Fact]
+    public void AnAcknowledgementThatFailedIsRetriedOnTheNextTick()
+    {
+        _backend.ThrowOnAcknowledge = new InvalidOperationException("upstream unreachable");
+
+        var first = Sync();
+
+        Assert.Equal(2, first.RequestsIngested);
+        Assert.Equal(0, first.RequestsAcknowledged);
+        Assert.Contains("upstream unreachable", first.Failure);
+        Assert.Empty(_backend.Acknowledged);
+
+        _backend.ThrowOnAcknowledge = null;
+
+        var second = Sync();
+
+        Assert.Equal(0, second.RequestsIngested);
+        Assert.Equal(2, second.RequestsAcknowledged);
+        Assert.Equal(2, _backend.Acknowledged.Count);
+
+        // And not a third time.
+        Assert.Equal(0, Sync().RequestsAcknowledged);
+    }
+
+    /// <summary>
+    /// TWO REQUESTS, ONE TITLE. Both would be tracked against the same ledger line, so its single `[x]`
+    /// would report two deliveries upstream for one piece of work. The second is refused and named.
+    /// </summary>
+    [Fact]
+    public void ASecondRequestWithTheSameTitleIsRefusedRatherThanSharingALine()
+    {
+        _backend.Approved.Add(new ApprovedPlanRequest("FIN-D-102", "add the export button", "the same thing again"));
+
+        var outcome = Sync();
+
+        Assert.Equal(2, outcome.RequestsIngested);
+        Assert.Contains("same title as one already tracked", outcome.Failure);
+
+        Mark_Done("add the export button");
+
+        var closing = Sync();
+
+        Assert.Equal(1, closing.RowsReportedClosed);
+        Assert.Single(_backend.Closed);
+    }
+
+    /// <summary>
+    /// A request naming a line that is ALREADY DONE is refused — attaching to it would report that
+    /// request delivered, with evidence, for work finished before the request existed.
+    /// </summary>
+    [Fact]
+    public void ARequestNamingAnAlreadyFinishedLineIsRefusedAndNamed()
+    {
+        Sync();
+        Mark_Done("add the export button");
+        Sync();
+
+        _backend.Approved.Add(new ApprovedPlanRequest("FIN-D-103", "add the export button", "do it again"));
+
+        var outcome = Sync();
+
+        Assert.Equal(0, outcome.RequestsIngested);
+        Assert.Contains("already exists in the ledger marked [x]", outcome.Failure);
+        Assert.Single(_backend.Closed);
+    }
+
+    /// <summary>
+    /// The row's status is rewritten when its line closes. Left at "not started" it answers "nobody is
+    /// on this" at every check-in the supervisor runs over the whole table — the app manufacturing
+    /// permanent false alarms on the one artefact that exists to catch neglected requests.
+    /// </summary>
+    [Fact]
+    public void AClosedRowsTableStatusIsBroughtUpToDate()
+    {
+        Sync();
+        Mark_Done("add the export button");
+        Sync();
+
+        var rows = Plan().Split('\n').Where(line => line.StartsWith("| ")).ToList();
+
+        Assert.Contains(rows, row => row.Contains("I want an export button") && row.Contains("reported upstream"));
+        Assert.Contains(rows, row => row.Contains("the report page is slow") && row.Contains("not started"));
+    }
+
+    /// <summary>
+    /// THE APP'S OWN WRITE DOES NOT PAY THE SUPERVISOR'S LEDGER DEBT. `Is_LedgerBehind` is a pure mtime
+    /// comparison, so an ingestion looked exactly like the supervisor updating its ledger and deleted
+    /// the flag that blocks its turn end — the app paying a debt the session still owed, on the one
+    /// enforcement supervisor.md promises.
+    /// </summary>
+    [Fact]
+    public void AnIngestionDoesNotClearTheLedgerDebtFlag()
+    {
+        // A plan last written BEFORE the verdict is the debt: the supervisor answered an implementer
+        // and has not recorded it.
+        File.SetLastWriteTimeUtc(_paths.Get_PlanFile(ORCH_ID), DateTime.UtcNow.AddMinutes(-20));
+
+        var verdictUtc = DateTime.UtcNow.AddMinutes(-10);
+
+        Assert.True(AIOrchestratorCoreLib.Planning.LedgerHealth_Tracker.Is_LedgerBehind(_paths, ORCH_ID, verdictUtc));
 
         Sync();
 
-        Assert.DoesNotContain(_backend.Closed, call => call.LedgerRowRef.Contains("retry count"));
+        Assert.True(AIOrchestratorCoreLib.Planning.LedgerHealth_Tracker.Is_LedgerBehind(_paths, ORCH_ID, verdictUtc));
+
+        // The session itself writing the plan DOES pay it — otherwise the fix would be a permanent block.
+        File.WriteAllText(_paths.Get_PlanFile(ORCH_ID), Plan() + "\n- [ ] something the supervisor wrote\n");
+
+        Assert.False(AIOrchestratorCoreLib.Planning.LedgerHealth_Tracker.Is_LedgerBehind(_paths, ORCH_ID, verdictUtc));
+    }
+
+    /// <summary>
+    /// A PLAN THAT MOVED BETWEEN THE READ AND THE WRITE IS LEFT ALONE. The session that owns PLAN.md
+    /// edits it continuously and the app rewrites it whole: without this, a supervisor's save landing in
+    /// that window is silently discarded — its `[x]` marks lost and the bar going backwards.
+    ///
+    /// Pinned on the guard itself rather than through a sync, deliberately: no call leaves the process
+    /// between the read and the write, so there is no hook a test could use to land inside that window
+    /// — and a test that cannot reach the thing it names is worse than no test.
+    /// </summary>
+    [Fact]
+    public void APlanThatChangedUnderneathIsNotOverwritten()
+    {
+        var planFile = _paths.Get_PlanFile(ORCH_ID);
+        var stampAtRead = File.GetLastWriteTimeUtc(planFile);
+
+        var supervisorText = Plan() + "\n- [x] something the supervisor just finished\n";
+
+        File.WriteAllText(planFile, supervisorText);
+        File.SetLastWriteTimeUtc(planFile, stampAtRead.AddSeconds(1));
+
+        var refused = PlanFile_GuardedWriter.Write_IfUnchanged(planFile, stampAtRead, "the app's whole-file rewrite");
+
+        Assert.Null(refused);
+        Assert.Equal(supervisorText, File.ReadAllText(planFile));
+
+        // And it does write when nothing moved — otherwise the guard would be a permanent refusal.
+        var written = PlanFile_GuardedWriter.Write_IfUnchanged(planFile, File.GetLastWriteTimeUtc(planFile), "written");
+
+        Assert.NotNull(written);
+        Assert.Equal("written", File.ReadAllText(planFile));
     }
 
     /// <summary>

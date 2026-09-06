@@ -1,4 +1,5 @@
 using System.Reflection;
+using AIOrchestratorCoreLib.Configuration;
 
 namespace AIOrchestratorCoreLib.Planning.PlanBackend;
 
@@ -20,6 +21,12 @@ public readonly record struct PlanBackendLoad(IPlanBackend Backend, string? Erro
 /// which predicate failed.
 /// </para>
 /// <para>
+/// AN UNRECOGNISED KIND IS A FAILED LOAD, which the first version got wrong in the direction that
+/// matters: <c>"externa1"</c> is not <c>"external"</c>, so it read as the default and produced no error
+/// at all — the exact silent downgrade the paragraph above forbids, reachable by one typo in a
+/// hand-edited file. Only an ABSENT block means PLAN.md alone without comment.
+/// </para>
+/// <para>
 /// REFLECTION ONLY WHEN ASKED. The default kind never touches <see cref="Assembly"/>, so an
 /// installation that configures nothing carries no load, no probe, and no failure mode.
 /// </para>
@@ -28,10 +35,16 @@ public static class PlanBackend_Loader
 {
     public static PlanBackendLoad Load(PlanBackendSettings? settings)
     {
-        var resolved = settings ?? PlanBackendSettings.Default();
+        if (settings == null)
+            return new PlanBackendLoad(new PlanMdBackend(), null);
+
+        var resolved = settings.Value;
+
+        if (resolved.Is_PlanMd())
+            return new PlanBackendLoad(new PlanMdBackend(), null);
 
         if (!resolved.Is_External())
-            return new PlanBackendLoad(new PlanMdBackend(), null);
+            return Fallback($"planBackend.kind '{resolved.Kind}' is not recognised (expected '{PlanBackendSettings.KIND_PLAN_MD}' or '{PlanBackendSettings.KIND_EXTERNAL}')");
 
         if (string.IsNullOrWhiteSpace(resolved.AssemblyPath) || string.IsNullOrWhiteSpace(resolved.TypeName))
             return Fallback("planBackend.kind is 'external' but assembly and/or type are missing");
