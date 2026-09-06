@@ -122,8 +122,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         public bool FirstTurnSinceStart = true;
     }
 
-    /// <summary>One source, as it stands this tick: what it holds, how far it has been delivered, what is pending.</summary>
-    readonly record struct SourceRead(ITurnSource Source, IReadOnlyList<IChannelEntry> Entries, ITurnCursor Cursor, IReadOnlyList<IChannelEntry> Pending);
+    /// <summary>
+    /// One source and what of it is waiting, as of this tick. It carries the PENDING ENTRIES AND NOTHING
+    /// ELSE on purpose: an earlier shape also held the file's whole contents and the cursor it was read
+    /// against, and neither had a reader — a snapshot nobody consumes is how the next person reasons
+    /// from a stale copy of a file that has since been appended to. <see cref="Advance_Cursors"/> re-reads
+    /// deliberately, and this leaves it nothing to re-read from.
+    /// </summary>
+    readonly record struct SourceRead(ITurnSource Source, IReadOnlyList<IChannelEntry> Pending);
 
     public int InFlightCount
     {
@@ -345,7 +351,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             cursors.Add(cursor);
             Warn_IfEntriesWereArchivedUndelivered(state, source, cursor, entries);
 
-            reads.Add(new SourceRead(source, entries, cursor, PrintTurn_Trigger.Select_Pending(role, entries, cursor)));
+            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, entries, cursor)));
         }
 
         // A cursor whose source is gone (a closed member) is dropped with it — kept, it would be one
