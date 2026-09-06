@@ -57,8 +57,11 @@ public static class PendingDecisions_Report
     {
         var remaining = confirmation.ExpiresUtc - nowUtc;
 
+        // "tap again" was wrong for the same reason the expiry reply was: showing the code edits the
+        // question message, and that edit takes the keyboard down with it. There is nothing left to
+        // tap by the time this line can be printed.
         var window = remaining <= TimeSpan.Zero
-            ? "the code has EXPIRED — tap again"
+            ? "the code has EXPIRED — type your answer, or ask again for fresh options"
             : $"type the code within {Describe_Age(remaining)}";
 
         return $"🔐 [{confirmation.OrchId}] {First_Line(confirmation.QuestionText)} → '{First_Line(confirmation.OptionText)}' — {window}";

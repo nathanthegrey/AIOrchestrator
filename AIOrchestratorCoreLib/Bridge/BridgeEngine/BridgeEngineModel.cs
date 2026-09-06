@@ -8532,7 +8532,14 @@ internal sealed class BridgeEngineModel(
             // ONE AT A TIME PER ORCHESTRATION, and the newest wins. Two live codes in one topic
             // would make a typed four-digit message ambiguous, which is the one thing this flow
             // cannot afford to be.
-            _openQuestions.Remove(tap.MessageId ?? 0);
+            //
+            // `?? 0` used to stand where the null check does: it removed the entry keyed on message
+            // id ZERO, which is not this question and may be someone else's, while leaving this
+            // question open — a question that is both awaiting a code and still listed as
+            // unanswered, on the one flow where being in two states at once is least affordable.
+            if (tap.MessageId != null)
+                _openQuestions.Remove(tap.MessageId.Value);
+
             _pendingConfirmations[orchId] = confirmation;
         }
 
@@ -8631,7 +8638,12 @@ internal sealed class BridgeEngineModel(
                 return false;
 
             _log.Log_Warning(orchId, "A high-risk read-back code arrived after its window closed — the decision was NOT taken");
-            await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🔐 That code has expired and nothing was done. Tap the option again if you still want it.", cancellationToken);
+            // NOT "tap the option again". Showing the code EDITS the question message, and a plain
+            // edit sends no reply_markup — which Telegram reads as "remove the keyboard". So by the
+            // time this runs there is no button left to tap, and telling them to tap one is telling
+            // them to do something the app has already made impossible. Typing is the route that
+            // still exists, and it is the fallback every other refusal here points at.
+            await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🔐 That code has expired and nothing was done. Type your answer, or ask again for fresh options.", cancellationToken);
             return true;
         }
 
@@ -8877,8 +8889,20 @@ internal sealed class BridgeEngineModel(
         // much as it needs the default, or the deadline merely moves the stall somewhere quieter.
         var session = _store.Get_Session_OrNull(question.OrchId);
 
+        // AND IT IS TOLD IN ITS OWN TOPIC OR NOT AT ALL. Route_OwnerMessage_Async resolves the
+        // orchestration from the THREAD ID and treats a null one as the General topic — so an
+        // orchestration whose topic has been deleted (a close raced with a deadline) would have had
+        // its refusal delivered to the general supervisor, as if the owner had said it there. The
+        // app entry above is already written, so the orchestration still has the record; what is
+        // skipped here is only the owner-voiced delivery, and skipping it beats misdirecting it.
+        if (session?.TelegramTopicId == null)
+        {
+            _log.Log_Warning(question.OrchId, "The timed-out question's topic is gone — the outcome was written to the channel but not delivered as an owner message");
+            return;
+        }
+
         var syntheticMessage = TelegramOwnerMessage_Factory.Create(
-            0, null, 0, 0, session?.TelegramTopicId,
+            0, null, 0, 0, session.TelegramTopicId,
             appliedDefault
                 ? chosenOptionText ?? ""
                 : "No — the deadline passed with no answer from me. Treat this as a refusal and say what you need instead.",
