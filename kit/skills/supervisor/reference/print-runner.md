@@ -23,7 +23,11 @@ They are written there rather than twice here. Two copies of one rule are how th
 and this rule belongs to the trigger, which is the same for both — the file is named for the other
 transport, and that is the only thing about it that is.
 
-**One difference that IS this transport's: your FIRST turn is the boot.** The role command arrives on
-the command line and no prompt comes with it, so the traffic waiting for that turn is not quoted to
-you — read your channels yourself, which step 1 of the boot sequence already tells you to do. From the
-second turn on the prompt carries it.
+**One difference that IS this transport's: on your FIRST turn the traffic is not quoted to you.** The
+role command arrives on the command line and no prompt comes with it, so whatever was waiting for that
+turn you find by reading your channels — which step 1 of the boot sequence already tells you to do.
+From the second turn on the prompt carries it.
+
+(A stream session's first turn also opens with its role command alone — see `stream-runner.md` §7,
+the boot turn. The difference is what follows: there, pending traffic arrives as a second message on
+the same turn; here it does not arrive at all, and the files are the only place it is.)

@@ -221,6 +221,17 @@ internal sealed class BridgeEngineModel(
     ///
     /// Losing this dictionary on restart is safe by design: the parked FILE is the durable state,
     /// and a parked request with no live prompt is simply asked again.
+    ///
+    /// <para>
+    /// AND IT IS THEREFORE ABSENT FROM <c>.engine-state.json</c>, which is the half nobody had written
+    /// down. That file holds the FIVE maps <c>Persist_EngineState</c> names and this is a sixth; so
+    /// while a close, a member-close or a promotion is waiting on the owner's tap, the state file
+    /// legitimately reads <c>"pendingButtons": []</c> and its mtime does not move. On the VPS on
+    /// 2026-09-06 that was read as a lost save and cost an evening: the buttons were on the phone, the
+    /// file said nothing was pending, and both were correct. The tap on THAT keyboard also does not
+    /// survive the restart — <c>Try_HandleCloseConfirmationTap_Async</c> answers only payloads in this
+    /// dictionary — the sweep simply posts a fresh prompt, which is the one that works.
+    /// </para>
     /// </summary>
     readonly Dictionary<string, CloseConfirmation> _closeConfirmations = [];
 
@@ -3945,17 +3956,81 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                var session = request.IsBasic
+                // THE REQUEST WINS, THE CONFIG SETTLES THE SILENCE. A default is what decides when
+                // nothing was said; it never overrules a request that named its shape. Resolved here,
+                // at the moment of effect, rather than in the reader — config.json can change under a
+                // request that has been sitting in the folder, and the shape the owner gets should be
+                // the one their config says NOW.
+                var configuredDefaultIsBasic = _configProvider.Get_Current().Defaults.OrchestrationIsBasic;
+                var isBasic = request.IsBasic ?? configuredDefaultIsBasic;
+
+                var session = isBasic
                     ? _launcher.Start_BasicOrchestration(repo.Name, repo.Path)
                     : _launcher.Start_Orchestration(repo.Name, repo.Path);
 
-                var crew = request.IsBasic
+                // THE TASK IS FILED AFTER THE LAUNCH, NEVER BEFORE, and the order is the whole
+                // mechanism. A bridge-driven session baselines its channels at REGISTRATION
+                // (Running.SessionRunner.BridgeDrivenRunnerModel): anything already in owner-channel.md
+                // when the supervisor is registered is absorbed as HISTORY and starts no turn. Written
+                // here — after Start_Orchestration has returned, so after the registration — the task is
+                // traffic, and it is the first thing the new session is handed.
+                //
+                // FROM owner, because that is whose words these are. The app already appends the owner's
+                // Telegram messages to this file under that author (Append_OwnerEntry is the same call
+                // the inbound bridge makes), so the supervisor meets its first task in exactly the shape
+                // every later one arrives in, and nothing new had to be invented to carry it.
+                var taskFiled = !string.IsNullOrWhiteSpace(request.Task)
+                    && ChannelAppender.Append_OwnerEntry(_paths.Get_OwnerChannelFile(session.OrchId), request.Task!, DateTime.Now);
+
+                if (!string.IsNullOrWhiteSpace(request.Task) && !taskFiled)
+                {
+                    // SAID TO THE OWNER, not swallowed. The channel was held for the whole budget by
+                    // another writer — vanishingly unlikely on a channel created seconds ago, and if it
+                    // ever happens the orchestration is up with nothing to do, which is precisely the
+                    // state that looks like the app working and is not.
+                    _log.Log_Error(session.OrchId, $"The task that came with the start request could not be appended to '{session.OrchId}' owner channel — the orchestration is up but has not been told what to do", null);
+                    Append_GeneralAppEntry(AppEntryAudiences.Owner,
+                        $"orchestration '{session.OrchId}' started WITHOUT its task",
+                        $"Orchestration '{session.OrchId}' is up, but its owner channel was locked and the task could not be written into it. Tell it what you need in its own topic.");
+                }
+
+                if (taskFiled)
+                {
+                    // THE OWNER IS WAITING FOR AN ANSWER TO IT, and nothing else would ever say so.
+                    // The flag is raised when the owner types into a TOPIC; this task arrived through
+                    // the concierge instead, so without this line the crew's first reply is filtered
+                    // as narration (OwnerPush_Policy: a supervisor entry pushes only when it asks,
+                    // answers something asked, or reports being blocked). The orchestration would come
+                    // up, get a topic, do the work and tell the owner nothing — asked from the phone,
+                    // answered into a room the phone never rang for.
+                    lock (_ownerStateLock)
+                        _ownerAwaitingAnswer.Add(session.OrchId);
+
+                    // Persisted for the reason R1 gives about its own flag: an answer in flight across
+                    // a restart must not be silently downgraded to narration on the way back up.
+                    Persist_EngineState();
+                }
+
+                var crew = isBasic
                     ? "One solo session spawned — no supervisor, no implementers; you talk to it directly."
                     : "Supervisor and implementer imp-1 spawned;";
 
+                var task = taskFiled
+                    ? " Its task is already in its owner channel and it starts on it."
+                    : string.Empty;
+
+                // WHO CHOSE THE SHAPE, said in the entry the owner reads. It is the only place a
+                // mistyped defaults.orchestrationMode can become visible: the config layer has no log
+                // of its own, so a word neither 'basic' nor 'full' falls back silently there and would
+                // otherwise look like a key that reads right and never takes effect. Here the first
+                // orchestration after the edit says which shape was used and why.
+                var chose = request.IsBasic == null
+                    ? $" The request named no mode, so the configured default ({(configuredDefaultIsBasic ? OrchestrationModes.BASIC : OrchestrationModes.FULL)}) chose the shape."
+                    : string.Empty;
+
                 Append_GeneralAppEntry(AppEntryAudiences.Owner,
                     $"orchestration '{session.OrchId}' started",
-                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). {crew} its Telegram topic appears on its first channel entry.");
+                    $"Orchestration '{session.OrchId}' started on repo '{repo.Name}' ({repo.Path}). {crew} its Telegram topic appears on its first channel entry.{task}{chose}");
             }
             catch (Exception ex)
             {

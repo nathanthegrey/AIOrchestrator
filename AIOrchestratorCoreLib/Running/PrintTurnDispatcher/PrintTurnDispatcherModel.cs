@@ -304,7 +304,20 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         var ordered = PendingTraffic_Orderer.Order([.. reads.Select(read => (read.Source, read.Pending))]);
 
-        if (ordered.Count == 0)
+        // THE BOOT TURN — the one turn that runs with NOTHING pending, and the only exception to
+        // "an entry starts a turn".
+        //
+        // A bridge-driven session has no process until a turn runs, and no turn runs until an entry
+        // arrives. For a member that is right: nobody is waiting on it. For the session that owns an
+        // orchestration's OWNER channel it is a deadlock, because that session's greeting is what
+        // creates the orchestration's Telegram topic (Bridge.OwnerPush_Policy.Is_OnlineGreeting) — so
+        // the owner has nowhere to type, so no entry ever arrives, so the session never boots.
+        // Measured on the VPS on 2026-09-06: a full crew started from the phone at 22:01:08 had no
+        // topic until 22:07:30, and only because the task was appended to owner-channel.md by hand.
+        // Under the terminal runner the supervisor was spawned WITH its role command and greeted at
+        // once; the deadlock arrived with the bridge-driven runners, so it is closed where they made
+        // it rather than papered over in the kit.
+        if (ordered.Count == 0 && !Needs_BootTurn(state))
             return;
 
         var tracker = Get_Tracker(key);
@@ -330,6 +343,31 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return;
 
         Start_Turn(key, stateFile, state, ordered, sources, tracker, configs);
+    }
+
+    /// <summary>
+    /// Whether this session still owes the owner the greeting nothing else can produce.
+    ///
+    /// <para>
+    /// TWO ROLES, because exactly two write an orchestration's owner channel: the SUPERVISOR of a crew
+    /// and the SOLO of a basic orchestration (<see cref="TurnSource.TurnSources_Resolver.Resolve_Own"/>
+    /// maps both onto <c>owner-channel.md</c>). A member's greeting reaches nobody but its supervisor,
+    /// and booting every member on registration would buy two model turns each — one to greet, one for
+    /// the supervisor woken by the greeting — for something no owner is waiting on. The GENERAL
+    /// supervisor is excluded for a different reason: its topic is the supergroup's General, pinned by
+    /// the owner, so it is reachable before it has ever run.
+    /// </para>
+    /// <para>
+    /// ONCE, and "never completed a turn" is the whole test. An app restart re-registers every session
+    /// and finds <see cref="IPrintSessionState.ExecutedTurns"/> non-empty, so nothing is dispatched and
+    /// no second greeting is filed. A boot turn that FAILED leaves the list empty and is retried — under
+    /// <see cref="MAX_ATTEMPTS"/> and the retry backoff like any other turn, because a supervisor whose
+    /// one and only turn died is exactly the case where giving up is silent.
+    /// </para>
+    /// </summary>
+    static bool Needs_BootTurn(IPrintSessionState state)
+    {
+        return state.ExecutedTurns.Count == 0 && state.Role is SessionRoles.Supervisor or SessionRoles.Solo;
     }
 
     /// <summary>
@@ -687,7 +725,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             Append_TurnEnded(state, requestId, attempt, pending, result, outcome, null);
 
-            var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, pending[0].Entry.Index, pending[^1].Entry.Index, DateTime.UtcNow, outcome, result.TotalCostUsd);
+            // A BOOT TURN ANSWERED NO ENTRY. Zero is not an index any channel has — they are numbered
+            // from 1 — so the record reads as "none" rather than borrowing the first entry of a turn
+            // it never saw, and the range in the turn_ended entry stays honest.
+            var firstIndex = pending.Count == 0 ? 0 : pending[0].Entry.Index;
+            var lastIndex = pending.Count == 0 ? 0 : pending[^1].Entry.Index;
+
+            var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, firstIndex, lastIndex, DateTime.UtcNow, outcome, result.TotalCostUsd);
 
             PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, result.SessionId ?? sessionId, Advance_Cursors(state, sources, pending)));
             tracker.LastFailureAt = null;
@@ -932,6 +976,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     static string Describe_Traffic(IReadOnlyList<PendingEntry> pending)
     {
+        // SAID, not left as a bare "entries:". The empty set has one cause and it is worth reading in
+        // the log and in the turn_ended entry: this was the boot turn, run so the session could greet.
+        if (pending.Count == 0)
+            return "entries: none (boot turn)";
+
         List<string> parts = [];
 
         foreach (var group in pending.GroupBy(item => item.Source.Key, StringComparer.Ordinal))

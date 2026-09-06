@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
@@ -19,7 +20,8 @@ internal sealed class OrchestratorConfigModel(
     long? orchestrationTokenBudget,
     IRunnerConfigs runners,
     PlanBackendSettings? planBackend,
-    IGuardrailSettings guardrails) : IOrchestratorConfig
+    IGuardrailSettings guardrails,
+    IDefaultsSettings defaults) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -36,6 +38,7 @@ internal sealed class OrchestratorConfigModel(
     public IRunnerConfigs Runners { get; } = runners;
     public PlanBackendSettings? PlanBackend { get; } = planBackend;
     public IGuardrailSettings Guardrails { get; } = guardrails;
+    public IDefaultsSettings Defaults { get; } = defaults;
 
     public bool Is_TelegramConfigured()
     {

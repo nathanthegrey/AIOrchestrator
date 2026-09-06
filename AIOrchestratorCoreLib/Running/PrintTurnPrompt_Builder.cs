@@ -41,7 +41,9 @@ public static class PrintTurnPrompt_Builder
 
         var multiSource = sources.Count > 1;
 
-        if (multiSource)
+        if (pending.Count == 0)
+            prompt.Append(BOOT_TURN).Append('\n');
+        else if (multiSource)
             Append_MultiSourceTraffic(prompt, pending);
         else
             Append_SingleSourceTraffic(prompt, pending);
@@ -50,6 +52,21 @@ public static class PrintTurnPrompt_Builder
 
         return prompt.ToString();
     }
+
+    /// <summary>
+    /// THE PROMPT OF A TURN NOBODY TRIGGERED. The dispatcher runs exactly one of these per session that
+    /// owns an orchestration's owner channel, so it can greet before the owner has a topic to type into
+    /// (<see cref="PrintTurnDispatcher.PrintTurnDispatcherModel"/> explains why that deadlock exists).
+    ///
+    /// <para>
+    /// A stream session that boots on this turn never sees this line — its role command IS its whole
+    /// first message and the executor stops there. It is reached by the two paths where the role command
+    /// is not enough on its own: a stream process that is already alive (a boot turn retried after a
+    /// failure), and the print fallback, whose positional role command has to be answered by SOMETHING on
+    /// stdin. Saying "0 entries" there is how a session comes to file an entry about nothing.
+    /// </para>
+    /// </summary>
+    public const string BOOT_TURN = "Nothing has been said to you yet — this is your boot turn. Follow the boot sequence of your role command: read your channels, then file your greeting.";
 
     const string SINGLE_SOURCE_CONTRACT =
         "Act on it per your role command. Your final message IS your channel entry — the bridge appends it under your author word with the header, the index and the time: first line the subject, then a blank line, then the body. A question ends the turn exactly as an answer does.\n";
