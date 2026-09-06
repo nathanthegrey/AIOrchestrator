@@ -50,6 +50,12 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         // Nothing is held between turns: that is what "print" means.
     }
 
+    public bool Consume_RunnerChange(string orchId, string memberId)
+    {
+        // The bottom rung: there is nothing below to change to.
+        return false;
+    }
+
     public Task Stop_Async()
     {
         return Task.CompletedTask;

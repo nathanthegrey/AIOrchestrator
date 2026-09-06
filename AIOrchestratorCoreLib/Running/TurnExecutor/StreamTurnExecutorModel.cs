@@ -49,6 +49,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
     readonly Dictionary<string, StreamSessionProcess> _processes = [];
     readonly Dictionary<string, int> _structuralFailures = [];
     readonly HashSet<string> _fellBack = [];
+    readonly HashSet<string> _fallbackNotices = [];
     readonly Dictionary<string, string> _lastRateLimitJson = [];
 
     public SessionRunners Kind => SessionRunners.Stream;
@@ -134,6 +135,12 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         }
 
         process.Dispose();
+    }
+
+    public bool Consume_RunnerChange(string orchId, string memberId)
+    {
+        lock (_lock)
+            return _fallbackNotices.Remove(Build_Key(orchId, memberId));
     }
 
     public async Task Stop_Async()
@@ -252,7 +259,10 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         var next = RunnerFallback_Ladder.Next_Implemented_OrNull(SessionRunners.Stream);
 
         lock (_lock)
+        {
             _fellBack.Add(key);
+            _fallbackNotices.Add(key);
+        }
 
         if (next == null || _fallback == null)
         {

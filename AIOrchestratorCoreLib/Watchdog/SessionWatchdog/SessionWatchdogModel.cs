@@ -152,6 +152,14 @@ internal sealed class SessionWatchdogModel(
 
     void Check_OrchestrationSupervisor(Sessions.OrchestrationSession.IOrchestrationSession session)
     {
+        // A BRIDGE-DRIVEN supervisor has no pid file BY DESIGN — the same exemption the general
+        // supervisor and the members have had since the print runner landed, and it was missing here
+        // for the honest reason that a supervisor could not be bridge-driven until the stream runner
+        // existed. Without it a perfectly healthy stream supervisor is "respawned" every tick past
+        // the 90 s grace, which also drives the crash-loop counter into an alert on the owner's phone.
+        if (Is_PrintRun(SessionRoles.Supervisor, session.OrchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID))
+            return;
+
         if (Is_WithinSpawnGrace(session.SupervisorSpawnedUtc))
             return;
 

@@ -196,6 +196,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             if (session.ClosedUtc != null)
                 continue;
 
+            // THE SUPERVISOR IS NOT IN THE MEMBER ROSTER — it is the orchestration itself — so a
+            // loop over Members alone finds every implementer and never the one role the stream
+            // runner exists for. Its registration lives under a role-prefixed name beside
+            // session.json (PrintSessionState_Store knows where); found here or found nowhere.
+            var supervisorFile = PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.Supervisor, session.OrchId, SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID);
+
+            if (File.Exists(supervisorFile))
+                found.Add((supervisorFile, SessionRoles.Supervisor, session.OrchId, SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID));
+
             foreach (var member in session.Members)
             {
                 if (member.ClosedUtc != null)
@@ -462,7 +471,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             if (!Append_SessionEntry_WithRetry(state, subject, body))
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
-                Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, "entry not appended (channel locked)");
+                Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
                 return;
             }
 
@@ -476,14 +485,25 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return;
         }
 
-        Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, null);
+        Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, null);
     }
 
-    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<IChannelEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, string? note)
+    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<IChannelEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note)
     {
         var outcome = note == null ? TurnOutcomes.Describe(result) : TurnOutcomes.ERROR;
 
         Append_TurnEnded(state, requestId, attempt, pending, result, outcome, note);
+
+        // THE ATTEMPTS BELONGED TO THE TRANSPORT THAT BROKE. A session that has just walked down the
+        // fallback ladder starts its counter again, or the two counters coincide — three deaths and
+        // three attempts — and it stalls on the rung it stepped off having never tried the one
+        // below. Reported as attempt 1 of the new runner, because that is what it is.
+        if (executor.Consume_RunnerChange(state.OrchId, state.MemberId))
+        {
+            _log.Log_Warning(state.OrchId, $"'{state.MemberId}' changed runner after {attempt} failed attempt(s) — the attempt counter starts again on the new one");
+            state = PrintSessionState_Factory.CreateFrom_Existing_AttemptsReset(state);
+            tracker.StalledAtIndex = -1;
+        }
 
         var failed = PrintSessionState_Factory.CreateFrom_Existing_AttemptFailed(state);
         PrintSessionState_Store.Write(stateFile, failed);

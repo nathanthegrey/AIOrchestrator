@@ -160,6 +160,10 @@ public sealed class PrintRunnerTestHarness : IDisposable
         if (Store.Get_Session_OrNull(orchId) == null)
             Store.Create_Orchestration(orchId, "Repo", RepoPath);
 
+        // The stamp is what makes the orchestration a CREW rather than a basic one, and the launcher
+        // writes it for every supervisor whether it spawns a window or registers a state file.
+        Store.Set_SupervisorPid(orchId, null);
+
         Create_Runner(runner).Start(
             SessionLaunch_Factory.Create(SessionRoles.Supervisor, orchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, RepoPath, "haiku", Paths.Get_SupervisorPidFile(orchId), null));
 
@@ -177,6 +181,20 @@ public sealed class PrintRunnerTestHarness : IDisposable
     ISessionRunner Create_Runner(SessionRunners runner)
     {
         return runner == SessionRunners.Stream ? SessionRunner_Factory.Create_Stream(Paths, Log) : SessionRunner_Factory.Create_Print(Paths, Log);
+    }
+
+    /// <summary>
+    /// Pushes the supervisor's spawn stamp into the past, so the watchdog's 90 s grace is over. The
+    /// store has no setter for it (nothing in the app needs one), and a test that waited it out for
+    /// real would take a minute and a half.
+    /// </summary>
+    public void Age_SupervisorSpawn(string orchId, TimeSpan by)
+    {
+        var file = Paths.Get_SessionFile(orchId);
+        var root = (JsonObject)JsonNode.Parse(File.ReadAllText(file))!;
+
+        root["supervisorSpawnedUtc"] = DateTime.UtcNow.Subtract(by).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        File.WriteAllText(file, root.ToJsonString());
     }
 
     public void Write_Scenario(string json)

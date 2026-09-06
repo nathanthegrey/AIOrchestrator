@@ -47,6 +47,15 @@ public interface ITurnExecutor
     /// </summary>
     void Release(string orchId, string memberId);
 
+    /// <summary>
+    /// Whether this session has just CHANGED TRANSPORT — walked down the fallback ladder — and
+    /// clears the notice. The attempts spent proving the old transport broken are not evidence
+    /// against the new one, so the dispatcher starts its counter again: without this the two
+    /// counters coincide (three deaths, three attempts) and the session stalls on the rung it just
+    /// stepped off, having never once tried the one below.
+    /// </summary>
+    bool Consume_RunnerChange(string orchId, string memberId);
+
     /// <summary>Ends every resident process. The app is exiting; a stream left running would outlive it.</summary>
     Task Stop_Async();
 }

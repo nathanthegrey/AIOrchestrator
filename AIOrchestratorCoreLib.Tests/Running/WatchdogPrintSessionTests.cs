@@ -6,7 +6,7 @@ using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Running;
 
-/// <summary>A print-run session has no pid file by design; the watchdog must not read that as death.</summary>
+/// <summary>A bridge-driven session has no pid file by design; the watchdog must not read that as death.</summary>
 public class WatchdogPrintSessionTests
 {
     sealed class RecordingLauncher : IOrchestrationLauncher
@@ -45,5 +45,33 @@ public class WatchdogPrintSessionTests
         Assert.DoesNotContain($"imp:{orchId}/{printMember}", launcher.Calls);
         Assert.DoesNotContain("general", launcher.Calls);
         Assert.Contains(launcher.Calls, call => call.StartsWith("sup:") || call == $"imp:{orchId}/{terminalMember}");
+    }
+
+    [Fact]
+    public void AStreamSupervisor_HasARealProcessButStillNoPidFILE_SoItIsExemptToo()
+    {
+        // The exemption is asked of the RUNNER, not of the word "print": a stream session's process
+        // belongs to the bridge and writes no pid file, so a watchdog reading the file would respawn
+        // a session that is running perfectly.
+        using var harness = new PrintRunnerTestHarness("supervisor:stream");
+        var orchId = "repo-1";
+        harness.Register_Supervisor(orchId);
+
+        var launcher = new RecordingLauncher();
+        var watchdog = SessionWatchdog_Factory.Create(harness.Paths, harness.ConfigProvider, harness.Store, launcher, harness.Log);
+
+        harness.Age_SupervisorSpawn(orchId, TimeSpan.FromMinutes(10));
+        watchdog.Check_AndRestart_DeadSessions();
+
+        Assert.DoesNotContain($"sup:{orchId}", launcher.Calls);
+
+        // THE CONTROL, because "no respawn" has two routes to it and only one of them is the rule
+        // under test: flip the role back to terminal and the same missing pid file must produce the
+        // respawn. Without this the assertion above would pass just as well if the watchdog never
+        // looked at supervisors at all.
+        harness.Write_Config("supervisor");
+        watchdog.Check_AndRestart_DeadSessions();
+
+        Assert.Contains($"sup:{orchId}", launcher.Calls);
     }
 }
