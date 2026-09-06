@@ -633,6 +633,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// A SESSION WITH ONE CHANNEL IS NOT SPLIT. It was never told the format, and a report that happened
     /// to contain a line beginning "to:" would be cut in half by a rule written for somebody else.
     /// </para>
+    /// <para>
+    /// A PARTIAL WRITE COSTS A DUPLICATE, AND THAT IS THE CHOICE. If one of several blocks cannot be
+    /// appended — its channel held by another writer for the whole budget — the turn is reported failed
+    /// and retried, so the blocks that DID land are written a second time. The alternative is to accept
+    /// the partial write, which loses the block that failed with nobody told. A duplicated entry is
+    /// visible in a file a human reads; a missing verdict is not, and the session that was waiting for it
+    /// waits for ever. Same rule as everywhere else here: fail towards the visible side.
+    /// </para>
     /// </summary>
     bool Write_Reply(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string resultText)
     {
