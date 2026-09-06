@@ -272,46 +272,6 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
     }
 
-    public async Task<long?> Send_MessageWithReplyKeyboard_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<string>> keyboardRows, CancellationToken cancellationToken)
-    {
-        var rows = new JsonArray();
-
-        foreach (var row in keyboardRows)
-        {
-            var buttons = new JsonArray();
-
-            foreach (var label in row)
-                buttons.Add(new JsonObject { ["text"] = label });
-
-            rows.Add(buttons);
-        }
-
-        var payload = new JsonObject
-        {
-            ["chat_id"] = _supergroupChatId,
-            ["text"] = text,
-            ["reply_markup"] = new JsonObject
-            {
-                ["keyboard"] = rows,
-                // is_persistent keeps the bar up instead of collapsing it behind the little keyboard
-                // icon after one use, which is the whole point of asking for a PERMANENT bar.
-                ["is_persistent"] = true,
-                // Without this the bar renders at full standard-keyboard height — four buttons in a
-                // half-screen slab, sitting on top of the conversation the owner is reading.
-                ["resize_keyboard"] = true,
-                ["selective"] = false,
-            },
-        };
-
-        if (messageThreadId != null)
-            payload["message_thread_id"] = messageThreadId.Value;
-
-        // The id comes back so the PREVIOUS installer message can be deleted on the next startup:
-        // the keyboard is chat-level state that outlives its carrier message, but the carrier itself
-        // is a message like any other and would otherwise pile up one per app launch.
-        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
-    }
-
     public async Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
     {
         var payload = new JsonObject

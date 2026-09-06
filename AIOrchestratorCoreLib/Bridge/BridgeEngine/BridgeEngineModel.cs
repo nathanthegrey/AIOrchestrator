@@ -5271,7 +5271,6 @@ internal sealed class BridgeEngineModel(
         var backoffMilliseconds = INBOUND_ERROR_BACKOFF_START_MILLISECONDS;
 
         await Register_BotCommands_BestEffort_Async(client, cancellationToken);
-        await Install_CommandKeyboard_BestEffort_Async(client, cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -5522,67 +5521,6 @@ internal sealed class BridgeEngineModel(
 
                 backoffMilliseconds = Math.Min(backoffMilliseconds * 2, INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS);
             }
-        }
-    }
-
-    /// <summary>
-    /// Registers the chat's ☰ command menu — two taps beat typing the check-in ritual.
-    ///
-    /// The OCE filter below is load-bearing, unlike the ~30 other rethrow sites: this is the only
-    /// helper awaited OUTSIDE the inbound loop's while, so its exception does not land in a guarded
-    /// catch — it escapes Run_InboundLoop_Async before the loop ever starts. An unfiltered rethrow
-    /// therefore let a wedged endpoint stop the poller from EXISTING (90 s HttpClient timeout →
-    /// TaskCanceledException → rethrown → loop never entered), which is the same outage this
-    /// change exists to prevent, arriving by a different door. A menu that failed to register is
-    /// worth a warning, never the owner's phone line.
-    /// </summary>
-    /// <summary>
-    /// The text of the message that carries the keyboard. It is deleted immediately, so this is only
-    /// ever seen if the delete fails.
-    /// </summary>
-    const string COMMAND_KEYBOARD_CARRIER_TEXT = "⌨️ shortcuts ready";
-
-    /// <summary>
-    /// Installs the owner's standing command bar above their input box — the second of the two homes
-    /// they asked for on 2026-08-24 ("both"), the other being the buttons on each topic's status line.
-    ///
-    /// IT IS A REPLY KEYBOARD, NOT AN INLINE ONE, and the difference is the whole design. A reply
-    /// button sends its own TEXT, so a tap on /show reaches the bridge indistinguishable from the
-    /// owner typing it, in whatever topic they are sitting in — which is why ONE chat-wide bar serves
-    /// every topic and needs no handler, no callback data and no per-topic minting. An inline keyboard
-    /// could do none of that, and cannot sit above the input box at all.
-    ///
-    /// THE CARRIER MESSAGE IS DELETED. The keyboard is CHAT-level state that outlives the message that
-    /// delivered it, so that message has done its entire job the moment Telegram has accepted it;
-    /// keeping it would leave one "shortcuts ready" line in General per app launch, for ever.
-    ///
-    /// NEEDS LIVE VERIFICATION ON THE OWNER'S PHONE: that the bar appears at all, and that it survives
-    /// its carrier being deleted. Both are Bot API behaviour this repo has never exercised before.
-    /// </summary>
-    async Task Install_CommandKeyboard_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var messageId = await client.Send_MessageWithReplyKeyboard_Async(
-                null,
-                COMMAND_KEYBOARD_CARRIER_TEXT,
-                Telegram.TopicCommandButtons.Build_ReplyKeyboardRows(),
-                cancellationToken);
-
-            if (messageId != null)
-                await client.Delete_Message_Async(messageId.Value, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Filtered for the same reason the command menu beside it is: this runs OUTSIDE the poll
-            // loop's guarded catch, so an unfiltered rethrow here takes the inbound loop down with it.
-            throw;
-        }
-        catch (Exception exception)
-        {
-            // Best-effort, like the command menu: a missing shortcut bar costs the owner a few taps,
-            // and must never be the reason their phone stops receiving anything at all.
-            _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not install the command keyboard: {exception.Message}");
         }
     }
 

@@ -125,61 +125,6 @@ public class TopicCommandButtonsTests
     }
 
     // ---------------------------------------------------------------------------------------
-    // The reply keyboard
-    // ---------------------------------------------------------------------------------------
-
-    /// <summary>
-    /// Telegram sends a reply button's TEXT verbatim as an ordinary message, so these strings are
-    /// not labels — they are the messages the app's command lexer will have to recognise. An emoji
-    /// or a stray space here arrives as part of the message and the command is not recognised.
-    /// </summary>
-    [Fact]
-    public void TheReplyKeyboard_IsExactlyTheSlashCommands_TwoPerRow()
-    {
-        var rows = TopicCommandButtons.Build_ReplyKeyboardRows();
-
-        Assert.Equal(3, rows.Count);
-        Assert.Equal(new[] { "/screen", "/show" }, rows[0]);
-        Assert.Equal(new[] { "/merge", "/test" }, rows[1]);
-
-        // An odd count leaves a short last row rather than padding it — a blank button would be a
-        // tap target that does nothing.
-        Assert.Equal(new[] { "/refresh" }, rows[2]);
-    }
-
-    /// <summary>
-    /// Nothing decorative: whatever is in the string lands in the chat as the owner's own message.
-    /// </summary>
-    [Fact]
-    public void NoReplyKeyboardButton_CarriesDecoration()
-    {
-        foreach (var text in TopicCommandButtons.Build_ReplyKeyboardRows().SelectMany(row => row))
-        {
-            Assert.StartsWith("/", text, StringComparison.Ordinal);
-            Assert.Equal(text.Trim(), text);
-            Assert.All(text, character => Assert.True(character < 128, $"non-ASCII in a reply button: '{text}'"));
-        }
-    }
-
-    /// <summary>
-    /// The two renderings are the whole reason this class exists: they must offer the SAME four
-    /// commands, in the same order. A fifth command added to one and not the other is the drift the
-    /// single source of truth is here to make impossible.
-    /// </summary>
-    [Fact]
-    public void TheTwoRenderings_OfferTheSameCommandsInTheSameOrder()
-    {
-        var inline = TopicCommandButtons.Build_ForTopic(4242L)
-            .Select(button => TopicCommandButtons.Parse_OrNull(button.Data)!.Value.Command);
-
-        var reply = TopicCommandButtons.Build_ReplyKeyboardRows()
-            .SelectMany(row => row)
-            .Select(text => text[1..]);
-
-        Assert.Equal(inline, reply);
-    }
-
-    // ---------------------------------------------------------------------------------------
     // Everything that is not ours
     // ---------------------------------------------------------------------------------------
 

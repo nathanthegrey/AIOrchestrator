@@ -66,19 +66,6 @@ public interface ITelegramApiClient
     /// <summary>The same send, with the buttons laid out in ROWS — see the row-aware edit above.</summary>
     Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken);
 
-    /// <summary>
-    /// sendMessage carrying a persistent REPLY keyboard — the bar of buttons that sits above the
-    /// owner's input box, which is a different thing from the inline keyboard above: an inline
-    /// button sends a callback_query, a reply-keyboard button sends its own TEXT as an ordinary
-    /// message. That is why the labels must be the literal slash commands — the tap arrives at the
-    /// bridge indistinguishable from the owner typing them, and needs no handler of its own.
-    ///
-    /// The keyboard is CHAT-level state, not message-level: it survives its carrier message and
-    /// stays up until something replaces it. Returns the carrier's message id so the previous one
-    /// can be cleaned up.
-    /// </summary>
-    Task<long?> Send_MessageWithReplyKeyboard_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<string>> keyboardRows, CancellationToken cancellationToken);
-
     /// <summary>Answers a button tap (stops the phone-side spinner); text shows as a small toast.</summary>
     Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken);
 

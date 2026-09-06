@@ -458,11 +458,6 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
         return Send_MessageWithButtons_Async(messageThreadId, text, [.. buttonRows.SelectMany(row => row)], cancellationToken);
     }
 
-    public Task<long?> Send_MessageWithReplyKeyboard_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<string>> keyboardRows, CancellationToken cancellationToken)
-    {
-        return Task.FromResult(Record(text));
-    }
-
     public async Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken)
     {
         string? queued;
