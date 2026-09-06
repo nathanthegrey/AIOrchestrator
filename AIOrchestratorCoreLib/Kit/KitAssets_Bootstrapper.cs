@@ -1,103 +1,159 @@
+using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Kit.PluginGate;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
 namespace AIOrchestratorCoreLib.Kit;
 
 /// <summary>
-/// Launching a host must be enough: every role command in the shipped kit, plus the status line
-/// script and the hooks, self-install/refresh from the host's output folder — no install script
-/// prerequisite for them. This is THE delivery path: editing kit/commands in the repo changes
-/// nothing until a rebuild refreshes that output folder. Moved here from the WPF App so the
-/// daemon runs the identical sequence rather than a second copy of it.
+/// WHAT A HOST DOES ABOUT THE KIT AT STARTUP. It used to COPY it — six role protocols, a helper and
+/// seven hooks, into ~/.claude, at every single start. It now CHECKS it, because the kit is a plugin
+/// with a version on it and checking a version is a comparison where copying was an investigation
+/// (decisions 17, 18, 23).
 ///
-/// Never throws: a failed self-install is logged and the host starts anyway — the file protocol
-/// works without the kit, and a bridge that will not start is worse than stale commands.
+/// Four steps, in this order, and the order matters:
+///
+///   1. un-wire the hooks the old builds put in ~/.claude/settings.json — they now live in the role
+///      frontmatter, and leaving both would fire the ledger check twice for a supervisor and once
+///      for every unrelated session on the machine
+///   2. remove the role protocols the old builds copied into ~/.claude/commands — MEASURED: a local
+///      command of the same name WINS the slash word over a plugin skill, so a leftover file means
+///      sessions read the old text while the version number says otherwise
+///   3. install the status line, which is not a plugin component and still needs a script on disk
+///   4. verify what is installed, record the verdict, and tell the owner ONCE if it is bad
+///
+/// Never throws. A failed check is logged and the host starts anyway: the bridge keeps tailing,
+/// mirroring and answering the owner, which is HOW they are told. What a bad verdict stops is
+/// SESSIONS — see <see cref="IPluginGate"/> for why that split honours both rules at once.
 /// </summary>
 public static class KitAssets_Bootstrapper
 {
     public const string WINDOWS_STATUSLINE_SCRIPT = "statusline.ps1";
     public const string POSIX_STATUSLINE_SCRIPT = "statusline.sh";
 
+    /// <summary>The subject of the one owner-facing entry a bad kit produces.</summary>
+    public const string REFUSAL_SUBJECT = "kit check FAILED — no session will start";
+
     /// <summary>
-    /// <paramref name="kitFolder"/> is the shipped kit beside the host binary (<c>AppContext.BaseDirectory/kit</c>);
-    /// <paramref name="claudeHomeFolder"/> is where Claude Code reads commands/, hooks/ and settings.json.
+    /// <paramref name="kitFolder"/> is the kit shipped beside the host binary
+    /// (<c>AppContext.BaseDirectory/kit</c>); <paramref name="claudeHomeFolder"/> is where Claude
+    /// Code keeps settings.json and plugins/.
     /// </summary>
-    public static void Ensure_Installed(string kitFolder, string claudeHomeFolder, ISupervisionPaths paths, IOrchestrationLog log)
+    public static void Ensure_Installed(
+        string kitFolder,
+        string claudeHomeFolder,
+        ISupervisionPaths paths,
+        IOrchestrationLog log,
+        IPluginGate? gate = null)
     {
         try
         {
-            var kitCommandsFolder = Path.Combine(kitFolder, "commands");
-            var kitHooksFolder = Path.Combine(kitFolder, "hooks");
-            var claudeCommandsFolder = Path.Combine(claudeHomeFolder, "commands");
-            var claudeHooksFolder = Path.Combine(claudeHomeFolder, "hooks");
-
-            var statuslineScriptName = Pick_StatuslineScriptName(OperatingSystem.IsWindows());
-            var kitStatuslineFile = Path.Combine(kitFolder, "statusline", statuslineScriptName);
-            var statuslineTargetFile = Path.Combine(paths.Root, statuslineScriptName);
-
-            // The stamp goes in the log FIRST and into the installed folder second: which app is
-            // running, and which app owns the commands the sessions read. Both were guesswork.
             var buildStamp = Build.BuildStamp_Reader.Describe_RunningApp();
             log.Log_Info("", $"Running {buildStamp} — from {AppContext.BaseDirectory}");
 
-            var installedFiles = KitAssets_Installer.Ensure_Installed(
-                kitCommandsFolder, kitStatuslineFile, claudeCommandsFolder, statuslineTargetFile,
-                kitHooksFolder, claudeHooksFolder, $"{buildStamp} — {AppContext.BaseDirectory}");
-
-            foreach (var installedFile in installedFiles)
-                log.Log_Info("", $"Kit asset installed/updated: {installedFile}");
-
-            if (!Directory.Exists(kitCommandsFolder))
-                log.Log_Warning("", $"Kit commands folder not found at {kitCommandsFolder} — role commands NOT installed");
-
-            if (!File.Exists(kitStatuslineFile))
-                log.Log_Warning("", $"Kit status line script not found at {kitStatuslineFile} — status line NOT installed");
-
-            var settingsFile = Path.Combine(claudeHomeFolder, "settings.json");
-
-            if (StatusLineSettings_Wirer.Ensure_Wired(settingsFile, statuslineTargetFile))
-                log.Log_Info("", $"Status line wired into {settingsFile} (previous file backed up); active for newly spawned sessions");
-
-            // Turn-end enforcement for the task ledger: prose in a role command gets skipped, a
-            // Stop hook does not.
-            var ledgerHookFile = Path.Combine(claudeHooksFolder, "supervisor-ledger-check.sh");
-
-            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, ledgerHookFile, AgentHookSettings_Wirer.STOP_EVENT, null))
-                log.Log_Info("", $"Ledger Stop hook wired into {settingsFile}; supervisors spawned from now on cannot end a turn owing a PLAN.md update");
-
-            // Turn-end enforcement for "run to the end". The owner told sessions not to stop
-            // mid-endeavour and they kept stopping — "no matter how many times i tell it not to get
-            // stuck and keep going, it will keep getting stuck" (2026-08-20). Prose is what had
-            // already failed; this is the same lever the ledger got, for the same reason.
-            var runToTheEndHookFile = Path.Combine(claudeHooksFolder, "run-to-the-end-check.sh");
-
-            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, runToTheEndHookFile, AgentHookSettings_Wirer.STOP_EVENT, null))
-                log.Log_Info("", $"Run-to-the-end Stop hook wired into {settingsFile}; a session with open ledger work and nothing blocked on the owner cannot end its turn");
-
-            // Read-only enforcement for reviewers: the CLI already withholds Write/Edit, but Bash
-            // could mutate the repo just as effectively — this closes that route.
-            var reviewerHookFile = Path.Combine(claudeHooksFolder, "reviewer-readonly-check.sh");
-
-            // A question stops the supervisor dead: no tool runs while the owner's answer is
-            // pending, so their answer can never arrive against a world that moved meanwhile.
-            var awaitingAnswerHookFile = Path.Combine(claudeHooksFolder, "supervisor-awaiting-answer-check.sh");
-
-            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, awaitingAnswerHookFile, AgentHookSettings_Wirer.PRE_TOOL_USE_EVENT, "*"))
-                log.Log_Info("", $"Awaiting-answer PreToolUse hook wired into {settingsFile}; a supervisor that asked a question cannot act until it is answered");
-
-            if (AgentHookSettings_Wirer.Ensure_Wired(settingsFile, reviewerHookFile, AgentHookSettings_Wirer.PRE_TOOL_USE_EVENT, "Bash"))
-                log.Log_Info("", $"Reviewer read-only PreToolUse hook wired into {settingsFile}; reviewers spawned from now on cannot mutate the repo through Bash");
+            Unwire_LegacyHooks(claudeHomeFolder, log);
+            Remove_LegacyKit(claudeHomeFolder, log);
+                Install_StatusLine(kitFolder, claudeHomeFolder, paths, log, buildStamp);
+            Verify_Plugin(claudeHomeFolder, paths, log, gate);
         }
         catch (Exception ex)
         {
-            log.Log_Error("", "Kit asset self-install failed", ex);
+            log.Log_Error("", "Kit startup check failed", ex);
+        }
+    }
+
+    static void Unwire_LegacyHooks(string claudeHomeFolder, IOrchestrationLog log)
+    {
+        var settingsFile = Path.Combine(claudeHomeFolder, "settings.json");
+        var hooksFolder = Path.Combine(claudeHomeFolder, "hooks");
+
+        foreach (var hookFile in LegacyKit_Remover.LEGACY_HOOK_FILES)
+        {
+            if (AgentHookSettings_Wirer.Ensure_Unwired(settingsFile, Path.Combine(hooksFolder, hookFile)))
+                log.Log_Info("", $"Un-wired the legacy '{hookFile}' entry from {settingsFile} — it now travels with the role that owns it, in the plugin");
+        }
+    }
+
+    static void Remove_LegacyKit(string claudeHomeFolder, IOrchestrationLog log)
+    {
+        var (removed, stillThere) = LegacyKit_Remover.Remove(claudeHomeFolder);
+
+        foreach (var file in removed)
+            log.Log_Info("", $"Removed the hand-installed kit file '{file}' — the plugin ships it now");
+
+        foreach (var file in stillThere)
+            log.Log_Warning("", $"COULD NOT remove the hand-installed kit file '{file}' — while it is there, a session may read it INSTEAD of the plugin");
+    }
+
+    static void Install_StatusLine(string kitFolder, string claudeHomeFolder, ISupervisionPaths paths, IOrchestrationLog log, string buildStamp)
+    {
+        var scriptName = Pick_StatuslineScriptName(OperatingSystem.IsWindows());
+        var kitStatuslineFile = Path.Combine(kitFolder, "statusline", scriptName);
+        var targetFile = Path.Combine(paths.Root, scriptName);
+
+        foreach (var installedFile in KitAssets_Installer.Ensure_Installed(kitStatuslineFile, targetFile, $"{buildStamp} — {AppContext.BaseDirectory}"))
+            log.Log_Info("", $"Status line installed/updated: {installedFile}");
+
+        if (!File.Exists(kitStatuslineFile))
+            log.Log_Warning("", $"Kit status line script not found at {kitStatuslineFile} — status line NOT installed");
+
+        var settingsFile = Path.Combine(claudeHomeFolder, "settings.json");
+
+        if (StatusLineSettings_Wirer.Ensure_Wired(settingsFile, targetFile))
+            log.Log_Info("", $"Status line wired into {settingsFile} (previous file backed up); active for newly spawned sessions");
+    }
+
+    static void Verify_Plugin(string claudeHomeFolder, ISupervisionPaths paths, IOrchestrationLog log, IPluginGate? gate)
+    {
+        var reading = InstalledPlugin_Reader.Read(claudeHomeFolder, KitPlugin.ID);
+        var shadowing = LegacyKit_Remover.Find_ShadowingCommands(claudeHomeFolder);
+        var verdict = PluginVersion_Verifier.Decide(reading, KitPlugin.EXPECTED_VERSION, shadowing);
+        var refusal = PluginVersion_Verifier.Describe(verdict, reading, KitPlugin.EXPECTED_VERSION, KitPlugin.ID, shadowing);
+
+        gate?.Record(verdict, refusal);
+
+        if (refusal == null)
+        {
+            log.Log_Info("", $"Kit check OK — {KitPlugin.ID} {reading.Version} at {reading.InstallPath}");
+            return;
+        }
+
+        log.Log_Error("", refusal, null);
+        Tell_Owner_Once(paths, log, refusal);
+    }
+
+    /// <summary>
+    /// ONE entry, on the general supervisor's own channel, which the bridge mirrors to the General
+    /// topic — so the owner is told on their phone without this reaching into the bridge at all.
+    ///
+    /// It is written ONCE per host start and never repeated. Decision 14 asks that an owner-facing
+    /// repeat EDITS rather than stacks; editing is private state inside the bridge engine and there
+    /// is no way to it from here, so the rule is honoured the other way it can be — by not repeating.
+    /// A startup fact does not change while the host runs, and one line is not a waterfall.
+    /// </summary>
+    static void Tell_Owner_Once(ISupervisionPaths paths, IOrchestrationLog log, string refusal)
+    {
+        try
+        {
+            if (!File.Exists(paths.GeneralChannelFile))
+                return;
+
+            ChannelAppender.Append_AppEntry(
+                paths.GeneralChannelFile,
+                AppEntryAudiences.Owner,
+                REFUSAL_SUBJECT,
+                refusal,
+                DateTime.Now);
+        }
+        catch (Exception ex)
+        {
+            log.Log_Warning("", $"Could not put the kit refusal on the owner's channel: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// Which status line script a machine gets: the PowerShell one on Windows (unchanged), its
-    /// bash twin everywhere else. The OS is a parameter so both branches are asserted on one
-    /// machine.
+    /// Which status line script a machine gets: the PowerShell one on Windows, its bash twin
+    /// everywhere else. The OS is a parameter so both branches are asserted on one machine.
     /// </summary>
     public static string Pick_StatuslineScriptName(bool isWindows)
     {

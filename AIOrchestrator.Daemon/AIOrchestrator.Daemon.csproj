@@ -27,14 +27,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The kit ships WITH the daemon, exactly as it ships with the WPF app, so startup can
-         self-install the role commands, both status line scripts and the hooks into ~/.claude.
-         Same Link layout as AIOrchestrator.csproj: KitAssets_Bootstrapper reads kit/ beside the binary. -->
-    <Content Include="..\kit\commands\*.md" Link="kit\commands\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\channel-append.sh" Link="kit\commands\channel-append.sh" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The kit ships WITH the daemon as a COMPLETE PLUGIN FOLDER, exactly as it ships with the WPF
+         app. Same Link layout as AIOrchestrator.csproj: KitAssets_Bootstrapper reads kit/ beside the
+         binary — now to check a version, not to copy files. -->
+    <Content Include="..\kit\.claude-plugin\*.json" Link="kit\.claude-plugin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\skills\**\*.md" Link="kit\skills\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\bin\*.sh" Link="kit\bin\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\statusline\statusline.ps1" Link="kit\statusline\statusline.ps1" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\kit\statusline\statusline.sh" Link="kit\statusline\statusline.sh" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\kit\hooks\*.sh" Link="kit\hooks\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Kit.PluginGate;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -13,7 +14,8 @@ internal sealed class OrchestratorServicesModel(
     IOrchestrationLog log,
     IOrchestrationSessionStore store,
     IOrchestrationLauncher launcher,
-    IBridgeEngine engine) : IOrchestratorServices
+    IBridgeEngine engine,
+    IPluginGate pluginGate) : IOrchestratorServices
 {
     public ISupervisionPaths Paths { get; } = paths;
     public IOrchestratorConfigProvider ConfigProvider { get; } = configProvider;
@@ -21,4 +23,5 @@ internal sealed class OrchestratorServicesModel(
     public IOrchestrationSessionStore Store { get; } = store;
     public IOrchestrationLauncher Launcher { get; } = launcher;
     public IBridgeEngine Engine { get; } = engine;
+    public IPluginGate PluginGate { get; } = pluginGate;
 }

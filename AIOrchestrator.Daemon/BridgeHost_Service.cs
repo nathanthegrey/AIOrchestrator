@@ -105,7 +105,7 @@ sealed class BridgeHost_Service(
             ? "Telegram: mirror + remote input active"
             : "Telegram: not configured (file-only mode) — fill config.json and secrets.json, then restart");
 
-        KitAssets_Bootstrapper.Ensure_Installed(Path.Combine(AppContext.BaseDirectory, "kit"), _options.ClaudeHome, paths, services.Log);
+        KitAssets_Bootstrapper.Ensure_Installed(Path.Combine(AppContext.BaseDirectory, "kit"), _options.ClaudeHome, paths, services.Log, services.PluginGate);
 
         using var engineCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var engineTask = Task.Run(() => services.Engine.Run_Async(engineCancellation.Token), CancellationToken.None);

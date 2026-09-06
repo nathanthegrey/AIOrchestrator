@@ -24,4 +24,11 @@ public enum PluginVerdicts
 
     /// <summary>The files that answer the question could not be read or parsed.</summary>
     Unreadable,
+
+    /// <summary>
+    /// The right kit is installed, and a stale hand-installed copy of a role protocol is STILL in
+    /// ~/.claude/commands, where it wins the slash word (measured). Sessions would read the old text
+    /// while the version number said otherwise — the one failure this whole stage exists to end.
+    /// </summary>
+    Shadowed,
 }

@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Kit.PluginGate;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Running.SessionRunner;
@@ -15,9 +16,10 @@ public static class OrchestrationLauncher_Factory
         IOrchestratorConfigProvider configProvider,
         IOrchestrationSessionStore store,
         ISessionSpawner spawner,
-        IOrchestrationLog log)
+        IOrchestrationLog log,
+        IPluginGate? pluginGate = null)
     {
-        return Create(paths, configProvider, store, SessionRunner_Factory.Create_Terminal(spawner), SessionRunner_Factory.Create_Print(paths, log), log);
+        return Create(paths, configProvider, store, SessionRunner_Factory.Create_Terminal(spawner), SessionRunner_Factory.Create_Print(paths, log), log, pluginGate);
     }
 
     public static IOrchestrationLauncher Create(
@@ -26,8 +28,11 @@ public static class OrchestrationLauncher_Factory
         IOrchestrationSessionStore store,
         ISessionRunner terminalRunner,
         ISessionRunner printRunner,
-        IOrchestrationLog log)
+        IOrchestrationLog log,
+        IPluginGate? pluginGate = null)
     {
-        return new OrchestrationLauncherModel(paths, configProvider, store, terminalRunner, printRunner, log);
+        // No gate given = a caller with no kit to check (every existing test, and any host that does
+        // not ship one). An absent gate must not be a silent refusal, so it is an explicit yes.
+        return new OrchestrationLauncherModel(paths, configProvider, store, terminalRunner, printRunner, pluginGate ?? PluginGate_Factory.Create_Allowing(), log);
     }
 }
