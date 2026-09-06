@@ -43,8 +43,8 @@ public class NoProtocolFileIsOrphanedTests
         }
 
         // Asserted so that a refactor which deletes every reference file cannot make this pass by
-        // leaving nothing to check.
-        Assert.Equal(12, checkedFiles);
+        // leaving nothing to check. Two per role, plus the supervisor's stream-runner.md.
+        Assert.Equal(13, checkedFiles);
     }
 
     /// <summary>

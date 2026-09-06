@@ -174,6 +174,10 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   expires and says so. A `DEFAULT:` alone is dropped, because nothing would ever apply it. Writing
   neither is the old behaviour exactly — the question waits indefinitely.
 
+  Written twice is not an error — the FIRST readable one wins, so a marker repeated at the bottom
+  cannot silently override the one a human reads at the top. An unreadable value is dropped on its
+  own and never takes the other marker with it.
+
   **Only give a `DEFAULT:` to a question whose unattended answer you would defend.** It spends the
   owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
   anything that costs money.

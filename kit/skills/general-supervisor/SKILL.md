@@ -91,6 +91,13 @@ One level up, `$AIORCH_SUPERVISION_ROOT/`:
   and `/italian` (toggle the translation layer) are answered by the app itself and never involve
   you.
 
+  **`/tail <session>` and `/log <session>` are the owner's window into a session that has NO
+  terminal.** `/tail` says what it is doing right now — tools called, last text, outcome, cost;
+  `/log` gives its whole last turn. The session is named however is convenient: `/tail 1`,
+  `/tail imp-2`, `/tail rev-1`, `/tail sup`; with no argument they answer with the list of open
+  ones. **They cost no tokens** — they read a file the bridge already keeps — so when the owner asks
+  what a headless session is up to, point them there instead of relaying it yourself.
+
   `/organize_mains` is app-wide too and works from ANY topic: it tiles ONE terminal per open
   orchestration — the supervisor of each crew, the solo of each basic one, never a communicator or
   a member, and never your own window, which is the one they are looking at it from. `/organize`

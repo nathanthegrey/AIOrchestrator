@@ -416,6 +416,10 @@ thought across several of them hoping to be noticed.
   expires and says so. A `DEFAULT:` alone is dropped, because nothing would ever apply it. Writing
   neither is the old behaviour exactly — the question waits indefinitely.
 
+  Written twice is not an error — the FIRST readable one wins, so a marker repeated at the bottom
+  cannot silently override the one a human reads at the top. An unreadable value is dropped on its
+  own and never takes the other marker with it.
+
   **Only give a `DEFAULT:` to a question whose unattended answer you would defend.** It spends the
   owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
   anything that costs money.
@@ -1113,11 +1117,13 @@ before it was written down.
 touch, state the assumption you would make, and keep going. **"I have reached a natural boundary" is
 not a reason at all** — it is the exact feeling this rule exists to override.
 
-## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
+## If `AIORCH_RUNNER` is `print` or `stream` — the bridge runs your turns
 
 **Your boot command printed `AIORCH_RUNNER`. If it says `print`, READ `reference/print-runner.md`
-NOW, before you write anything** — its rules change how you write to your channel and what ends your
-turn, and a session that skipped them hung until its turn timed out (measured 2026-09-06).
+NOW; if it says `stream`, READ `reference/stream-runner.md` NOW — before you write anything.** Both
+change how you write to your channel and what ends your turn, and a session that skipped them hung
+until its turn timed out (measured 2026-09-06). Under either one, the watcher below does not apply:
+you are woken by the bridge, not by a Monitor.
 
 ## The watcher — ONE persistent Monitor, armed at boot (definition of done)
 
