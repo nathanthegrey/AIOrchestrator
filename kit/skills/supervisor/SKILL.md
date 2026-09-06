@@ -198,7 +198,7 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   ANY channel**, this one, `owner-channel.md`, and every member spoke:
 
   ```bash
-  bash ~/.claude/commands/channel-append.sh \
+  channel-append.sh \
     --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/imp-2/channel.md" \
     --author  supervisor \
     --subject "TASK 2 — accepted, merge held for the owner" \

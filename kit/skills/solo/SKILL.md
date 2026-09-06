@@ -102,7 +102,7 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
-  bash ~/.claude/commands/channel-append.sh \
+  channel-append.sh \
     --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md" \
     --author  solo \
     --subject "fix landed — 214 tests green, branch ready" \
@@ -313,7 +313,7 @@ operation and stops, and I haven't received anything telling me 'done'."*
   ("you may edit exactly these files: …; touch nothing else"). Git and ambient files (`.csproj`, DI
   registrations, shared constants) stay yours. **A sub-agent's report is NOT evidence** — read the
   diff and run the suite yourself before you report. Full rules: read
-  `~/.claude/commands/implementer.md`, section "Fan out" — read the file, never invoke the command.
+  the implementer role's own file — `"$(dirname "$(dirname "$(command -v channel-append.sh)")")/skills/implementer/SKILL.md"` — section "Fan out": read the file, never invoke the role.
 - **Announce a window before a multi-file write batch, and CLOSE it.** The app resolves your state
   from these exactly as it does an implementer's — you are the other author allowed to announce one —
   so an unclosed window leaves you rendering as still writing forever, and the owner sees a session

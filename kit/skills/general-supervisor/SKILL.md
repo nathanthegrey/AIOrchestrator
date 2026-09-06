@@ -154,7 +154,7 @@ sub-agents, no extra shell work**. Be reachable fast; learn things when a reques
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
-  bash ~/.claude/commands/channel-append.sh \
+  channel-append.sh \
     --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/general/channel.md" \
     --author  supervisor \
     --subject "starting orchestration: CRM (Projects\Prova Amazon)" \

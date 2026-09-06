@@ -68,7 +68,7 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
-  bash ~/.claude/commands/channel-append.sh \
+  channel-append.sh \
     --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/<orch-id>/<member-id>/channel.md" \
     --author  implementer \
     --subject "TASK 1 committed abc1234 — 214 tests green" \

@@ -192,7 +192,7 @@ OUT OF SCOPE (pre-existing, not part of this change)
 - **Append with the helper — it is the ONLY sanctioned way to write to a channel:**
 
   ```bash
-  bash ~/.claude/commands/channel-append.sh \
+  channel-append.sh \
     --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/<orch-id>/<member-id>/channel.md" \
     --author  reviewer \
     --subject "review filed — 3 findings, one blocking" \
