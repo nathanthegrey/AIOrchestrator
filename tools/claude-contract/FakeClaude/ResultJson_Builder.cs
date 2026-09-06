@@ -13,7 +13,14 @@ namespace FakeClaude;
 /// </summary>
 public static class ResultJson_Builder
 {
-    public static string Build(FakeClaudeTurn turn, string sessionId, string model, int numTurns)
+    /// <summary>
+    /// <paramref name="totalCostUsdOverride"/> is the STREAM mode's cumulative figure. In print
+    /// mode each process reports its own turn, so the turn's cost is the whole truth; in stream mode
+    /// one process reports a running total (measured 2026-09-06: 0.017715 → 0.024654 → 0.029215 for
+    /// three equal turns), and a fake that reported the per-turn figure there would let a bridge
+    /// that never differences the field pass.
+    /// </summary>
+    public static string Build(FakeClaudeTurn turn, string sessionId, string model, int numTurns, double? totalCostUsdOverride = null)
     {
         var root = new JsonObject
         {
@@ -25,7 +32,7 @@ public static class ResultJson_Builder
             ["num_turns"] = numTurns,
             ["result"] = turn.Result,
             ["session_id"] = sessionId,
-            ["total_cost_usd"] = turn.TotalCostUsd,
+            ["total_cost_usd"] = totalCostUsdOverride ?? turn.TotalCostUsd,
             ["usage"] = new JsonObject
             {
                 ["input_tokens"] = 18,
