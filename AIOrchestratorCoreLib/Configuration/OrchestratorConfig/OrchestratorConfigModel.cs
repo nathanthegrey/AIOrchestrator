@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
@@ -14,7 +15,8 @@ internal sealed class OrchestratorConfigModel(
     bool telegramItalianLayer,
     bool telegramStatusScreenshots,
     string? voiceTranscribeCommand,
-    long? orchestrationTokenBudget) : IOrchestratorConfig
+    long? orchestrationTokenBudget,
+    IGuardrailSettings guardrails) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -28,6 +30,7 @@ internal sealed class OrchestratorConfigModel(
     public bool TelegramStatusScreenshots { get; } = telegramStatusScreenshots;
     public string? VoiceTranscribeCommand { get; } = voiceTranscribeCommand;
     public long? OrchestrationTokenBudget { get; } = orchestrationTokenBudget;
+    public IGuardrailSettings Guardrails { get; } = guardrails;
 
     public bool Is_TelegramConfigured()
     {

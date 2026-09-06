@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
@@ -26,7 +27,8 @@ public static class OrchestratorConfig_Factory
         bool? telegramItalianLayer,
         bool? telegramStatusScreenshots,
         string? voiceTranscribeCommand,
-        long? orchestrationTokenBudget)
+        long? orchestrationTokenBudget,
+        IGuardrailSettings? guardrails = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -40,7 +42,12 @@ public static class OrchestratorConfig_Factory
             telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER,
             telegramStatusScreenshots ?? DEFAULT_TELEGRAM_STATUS_SCREENSHOTS,
             voiceTranscribeCommand,
-            orchestrationTokenBudget);
+            orchestrationTokenBudget,
+
+            // DEFAULTED, NEVER NULL. Every caller that predates this parameter — including the app's
+            // own settings window — keeps compiling and keeps getting the guarded behaviour, which
+            // is the only direction an optional guard is allowed to default in.
+            guardrails ?? GuardrailSettings_Factory.Create_Default());
     }
 
     public static IOrchestratorConfig Create_Empty()
@@ -66,7 +73,8 @@ public static class OrchestratorConfig_Factory
             telegramItalianLayer,
             source.TelegramStatusScreenshots,
             source.VoiceTranscribeCommand,
-            source.OrchestrationTokenBudget);
+            source.OrchestrationTokenBudget,
+            source.Guardrails);
     }
 
     /// <summary>
@@ -88,6 +96,7 @@ public static class OrchestratorConfig_Factory
             source.TelegramItalianLayer,
             telegramStatusScreenshots,
             source.VoiceTranscribeCommand,
-            source.OrchestrationTokenBudget);
+            source.OrchestrationTokenBudget,
+            source.Guardrails);
     }
 }

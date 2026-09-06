@@ -10,6 +10,15 @@ public interface ISupervisionPaths
     string ConfigFile { get; }
     string SecretsFile { get; }
     string BridgeStateFile { get; }
+
+    /// <summary>
+    /// The bridge's DECISION state: open questions, pending buttons, second-gesture confirmations,
+    /// nudge memory, crash-loop counters, the dispatcher pause. Separate from
+    /// <see cref="BridgeStateFile"/> on purpose — that one is a CURSOR rewritten ~30 times a
+    /// minute and losing it costs replayed traffic, while losing this one costs a decision the
+    /// owner was asked to take.
+    /// </summary>
+    string EngineStateFile { get; }
     string GlobalLogFile { get; }
 
     /// <summary>Home of the always-on GENERAL supervisor (owner ⇄ general, mirrored to the General topic).</summary>

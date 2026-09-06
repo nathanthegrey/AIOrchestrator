@@ -6,6 +6,7 @@ internal sealed class SupervisionPathsModel(string root) : ISupervisionPaths
     public string ConfigFile { get; } = Path.Combine(root, "config.json");
     public string SecretsFile { get; } = Path.Combine(root, "secrets.json");
     public string BridgeStateFile { get; } = Path.Combine(root, ".bridge-state.json");
+    public string EngineStateFile { get; } = Path.Combine(root, ".engine-state.json");
     public string GlobalLogFile { get; } = Path.Combine(root, "orchestrator-global.log.jsonl");
     public string GeneralFolder { get; } = Path.Combine(root, "general");
     public string GeneralChannelFile { get; } = Path.Combine(root, "general", "channel.md");

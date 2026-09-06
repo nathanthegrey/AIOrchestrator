@@ -36,6 +36,21 @@ internal sealed class SessionWatchdogModel(
     readonly Dictionary<string, int> _consecutiveRespawns = [];
     readonly List<(string OrchId, string AlertText)> _pendingCrashLoopAlerts = [];
 
+    public IReadOnlyDictionary<string, int> Get_ConsecutiveRespawns()
+    {
+        return new Dictionary<string, int>(_consecutiveRespawns);
+    }
+
+    public void Restore_ConsecutiveRespawns(IReadOnlyDictionary<string, int> consecutiveRespawns)
+    {
+        foreach (var pair in consecutiveRespawns)
+        {
+            // A zero carries no information and would only keep a spent key alive in the file.
+            if (pair.Value > 0)
+                _consecutiveRespawns[pair.Key] = pair.Value;
+        }
+    }
+
     public void Check_AndRestart_DeadSessions()
     {
         Check_GeneralSupervisor();

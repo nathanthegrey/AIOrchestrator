@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
@@ -49,6 +50,13 @@ public interface IOrchestratorConfig
     /// Null or 0 = no guard.
     /// </summary>
     long? OrchestrationTokenBudget { get; }
+
+    /// <summary>
+    /// What makes an irreversible decision hard to take by accident, and what stops the dispatcher
+    /// spending an allowance it is about to exhaust. Never null: an absent config.json yields the
+    /// guarded defaults, because a guard nobody configured must still be a guard.
+    /// </summary>
+    IGuardrailSettings Guardrails { get; }
 
     bool Is_TelegramConfigured();
 }
