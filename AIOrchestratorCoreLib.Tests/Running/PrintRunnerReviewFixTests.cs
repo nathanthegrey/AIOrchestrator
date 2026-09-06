@@ -2,7 +2,10 @@ using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
+using AIOrchestratorCoreLib.Running.ClaudeInvocation;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
+using AIOrchestratorCoreLib.Running.TurnExecutor;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.Spawning;
@@ -58,6 +61,68 @@ public class PrintRunnerReviewFixTests
         // Same request id both times — a retry, not a new turn.
         Assert.Equal($"{orchId}/{memberId}/1", harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns[0].RequestId);
         Assert.Contains("second attempt worked", harness.Read_Channel(orchId, memberId));
+    }
+
+    /// <summary>
+    /// THE OTHER HALF OF THE SAME COIN, and it wedged a session permanently. The id is claimed BEFORE
+    /// the process starts, so a first turn that dies before the CLI ever creates the transcript leaves
+    /// every later attempt resuming something that was never made. MEASURED 2026-09-06 against 2.1.263:
+    /// <c>claude -p --resume &lt;uuid never created&gt;</c> exits 1 with
+    /// <c>No conversation found with session ID: &lt;uuid&gt;</c>. Three attempts died that way, the session
+    /// stalled, and new traffic only reset the counter and retried the same doomed resume — recovery
+    /// meant deleting print-session.json by hand.
+    ///
+    /// <para>
+    /// The fix REACTS to that sentence rather than predicting it. The obvious guess — "no completed turn,
+    /// so do not resume" — is wrong in the other direction and breaks the test above, where an attempt
+    /// that ran and merely errored has a transcript worth keeping.
+    /// </para>
+    /// <para>
+    /// The state here is one the fake has never seen an id for, which is exactly what "claimed but never
+    /// created" looks like from outside — and the fake now answers it the way the real CLI does.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AResumeOfATranscriptTheCLIDoesNotHave_ClaimsAFreshIdInsteadOfStallingForEver()
+    {
+        using var harness = new PrintRunnerTestHarness("implementer");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
+        var stateFile = PrintSessionState_Store.Get_StateFile(harness.Paths, SessionRoles.Implementer, orchId, memberId);
+        var registered = PrintSessionState_Store.Read_OrNull(stateFile)!;
+
+        // Claimed, never created: the id is marked spent and the CLI has never heard of it.
+        PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.Create(
+            "11111111-2222-3333-4444-555555555555", sessionStarted: true, registered.Role, registered.OrchId, registered.MemberId,
+            registered.WorkingDirectory, registered.Model, registered.ChannelFilePath, registered.Cursors,
+            nextTurnNumber: 1, failedAttempts: 0, []));
+
+        // Read back, because the whole test rests on this state being the one the dispatcher sees.
+        var claimed = PrintSessionState_Store.Read_OrNull(stateFile)!;
+        Assert.True(claimed.SessionStarted, "the state under test must say the id is spent");
+        Assert.Empty(claimed.ExecutedTurns);
+
+        harness.Write_Scenario("""{"default":{"result":"REPORT\n\nran on a fresh transcript"}}""");
+        var dispatcher = harness.Create_Dispatcher(retryBackoff: TimeSpan.FromMilliseconds(100));
+
+        Append_Supervisor(harness, orchId, memberId, "BRIEF", "do it");
+
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS),
+            $"the session never recovered — it is the permanent stall this test exists for. Channel:\n{harness.Read_Channel(orchId, memberId)}");
+        await dispatcher.Stop_Async();
+
+        var invocations = harness.Read_Invocations();
+        var first = PrintRunnerTestHarness.Args(invocations[0]);
+        var last = PrintRunnerTestHarness.Args(invocations[^1]);
+
+        // Attempt 1 resumed the id it had been told was spent, and the CLI refused it.
+        Assert.Contains("--resume", first);
+        Assert.Equal("11111111-2222-3333-4444-555555555555", first[first.IndexOf("--resume") + 1]);
+
+        // The retry claims a FRESH id rather than resuming the same nothing again.
+        Assert.Contains("--session-id", last);
+        Assert.DoesNotContain("--resume", last);
+        Assert.NotEqual("11111111-2222-3333-4444-555555555555", last[last.IndexOf("--session-id") + 1]);
+        Assert.Contains("ran on a fresh transcript", harness.Read_Channel(orchId, memberId));
     }
 
     /// <summary>
@@ -156,11 +221,85 @@ public class PrintRunnerReviewFixTests
 
         Append_Supervisor(harness, orchId, memberId, "BRIEF", "do it");
 
-        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 11, PrintRunnerTestHarness.GENEROUS));
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 11, PrintRunnerTestHarness.GENEROUS),
+            $"turn 11 never ran. Channel:\n{harness.Read_Channel(orchId, memberId)}");
         await dispatcher.Stop_Async();
 
         Assert.Equal(0, dispatcher.InFlightCount);
         Assert.Contains("reached turn eleven", harness.Read_Channel(orchId, memberId));
+    }
+
+    /// <summary>
+    /// A FAILURE OUTSIDE THE PROCESS IS STILL A FAILED ATTEMPT. It used to be logged and nothing else, so
+    /// FailedAttempts never moved and MAX_ATTEMPTS could never be reached: an executable that is not there
+    /// produced one error line every retry, for ever, with no `turn stalled` entry and nothing at all
+    /// where a human looks. Driven here by an invocation that cannot start — the shape a `claude` missing
+    /// from PATH has.
+    /// </summary>
+    [Fact]
+    public async Task ATurnThatCannotEvenStart_IsCountedAndEventuallyStalls()
+    {
+        using var harness = new PrintRunnerTestHarness("implementer");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
+
+        var dispatcher = PrintTurnDispatcher_Factory.Create(
+            harness.Paths, harness.Store, harness.ConfigProvider,
+            TurnExecutor_Factory.Create_All(harness.Paths, ClaudeInvocation_Factory.Create(Path.Combine(harness.RepoPath, "no-such-binary"), []), harness.Log, harness.ConfigProvider),
+            harness.Log,
+            TimeSpan.FromMilliseconds(50));
+
+        Append_Supervisor(harness, orchId, memberId, "BRIEF", "do it");
+
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).FailedAttempts >= PrintTurn_Words.MAX_ATTEMPTS, PrintRunnerTestHarness.GENEROUS),
+            $"the attempts were never counted, so the session can never stall. Channel:\n{harness.Read_Channel(orchId, memberId)}");
+        await dispatcher.Stop_Async();
+
+        // And it SAYS so where the supervisor reads, instead of only in the app's own log.
+        var stall = Assert.Single(ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId)), entry => entry.Subject.Contains(PrintTurn_Words.TURN_STALLED_SUBJECT, StringComparison.Ordinal));
+        Assert.True(AppEntryAudience_Tag.Is_AgentTagged(stall.Subject));
+        Assert.Contains("failed outside the process", stall.Subject);
+    }
+
+    /// <summary>
+    /// A STATE FILE WITH NO CURSORS AT ALL is one written before sources existed — or one whose `sources`
+    /// array could not be read. Its channel holds a whole life of traffic that nothing has recorded
+    /// delivering, so it is HISTORY: absorbed, exactly as registration absorbs it. Treated as "nothing
+    /// delivered" it would replay up to a full live channel into a single turn, which for a supervisor
+    /// means re-answering every member it has.
+    ///
+    /// <para>
+    /// This is the opposite of a NEW SPOKE appearing on a session that already has cursors — that one
+    /// starts empty, because its first entry is the member's boot greeting and absorbing it would swallow
+    /// the only entry the rule can ever see. Both rules live in Read_Sources and this pins the first.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AStateFileWithNoCursors_AbsorbsItsChannelInsteadOfReplayingIt()
+    {
+        using var harness = new PrintRunnerTestHarness("implementer");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
+        var stateFile = PrintSessionState_Store.Get_StateFile(harness.Paths, SessionRoles.Implementer, orchId, memberId);
+        var registered = PrintSessionState_Store.Read_OrNull(stateFile)!;
+
+        // Traffic that a previous stage would have handled, and a state file that carries no record of it.
+        Append_Supervisor(harness, orchId, memberId, "BRIEF — old", "answered a long time ago");
+        Append_Supervisor(harness, orchId, memberId, "BRIEF — older still", "also answered");
+
+        PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.Create(
+            registered.SessionId, registered.SessionStarted, registered.Role, registered.OrchId, registered.MemberId,
+            registered.WorkingDirectory, registered.Model, registered.ChannelFilePath,
+            [], nextTurnNumber: 1, failedAttempts: 0, []));
+
+        harness.Write_Scenario("""{"default":{"result":"REPORT\n\nshould never run"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        dispatcher.Tick(DateTime.Now);
+        dispatcher.Tick(DateTime.Now);
+        await dispatcher.Stop_Async();
+
+        Assert.Empty(harness.Read_Invocations());
+        Assert.Equal(2, Assert.Single(harness.Read_State(SessionRoles.Implementer, orchId, memberId).Cursors).Delivered.Count);
+        Assert.DoesNotContain("should never run", harness.Read_Channel(orchId, memberId));
     }
 
     /// <summary>

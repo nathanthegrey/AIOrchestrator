@@ -93,6 +93,34 @@ public class TurnCursorTests
         Assert.Equal(2, advanced.Delivered.Count);
     }
 
+    /// <summary>
+    /// THE ONE DESTRUCTIVE STEP, GUARDED. The re-read that drives the prune is best-effort: a read landing
+    /// inside the compactor's rename-over comes back as the empty string, which is indistinguishable from
+    /// "the channel is empty". Pruning against that wipes every delivered identity, and the next tick hands
+    /// the session its whole live channel again as new traffic — a supervisor re-answering every member
+    /// report, silently, because the high-water index is untouched and the archive-gap warning cannot fire.
+    /// </summary>
+    [Fact]
+    public void AReadThatComesBackEmpty_DoesNotPruneAwayEverythingDelivered()
+    {
+        var live = Parse(Channel(1, 30));
+        var delivered = TurnCursor_Factory.Create_Baseline(SOURCE, SessionRoles.Implementer, live);
+
+        Assert.Equal(30, delivered.Delivered.Count);
+
+        var afterAFailedRead = TurnCursor_Factory.CreateFrom_Delivered(delivered, SessionRoles.Implementer, [], []);
+
+        Assert.Equal(30, afterAFailedRead.Delivered.Count);
+        Assert.Empty(PrintTurn_Trigger.Select_Pending(SessionRoles.Implementer, live, afterAFailedRead));
+    }
+
+    /// <summary>A channel that really is empty and a cursor that has delivered nothing stay empty — the guard is about LOSS, not about refusing to prune.</summary>
+    [Fact]
+    public void AnEmptyCursorAndAnEmptyRead_StayEmpty()
+    {
+        Assert.Empty(TurnCursor_Factory.CreateFrom_Delivered(TurnCursor_Factory.Create_Empty(SOURCE), SessionRoles.Implementer, [], []).Delivered);
+    }
+
     [Fact]
     public void TheIdentityIsTheTEXT_SoTwoEntriesSharingAnIndexAreTwoIdentities()
     {

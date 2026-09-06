@@ -79,6 +79,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
     readonly HashSet<string> _warnedStaleRegistrations = [];
     readonly HashSet<string> _warnedArchiveGaps = [];
+    readonly HashSet<string> _warnedBrokenSessions = [];
+
+    /// <summary>
+    /// ONE comparer for source keys, everywhere. A session addresses a channel by a word it typed, so the
+    /// lookup has to forgive case; the cursor set, the roster match and the factory's uniqueness check
+    /// must then forgive it too, or two ids differing only in case pass validation and throw inside the
+    /// turn — where the failure is caught, not counted, and retried for ever.
+    /// </summary>
+    static readonly StringComparer SOURCE_KEYS = StringComparer.OrdinalIgnoreCase;
     readonly SemaphoreSlim _globalSlots;
     readonly int _slotsPerOrchestration;
 
@@ -168,7 +177,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             }
             catch (Exception ex)
             {
-                _log.Log_Error(registered.OrchId, $"Print dispatcher: '{registered.MemberId}' could not be considered this tick", ex);
+                // SAID ONCE, NOT EVERY TICK. The commonest way to land here is a state file that cannot
+                // be parsed — PrintSessionState_Store.Read_OrNull throws on one by design, because a
+                // session whose identity is gone is not a default — and the tick runs every two seconds.
+                // Unbounded, that is an error line every two seconds for as long as the app runs, which
+                // buries the log it is written into. The stale-registration warning two blocks up already
+                // dedupes for the same reason; this one did not.
+                if (_warnedBrokenSessions.Add($"{registered.OrchId}/{registered.MemberId}"))
+                    _log.Log_Error(registered.OrchId, $"Print dispatcher: '{registered.MemberId}' could not be considered — it is skipped from now on and this is NOT repeated; fix or delete its {PrintSessionState_Store.STATE_FILE_NAME} and restart the app", ex);
             }
         }
     }
@@ -324,7 +340,16 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     IReadOnlyList<SourceRead> Read_Sources(string stateFile, ref IPrintSessionState state, SessionRoles role, IReadOnlyList<ITurnSource> sources)
     {
-        var known = state.Cursors.ToDictionary(cursor => cursor.SourceKey, StringComparer.Ordinal);
+        var known = state.Cursors.ToDictionary(cursor => cursor.SourceKey, SOURCE_KEYS);
+
+        // NO CURSORS AT ALL means this session has never been through here — a state file written before
+        // sources existed, or one whose `sources` array could not be read. Its channel holds a whole life
+        // of traffic and none of it has been handed over by anything that recorded the fact, so it is
+        // HISTORY, absorbed exactly as registration absorbs it. Treating it as "nothing delivered" would
+        // replay up to a full live channel into one turn, which is the very thing the store's own note
+        // says must not happen. A session that HAS cursors and meets a NEW key is the opposite case, and
+        // is handled below.
+        var firstSightOfThisSession = state.Cursors.Count == 0;
 
         List<SourceRead> reads = [];
         List<ITurnCursor> cursors = [];
@@ -337,15 +362,20 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             if (!known.TryGetValue(source.Key, out var cursor))
             {
                 // A SOURCE THAT APPEARS WHILE THE SESSION IS RUNNING STARTS EMPTY, so everything in it
-                // is traffic and none of it is absorbed. This is the opposite of the baseline taken at
-                // REGISTRATION, and deliberately: a channel that turns up now belongs to a member that
-                // was created now, and its very first entry — the member's boot greeting, landing
+                // is traffic and none of it is absorbed. A channel that turns up now belongs to a member
+                // that was created now, and its very first entry — the member's boot greeting, landing
                 // between its spawn and the next tick — is exactly what a supervisor is here to answer.
                 // Absorbing it would swallow the one entry this rule can ever see.
-                cursor = TurnCursor_Factory.Create_Empty(source);
+                cursor = firstSightOfThisSession
+                    ? TurnCursor_Factory.Create_Baseline(source, role, entries)
+                    : TurnCursor_Factory.Create_Empty(source);
+
                 changed = true;
 
-                _log.Log_Info(state.OrchId, $"'{state.MemberId}' is now also woken by channel '{source.Key}'");
+                if (cursor.Delivered.Count > 0)
+                    _log.Log_Warning(state.OrchId, $"'{state.MemberId}' had no cursors at all, so channel '{source.Key}' was baselined on sight: the {cursor.Delivered.Count} inbound entr{(cursor.Delivered.Count == 1 ? "y" : "ies")} already in it are HISTORY and will not start a turn");
+                else
+                    _log.Log_Info(state.OrchId, $"'{state.MemberId}' is now also woken by channel '{source.Key}'");
             }
 
             cursors.Add(cursor);
@@ -354,9 +384,19 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, entries, cursor)));
         }
 
-        // A cursor whose source is gone (a closed member) is dropped with it — kept, it would be one
-        // more key nothing matches and one more channel path nobody reads.
-        if (changed || cursors.Count != state.Cursors.Count)
+        // A CURSOR IS NEVER DROPPED FOR A SOURCE THAT MERELY DID NOT RESOLVE THIS TICK. It used to be,
+        // to keep the file tidy — and the roster read that decides is best-effort: an absent session.json
+        // resolves to the owner channel alone, and rewriting the durable record from that transient
+        // answer loses every spoke cursor irreversibly. The next successful read then meets them all as
+        // unknown keys and re-delivers whole channels. Keeping a stale key costs one line in a JSON file
+        // nobody counts; dropping it costs a supervisor re-answering every member it has.
+        foreach (var cursor in state.Cursors)
+        {
+            if (!sources.Any(source => SOURCE_KEYS.Equals(source.Key, cursor.SourceKey)))
+                cursors.Add(cursor);
+        }
+
+        if (changed)
         {
             state = PrintSessionState_Factory.CreateFrom_Existing_Cursors(state, cursors);
             PrintSessionState_Store.Write(stateFile, state);
@@ -490,11 +530,61 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             _log.Log_Error(state.OrchId, $"Turn for '{state.MemberId}' failed outside the process", ex);
             tracker.LastFailureAt = DateTime.Now;
+            Record_OutOfProcessFailure(stateFile, state, pending, tracker, ex);
         }
         finally
         {
             lock (_lock)
                 _inFlight.Remove(key);
+        }
+    }
+
+    /// <summary>
+    /// A FAILURE OUTSIDE THE PROCESS IS STILL A FAILED ATTEMPT. It used to be logged and nothing else,
+    /// so <see cref="IPrintSessionState.FailedAttempts"/> never moved and <see cref="MAX_ATTEMPTS"/>
+    /// could never be reached: a <c>claude</c> missing from PATH, or an IO error thrown while appending
+    /// the entry, produced one error line per tick for ever — no stall, no alert in the channel, and
+    /// nothing at all where a human looks. The stall path exists precisely for "this keeps failing", and
+    /// a failure that cannot reach it is the silence this repo keeps paying for.
+    ///
+    /// <para>
+    /// THE STATE IS RE-READ, not reused. The turn may have written it after the caller captured it —
+    /// claiming the session id does exactly that — and incrementing a stale copy would undo that write.
+    /// </para>
+    /// <para>
+    /// And it never throws. It runs inside a catch handler; an exception escaping here leaves the task
+    /// faulted with nobody awaiting it, which is a worse silence than the one it is fixing.
+    /// </para>
+    /// </summary>
+    void Record_OutOfProcessFailure(string stateFile, IPrintSessionState captured, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, Exception cause)
+    {
+        try
+        {
+            var state = PrintSessionState_Store.Read_OrNull(stateFile) ?? captured;
+            var failed = PrintSessionState_Factory.CreateFrom_Existing_AttemptFailed(state);
+
+            PrintSessionState_Store.Write(stateFile, failed);
+
+            if (failed.FailedAttempts < MAX_ATTEMPTS)
+                return;
+
+            tracker.StalledOnSignature = Describe_PendingSignature(pending);
+
+            var requestId = PrintTurn_RequestId.Build(state.OrchId, state.MemberId, state.NextTurnNumber);
+            var alert = $"Turn {requestId} failed {failed.FailedAttempts} times before the process could report anything — not retried until new traffic arrives in the channels";
+
+            _log.Log_Error(state.OrchId, alert, null);
+
+            ChannelAppender.Append_AppEntry(
+                state.ChannelFilePath,
+                Stall_Audience(state),
+                $"{TURN_STALLED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — failed outside the process × {failed.FailedAttempts}",
+                $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast error: {cause.GetType().Name}: {cause.Message}",
+                DateTime.Now);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(captured.OrchId, $"'{captured.MemberId}': the out-of-process failure could not be recorded either — the attempt counter did not move, so this turn keeps retrying", ex);
         }
     }
 
@@ -525,9 +615,18 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // CLI has already seen is refused outright ("Error: Session ID <uuid> is already in use.",
         // exit 1, measured on 2.1.261), so a first turn that timed out could otherwise never be
         // retried: attempts 2 and 3 would die on the flag and the session would stall for good.
-        // Resuming a transcript whose turn was killed mid-flight works (measured the same day), so
-        // the retry resumes — which also keeps whatever the killed attempt had already done.
-        var sessionUsed = state.SessionStarted || hasHistory;
+        //
+        // SPENT IS STILL NOT THE SAME AS EXISTS, and the gap is recovered from rather than predicted —
+        // see TRANSCRIPT_GONE_SIGNAL and Record_Failure. Guessing here was tried and was wrong: the id
+        // is claimed before the process starts, but an attempt that ran and merely answered badly DOES
+        // have a transcript, and refusing to resume it would throw away work every time a model errored.
+        // ONE SOURCE FOR "IS THIS ID SPENT": the flag. It used to be `SessionStarted || hasHistory`, and
+        // the second half quietly outvoted the first — when the CLI told us the transcript was gone and
+        // the id was given back, a session with turns behind it went on resuming the FRESH id it had just
+        // been handed, and was refused again, every attempt, for ever. History is not evidence about the
+        // id the session is holding NOW. It was only ever a fallback for a state file written before the
+        // flag existed, and the store already applies exactly that fallback when the field is absent.
+        var sessionUsed = state.SessionStarted;
         var resumeTranscript = !fresh && sessionUsed;
         var sessionId = fresh && sessionUsed ? Guid.NewGuid().ToString() : state.SessionId;
 
@@ -539,11 +638,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             PrintSessionState_Store.Write(stateFile, state);
         }
 
+        // NOT CLEARED HERE. It used to be, one line below this, before the turn's outcome was known —
+        // so a first turn after a bridge restart that timed out or errored had attempts 2 and 3 resume
+        // the very transcript that may remember answering, with the preamble that says "those turns are
+        // done, do not repeat them" switched off. The decision-8 guard was off on exactly the retry it
+        // exists for. It is cleared where a turn actually COMPLETES instead.
         var alreadyExecuted = tracker.FirstTurnSinceStart && hasHistory
             ? state.ExecutedTurns.Select(turn => turn.TurnNumber).ToList()
             : [];
-
-        tracker.FirstTurnSinceStart = false;
 
         var executor = _executors[roleConfig.Runner];
 
@@ -576,7 +678,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (TurnOutcomes.Is_Success(result))
         {
-            if (!Write_Reply(state, sources, result.ResultText))
+            if (!await Write_Reply_Async(state, sources, result.ResultText))
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
@@ -589,6 +691,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, result.SessionId ?? sessionId, Advance_Cursors(state, sources, pending)));
             tracker.LastFailureAt = null;
+            tracker.FirstTurnSinceStart = false;
 
             _log.Log_Info(state.OrchId, $"Turn {requestId} ended — {outcome}, {Describe_Cost(result)}, {result.Elapsed.TotalSeconds:F1} s wall");
             return;
@@ -610,7 +713,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending)
     {
-        var byKey = state.Cursors.ToDictionary(cursor => cursor.SourceKey, StringComparer.Ordinal);
+        var byKey = state.Cursors.ToDictionary(cursor => cursor.SourceKey, SOURCE_KEYS);
 
         List<ITurnCursor> advanced = [];
 
@@ -619,7 +722,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             if (!byKey.TryGetValue(source.Key, out var cursor))
                 continue;
 
-            var delivered = pending.Where(item => item.Source.Key == source.Key).Select(item => item.Entry).ToList();
+            var delivered = pending.Where(item => SOURCE_KEYS.Equals(item.Source.Key, source.Key)).Select(item => item.Entry).ToList();
             var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(source.ChannelFilePath));
 
             advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
@@ -640,12 +743,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// to contain a line beginning "to:" would be cut in half by a rule written for somebody else.
     /// </para>
     /// <para>
-    /// A PARTIAL WRITE COSTS A DUPLICATE, AND THAT IS THE CHOICE. If one of several blocks cannot be
-    /// appended — its channel held by another writer for the whole budget — the turn is reported failed
-    /// and retried, so the blocks that DID land are written a second time. The alternative is to accept
-    /// the partial write, which loses the block that failed with nobody told. A duplicated entry is
-    /// visible in a file a human reads; a missing verdict is not, and the session that was waiting for it
-    /// waits for ever. Same rule as everywhere else here: fail towards the visible side.
+    /// A PARTIAL WRITE COSTS A SECOND, DIFFERENT ANSWER — not a duplicate, and the difference matters.
+    /// If one of several blocks cannot be appended — its channel held by another writer for the whole
+    /// budget — the turn is reported failed and RE-RUN, so the model answers again: a member that already
+    /// received verdict A can then receive verdict B and may have acted on the superseded one. The
+    /// alternative is to accept the partial write, which loses the block that failed with nobody told and
+    /// leaves the session it was for waiting for ever. Both are bad; this one is bad WHERE SOMEONE CAN SEE
+    /// IT, which is the rule everywhere else here. (An earlier version of this comment claimed the retry
+    /// merely duplicates what landed. It does not, and a comment that understates its own trade is how the
+    /// next reader accepts it without noticing.)
     /// </para>
     /// </summary>
     /// <param name="resultText">
@@ -654,7 +760,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// thing a non-null signature bought was a compiler warning at the one call site — and a signature
     /// that promises what its caller cannot give is a lie that the next reader resolves with a `!`.
     /// </param>
-    bool Write_Reply(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
+    async Task<bool> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
     {
         var author = SessionRole_Names.Get_Author(state.Role);
         var ownChannel = state.ChannelFilePath;
@@ -662,16 +768,16 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (sources.Count <= 1)
         {
             var (soleSubject, soleBody) = PrintTurnEntry_Splitter.Split(resultText);
-            return Append_SessionEntry_WithRetry(ownChannel, author, soleSubject, soleBody);
+            return await Append_SessionEntry_WithRetry_Async(ownChannel, author, soleSubject, soleBody);
         }
 
-        var byKey = sources.ToDictionary(source => source.Key, StringComparer.OrdinalIgnoreCase);
+        var byKey = sources.ToDictionary(source => source.Key, SOURCE_KEYS);
         var blocks = TurnReply_Splitter.Split(resultText);
 
         if (blocks.Count == 0)
         {
             var (emptySubject, emptyBody) = PrintTurnEntry_Splitter.Split(resultText);
-            return Append_SessionEntry_WithRetry(ownChannel, author, emptySubject, emptyBody);
+            return await Append_SessionEntry_WithRetry_Async(ownChannel, author, emptySubject, emptyBody);
         }
 
         List<string> misaddressed = [];
@@ -691,7 +797,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             var (subject, body) = PrintTurnEntry_Splitter.Split(block.Text);
 
-            if (!Append_SessionEntry_WithRetry(target, author, subject, body))
+            if (!await Append_SessionEntry_WithRetry_Async(target, author, subject, body))
                 allLanded = false;
         }
 
@@ -717,6 +823,24 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         Append_TurnEnded(state, requestId, attempt, pending, result, outcome, note);
 
+        // THE TRANSCRIPT IS NOT THERE, AND THE CLI SAID SO. The id is claimed BEFORE the process starts,
+        // so a first turn that dies before the CLI creates the transcript — an invalid --model, an auth
+        // failure, the binary not on PATH — leaves every later attempt resuming something that was never
+        // made. MEASURED 2026-09-06 against 2.1.263: `claude -p --resume <uuid never created>` exits 1
+        // with "No conversation found with session ID: <uuid>". All three attempts died that way, the
+        // session stalled, and new traffic only reset the counter and retried the same doomed resume:
+        // recovery meant deleting print-session.json by hand.
+        //
+        // REACTED TO, NOT PREDICTED. The obvious guess — "never completed a turn, so do not resume" — is
+        // wrong in the other direction: an attempt that ran and merely answered badly has a transcript
+        // worth keeping, which is the case the previous stage measured and pinned. The CLI distinguishes
+        // the two for us; this listens to it and unspends the id so the next attempt claims a fresh one.
+        if (Transcript_IsGone(result))
+        {
+            _log.Log_Warning(state.OrchId, $"'{state.MemberId}': the CLI has no transcript for session {state.SessionId} — the id was claimed but never created, so the next attempt starts a fresh one instead of resuming a conversation that does not exist");
+            state = PrintSessionState_Factory.CreateFrom_Existing_SessionUnclaimed(state, Guid.NewGuid().ToString());
+        }
+
         // THE ATTEMPTS BELONGED TO THE TRANSPORT THAT BROKE. A session that has just walked down the
         // fallback ladder starts its counter again, or the two counters coincide — three deaths and
         // three attempts — and it stalls on the rung it stepped off having never tried the one
@@ -741,7 +865,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             ChannelAppender.Append_AppEntry(
                 state.ChannelFilePath,
-                AppEntryAudiences.Agent,
+                Stall_Audience(state),
                 $"{TURN_STALLED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — {outcome} × {failed.FailedAttempts}",
                 $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast exit_code: {result.ExitCode}\napi_error_status: {Describe_ApiErrorStatus(result)}\nstderr (tail): {Tail(result.RawStderr, 600)}",
                 DateTime.Now);
@@ -752,14 +876,27 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         _log.Log_Warning(state.OrchId, $"Turn {requestId} attempt {attempt} {outcome}{(note == null ? string.Empty : $" ({note})")} — retry after {_retryBackoff.TotalSeconds:F0} s; {Tail(result.RawStderr, 200)}");
     }
 
-    bool Append_SessionEntry_WithRetry(string channelFilePath, ChannelAuthors author, string subject, string body)
+    /// <summary>
+    /// AWAITED, NOT SLEPT. This parks up to <see cref="ENTRY_APPEND_ATTEMPTS"/> × 
+    /// <see cref="ENTRY_APPEND_RETRY_MILLISECONDS"/> of waiting, and since a multi-source session writes
+    /// one entry PER ADDRESSED BLOCK it can now run several times in one turn — on a threadpool thread,
+    /// with up to <c>MaxConcurrentTurns</c> turns doing the same. Blocking it held threads the pool
+    /// could have used; awaiting releases them.
+    ///
+    /// <para>
+    /// The delay deliberately takes NO cancellation token. It is reached only after the model has
+    /// already answered, so cancelling here would throw away a reply that was paid for — and the whole
+    /// wait is under a second, which no shutdown notices.
+    /// </para>
+    /// </summary>
+    static async Task<bool> Append_SessionEntry_WithRetry_Async(string channelFilePath, ChannelAuthors author, string subject, string body)
     {
         for (var attempt = 0; attempt < ENTRY_APPEND_ATTEMPTS; attempt++)
         {
             if (ChannelAppender.Append_SessionEntry(channelFilePath, author, subject, body, DateTime.Now))
                 return true;
 
-            Thread.Sleep(ENTRY_APPEND_RETRY_MILLISECONDS);
+            await Task.Delay(ENTRY_APPEND_RETRY_MILLISECONDS);
         }
 
         return false;
@@ -799,9 +936,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var group in pending.GroupBy(item => item.Source.Key, StringComparer.Ordinal))
         {
+            // MIN AND MAX, not first and last: the entries were globally ordered by stamp before they
+            // got here, so within one channel the first listed is not necessarily the lowest — and
+            // "imp-1 [12]–[3]" is a range no reader can make sense of.
             var indices = group.Select(item => item.Entry.Index).ToList();
+            var lowest = indices.Min();
+            var highest = indices.Max();
 
-            parts.Add(indices.Count == 1 ? $"{group.Key} [{indices[0]}]" : $"{group.Key} [{indices[0]}]–[{indices[^1]}]");
+            parts.Add(lowest == highest ? $"{group.Key} [{lowest}]" : $"{group.Key} [{lowest}]–[{highest}]");
         }
 
         return $"entries: {string.Join(", ", parts)}";
@@ -815,6 +957,46 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     static string Describe_PendingSignature(IReadOnlyList<PendingEntry> pending)
     {
         return string.Join('|', pending.Select(item => $"{item.Source.Key}:{ChannelEntry_Digest.Compute(item.Entry)}"));
+    }
+
+    /// <summary>
+    /// The CLI's own words for "that session id names nothing", measured on 2.1.263 (2026-09-06):
+    /// <c>No conversation found with session ID: &lt;uuid&gt;</c>, exit 1. Matched on the stable half of the
+    /// sentence, so a reworded suffix does not stop it being recognised.
+    ///
+    /// <para>
+    /// A STRING IS A FRAGILE CONTRACT AND THAT IS ACCEPTED HERE, because of which way it fails: if a
+    /// future CLI renames this, the recovery stops firing and the behaviour falls back to the stall it
+    /// replaced — visible, and no worse than before. The fake emits the same sentence for an unknown
+    /// <c>--resume</c>, so a rename turns a contract test red rather than wedging a live session.
+    /// </para>
+    /// </summary>
+    const string TRANSCRIPT_GONE_SIGNAL = "No conversation found with session ID";
+
+    static bool Transcript_IsGone(ITurnResult result)
+    {
+        return (result.RawStderr ?? string.Empty).Contains(TRANSCRIPT_GONE_SIGNAL, StringComparison.OrdinalIgnoreCase)
+            || (result.RawStdout ?? string.Empty).Contains(TRANSCRIPT_GONE_SIGNAL, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// WHO CAN ACT ON A STALL. For a member the alert lands in its spoke, where the supervisor reads it —
+    /// agent audience, and the owner is rightly not told (decision 15).
+    ///
+    /// <para>
+    /// For a SOLO, a GENERAL supervisor or an orchestration SUPERVISOR the session's own channel IS the
+    /// owner's channel, and the only agent that reads it is the stalled session itself. Filed as an agent
+    /// entry it was suppressed from the mirror as well, so a solo orchestration that gave up after three
+    /// failures went quiet with nothing on the owner's phone and nothing in their topic — the exact
+    /// silence this alert exists to break. A session that has stopped answering is something the owner can
+    /// act on, so for those roles it is addressed to them.
+    /// </para>
+    /// </summary>
+    static AppEntryAudiences Stall_Audience(IPrintSessionState state)
+    {
+        return state.Role is SessionRoles.Solo or SessionRoles.General or SessionRoles.Supervisor
+            ? AppEntryAudiences.Owner
+            : AppEntryAudiences.Agent;
     }
 
     static string Describe_ApiErrorStatus(ITurnResult result)

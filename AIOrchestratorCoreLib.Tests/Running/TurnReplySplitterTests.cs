@@ -69,6 +69,33 @@ public class TurnReplySplitterTests
         Assert.Equal(expected, TurnReply_Splitter.Read_Address_OrNull(line));
     }
 
+    /// <summary>
+    /// Quoting the context back is ordinary model behaviour, and the `TO:` contract is in the prompt the
+    /// session was just handed — so a supervisor pasting a member's message into a fence would otherwise
+    /// have the paragraph after it filed in whatever channel that quoted line named.
+    /// </summary>
+    [Fact]
+    public void AMarkerInsideAFence_IsQuotedText_NotAnAddress()
+    {
+        var blocks = TurnReply_Splitter.Split("TO: owner\nStatus\n\nimp-1 wrote:\n```\nTO: rev-1\nplease review\n```\nand that is all.");
+
+        var block = Assert.Single(blocks);
+
+        Assert.Equal("owner", block.SourceKey);
+        Assert.Contains("TO: rev-1", block.Text);
+        Assert.Contains("and that is all.", block.Text);
+    }
+
+    [Fact]
+    public void AFenceThatIsNeverClosed_DoesNotSwallowTheRestAsProseByAccident()
+    {
+        // An unclosed fence keeps everything after it quoted — the safe direction: the text lands in the
+        // owner's channel whole rather than being cut apart on a line the session never meant as an address.
+        var blocks = TurnReply_Splitter.Split("TO: imp-1\nBRIEF\n\n```\nTO: owner\nstill inside");
+
+        Assert.Equal("imp-1", Assert.Single(blocks).SourceKey);
+    }
+
     [Fact]
     public void AnEmptyBlock_IsNotAnEntry()
     {

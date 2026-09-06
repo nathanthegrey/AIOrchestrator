@@ -74,6 +74,7 @@ public class MultiSourceLiveSmokeTests(ITestOutputHelper output)
                 $"the supervisor never briefed {implementerId}.\n{Read_All(harness, ORCH, implementerId)}");
 
             // imp-1 runs and files its report. THE MEASURE STARTS THE INSTANT THAT ENTRY EXISTS.
+            var ownerEntriesBeforeTheReport = Owner(harness, ORCH).Count(entry => entry.Author == ChannelAuthors.Supervisor);
             var stopwatch = new Stopwatch();
 
             Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () =>
@@ -106,11 +107,13 @@ public class MultiSourceLiveSmokeTests(ITestOutputHelper output)
             Assert.True(File.Exists(fruit), $"{implementerId} never wrote fruit.txt.\n{Read_All(harness, ORCH, implementerId)}");
             Assert.Contains("PLATANO", File.ReadAllText(fruit), StringComparison.OrdinalIgnoreCase);
 
-            // And the loop closed where the owner is looking: a supervisor entry in the owner channel
-            // written AFTER the report, i.e. by the turn the spoke started.
+            // And the loop closed where the owner is looking. COUNTED FROM BEFORE THE REPORT, not against
+            // a fixed number: ">= 2" has two routes to it — the turn this test is about, or a single first
+            // turn that wrote an unaddressed preamble AND a `TO: owner` block — so it would have passed
+            // without the thing it names ever happening.
             var ownerEntries = Owner(harness, ORCH);
-            Assert.True(ownerEntries.Count(entry => entry.Author == ChannelAuthors.Supervisor) >= 2,
-                $"the supervisor never came back to the owner after the report.\n{Read_All(harness, ORCH, implementerId)}");
+            Assert.True(ownerEntries.Count(entry => entry.Author == ChannelAuthors.Supervisor) > ownerEntriesBeforeTheReport,
+                $"the supervisor never came back to the owner after the report ({ownerEntriesBeforeTheReport} supervisor entries before, {ownerEntries.Count(entry => entry.Author == ChannelAuthors.Supervisor)} after).\n{Read_All(harness, ORCH, implementerId)}");
 
             // Exactly one report from the session, not two: the bridge writes the entry, the session
             // must not also (the 1b live round found this the hard way).

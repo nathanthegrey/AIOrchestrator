@@ -45,13 +45,37 @@ public class FakeClaudeStubTests : IDisposable
         Assert.NotNull(root["modelUsage"]!["claude-haiku-4-5-20251001"]);
     }
 
+    /// <summary>
+    /// A session has to be CLAIMED before it can be resumed, and this test used to skip that step: it
+    /// resumed an id the fake had never issued and expected exit 0. MEASURED against 2.1.263 on
+    /// 2026-09-06, the real CLI answers <c>No conversation found with session ID: &lt;uuid&gt;</c> and exits 1,
+    /// so what the test pinned was the fake being more permissive than the thing it stands in for — the
+    /// exact gap that let a real defect stay green once already.
+    /// </summary>
     [Fact]
     public void Resume_EchoesTheResumedSessionId()
     {
+        Assert.Equal(0, Run(["-p", "--output-format", "json", "--session-id", SESSION_ID], stdin: "first").ExitCode);
+
         var run = Run(["-p", "--output-format", "json", "--resume", SESSION_ID], stdin: "again");
 
         Assert.Equal(0, run.ExitCode);
         Assert.Equal(SESSION_ID, Parse_Object(run.Stdout)["session_id"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// The other half, which the fake did not model at all: resuming an id nothing ever created is refused.
+    /// MEASURED against 2.1.263 on 2026-09-06 — exit 1, <c>No conversation found with session ID: &lt;uuid&gt;</c>.
+    /// The bridge claims an id BEFORE starting the process, so a first turn that dies before the CLI makes
+    /// the transcript leaves every retry resuming nothing; without this the suite could not see it.
+    /// </summary>
+    [Fact]
+    public void ResumingASessionThatWasNeverCreated_IsRefused()
+    {
+        var run = Run(["-p", "--output-format", "json", "--resume", "3f1810a4-bf77-47d7-b7cc-9e612da7ce92"], stdin: "again");
+
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("No conversation found with session ID", run.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -80,7 +80,26 @@ if (parsed.SessionId != null && Invocation_Logger.Has_ClaimedSessionId(logPath, 
     return 1;
 }
 
+// MEASURED AGAINST THE REAL CLI on 2026-09-06 (2.1.263): resuming a session id that was never
+// created is refused — "No conversation found with session ID: <uuid>", exit 1. The fake accepted any
+// --resume, and that permissiveness kept a real defect green: the bridge claims an id BEFORE starting
+// the process, so a first turn that died before the CLI made the transcript had every retry resume
+// something that never existed, and the session wedged for good. The fake matches the measurement,
+// never what the bridge wishes were true.
+//
+// DECIDED HERE, REFUSED AFTER THE LOG. A refused invocation is still an invocation the bridge made,
+// and the log is the record of what it ran: refusing before appending made the failed attempt
+// invisible, so a test could not even see the retry it was written to check. The claim check above
+// keeps its place because it reads the log for its own answer and would otherwise find itself.
+var unknownResume = parsed.Resume != null && !Invocation_Logger.Has_ClaimedSessionId(logPath, parsed.Resume);
+
 var (overall, forName) = Invocation_Logger.Append(logPath, rawArgs, parsed, prompt, workingDirectory);
+
+if (unknownResume)
+{
+    Console.Error.WriteLine($"No conversation found with session ID: {parsed.Resume}");
+    return 1;
+}
 var turn = scenario.Resolve_Turn(parsed.Name, parsed.Name != null && scenario.TurnsByName.ContainsKey(parsed.Name) ? forName : overall);
 
 var sessionId = parsed.SessionId ?? parsed.Resume ?? Guid.NewGuid().ToString();

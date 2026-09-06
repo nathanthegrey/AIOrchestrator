@@ -77,6 +77,20 @@ public static class TurnCursor_Factory
                 stillLive.Add(ChannelEntry_Digest.Compute(entry));
         }
 
+        // AN EMPTY READ IS NOT AN EMPTY CHANNEL, and the prune is the one destructive step in this
+        // design. The re-read is best-effort — a read landing inside the compactor's rename-over, or on
+        // a locked file, comes back as the empty string and is indistinguishable from "there is nothing
+        // in it". Pruning against that wipes every delivered identity, and the next tick then hands the
+        // session its whole live channel again as new traffic: a supervisor re-answering every member
+        // report, duplicate verdicts in every spoke, every implementer re-woken. Silently, too — the
+        // high-water index is untouched, so the archive-gap warning cannot fire either.
+        //
+        // Skipping the prune is always safe: the set stays larger than it needs to be until a read that
+        // actually returns something trims it. Growth is bounded by the channel, and a stale identity
+        // can only ever prevent a re-delivery, never cause one.
+        if (stillLive.Count == 0 && cursor.Delivered.Count > 0)
+            return Create(cursor.SourceKey, cursor.ChannelFilePath, Advance_HighWater(highWater, justDelivered), Union(cursor.Delivered, justDelivered));
+
         HashSet<string> delivered = [];
 
         foreach (var identity in cursor.Delivered)
@@ -92,5 +106,23 @@ public static class TurnCursor_Factory
         }
 
         return Create(cursor.SourceKey, cursor.ChannelFilePath, highWater, delivered);
+    }
+
+    static int Advance_HighWater(int highWater, IReadOnlyList<IChannelEntry> justDelivered)
+    {
+        foreach (var entry in justDelivered)
+            highWater = Math.Max(highWater, entry.Index);
+
+        return highWater;
+    }
+
+    static IReadOnlySet<string> Union(IReadOnlySet<string> delivered, IReadOnlyList<IChannelEntry> justDelivered)
+    {
+        HashSet<string> union = [.. delivered];
+
+        foreach (var entry in justDelivered)
+            union.Add(ChannelEntry_Digest.Compute(entry));
+
+        return union;
     }
 }

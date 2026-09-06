@@ -35,6 +35,9 @@ public static class TurnReply_Splitter
 {
     public const string TO_MARKER = "TO:";
 
+    /// <summary>Opens and closes a markdown code fence. Text between two of them is quoted, never addressed.</summary>
+    const string FENCE = "```";
+
     public static IReadOnlyList<ReplyBlock> Split(string? resultText)
     {
         var text = (resultText ?? string.Empty).Replace("\r\n", "\n");
@@ -43,9 +46,23 @@ public static class TurnReply_Splitter
         string? currentKey = null;
         List<string> currentLines = [];
 
+        var insideFence = false;
+
         foreach (var line in text.Split('\n'))
         {
-            if (Read_Address_OrNull(line) is not string address)
+            // A MARKER INSIDE A FENCE IS QUOTED TEXT. Quoting the context back is ordinary model
+            // behaviour — PrintTurnEntry_Splitter neutralises echoed HEADERS for exactly that reason —
+            // and the multi-source contract, `TO:` lines and all, is in the prompt the session was just
+            // handed. A supervisor pasting a member's message into a fence would otherwise have the
+            // paragraph after it filed in whatever channel that quoted line named.
+            if (line.TrimStart().StartsWith(FENCE, StringComparison.Ordinal))
+            {
+                insideFence = !insideFence;
+                currentLines.Add(line);
+                continue;
+            }
+
+            if (insideFence || Read_Address_OrNull(line) is not string address)
             {
                 currentLines.Add(line);
                 continue;

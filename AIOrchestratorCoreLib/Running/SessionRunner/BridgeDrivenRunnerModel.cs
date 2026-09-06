@@ -48,6 +48,19 @@ internal sealed class BridgeDrivenRunnerModel(SessionRunners kind, ISupervisionP
         if (existing != null)
         {
             _log.Log_Info(launch.OrchId, $"{launch.Role} '{launch.MemberId}' is {word}-run — already registered (session {existing.SessionId}, {existing.ExecutedTurns.Count} turn(s) executed); its transcript resumes on the next inbound entry");
+
+            // THE MODEL AND THE REPO ARE RE-READ, because config.json can change under a running session.
+            // A terminal session picks up a new `implementerModel` at its next respawn; a bridge-driven one
+            // used to keep whatever was captured the first time, for the life of the state file, silently —
+            // so an owner who switched a role to a cheaper model watched it go on billing the old one with
+            // nothing anywhere saying why. The cursors and the transcript are untouched: this is the launch
+            // configuration, not the session's memory.
+            if (existing.Model != launch.Model || existing.WorkingDirectory != launch.WorkingDirectory)
+            {
+                _log.Log_Info(launch.OrchId, $"'{launch.MemberId}' was registered with model '{existing.Model ?? "(default)"}' in '{existing.WorkingDirectory}' and is now configured model '{launch.Model ?? "(default)"}' in '{launch.WorkingDirectory}' — updated for its next turn");
+                PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_Relaunched(existing, launch.WorkingDirectory, launch.Model));
+            }
+
             Describe_Sources(launch, sources);
             return;
         }

@@ -262,10 +262,19 @@ public class PrintTurnDispatcherTests
         Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 2, PrintRunnerTestHarness.GENEROUS));
         await dispatcher.Stop_Async();
 
-        // Turn 1 was skipped without a process; turn 2 ran.
-        var invocation = Assert.Single(harness.Read_Invocations());
-        Assert.Contains("--resume", PrintRunnerTestHarness.Args(invocation));
-        Assert.Contains($"[bridge turn {orchId}/{memberId}/2]", invocation["prompt"]!.GetValue<string>());
+        // TURN 1 WAS SKIPPED WITHOUT A PROCESS, AND THAT IS ASSERTED FROM THE TURNS, NOT FROM A COUNT OF
+        // PROCESSES. It used to be `Assert.Single(invocations)`, which stopped meaning "turn 1 ran nothing"
+        // the moment anything else could legitimately add an invocation — and something can: this state
+        // says the id is spent while the CLI has never heard of it, so the first attempt resumes, is
+        // refused ("No conversation found…"), and the recovery claims a fresh id and succeeds. Every
+        // invocation here belongs to turn 2; none belongs to turn 1, which is the actual claim.
+        var invocations = harness.Read_Invocations();
+
+        Assert.All(invocations, line => Assert.DoesNotContain($"[bridge turn {orchId}/{memberId}/1]", line["prompt"]?.GetValue<string>() ?? string.Empty));
+        Assert.Contains(invocations, line => (line["prompt"]?.GetValue<string>() ?? string.Empty).Contains($"[bridge turn {orchId}/{memberId}/2]", StringComparison.Ordinal));
+
+        // And turn 1 produced no entry of its own: exactly one report reached the channel.
+        Assert.Single(ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId)), entry => entry.Author == ChannelAuthors.Implementer);
         Assert.Equal(3, harness.Read_State(SessionRoles.Implementer, orchId, memberId).NextTurnNumber);
     }
 
