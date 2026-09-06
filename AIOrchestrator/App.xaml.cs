@@ -57,7 +57,7 @@ public partial class App : Application
         var services = OrchestratorServices_Factory.Create(paths);
         _log = services.Log;
 
-        KitAssets_Bootstrapper.Ensure_Installed(Path.Combine(AppContext.BaseDirectory, "kit"), options.ClaudeHome, paths, services.Log);
+        KitAssets_Bootstrapper.Ensure_Installed(Path.Combine(AppContext.BaseDirectory, "kit"), options.ClaudeHome, paths, services.Log, services.PluginGate);
 
         _engineCancellation = new CancellationTokenSource();
         var engineToken = _engineCancellation.Token;

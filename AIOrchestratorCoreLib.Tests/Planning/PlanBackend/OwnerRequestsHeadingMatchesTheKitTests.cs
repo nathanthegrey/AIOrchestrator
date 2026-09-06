@@ -6,7 +6,7 @@ namespace AIOrchestratorCoreLib.Tests.Planning.PlanBackend;
 
 /// <summary>
 /// THE APP NOW WRITES A SECTION THE ROLE COMMANDS TEACH, so there are three copies of its heading and
-/// its table shape: `kit/commands/supervisor.md`, `kit/commands/solo.md`, and
+/// its table shape: `kit/skills/supervisor/SKILL.md`, `kit/skills/solo/SKILL.md`, and
 /// <see cref="PlanRequest_Writer"/>. That is the drift mechanism `PlanLedger_Markers` documents — a
 /// marker list written down five times ended up with four entries in two of them — arriving in a new
 /// place, and prose cannot hold it.
@@ -55,25 +55,18 @@ public class OwnerRequestsHeadingMatchesTheKitTests
             StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// The role protocols moved to kit/skills/&lt;role&gt;/SKILL.md when the kit became a plugin. The
+    /// argument is still the old "&lt;role&gt;.md" spelling, because it is what every assertion above
+    /// reads as; only where the file LIVES changed. Refuses rather than returning a guess — a
+    /// content test that located no content passes by finding nothing (decision 20).
+    /// </summary>
     static string Read_Command(string fileName)
     {
-        var folder = AppContext.BaseDirectory;
+        var role = Path.GetFileNameWithoutExtension(fileName);
 
-        for (var depth = 0; depth < 8; depth++)
-        {
-            var candidate = Path.Combine(folder, "kit", "commands", fileName);
-
-            if (File.Exists(candidate))
-                return File.ReadAllText(candidate);
-
-            var parent = Directory.GetParent(folder);
-
-            if (parent == null)
-                break;
-
-            folder = parent.FullName;
-        }
-
-        throw new Exception($"could not locate kit/commands/{fileName} — the harness is not reading the file it asserts about");
+        return Kit.KitRepoFiles.Find_RoleProtocol(role) is string path
+            ? File.ReadAllText(path)
+            : throw new Exception($"kit/skills/{role}/SKILL.md was not found walking up from {AppContext.BaseDirectory} — REFUSING to assert about a file this harness never read.");
     }
 }

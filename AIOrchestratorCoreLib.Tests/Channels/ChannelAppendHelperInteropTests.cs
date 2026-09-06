@@ -6,7 +6,7 @@ namespace AIOrchestratorCoreLib.Tests.Channels;
 
 /// <summary>
 /// The protocol is only worth anything if BOTH sides implement it identically, so these run the
-/// REAL kit/channel-append.sh against the REAL <see cref="ChannelFile_Lock"/>. A .NET-only test of
+/// REAL kit/bin/channel-append.sh against the REAL <see cref="ChannelFile_Lock"/>. A .NET-only test of
 /// the .NET half would prove the app cannot collide with itself, which was never the open question.
 /// <para>
 /// Nothing here skips. If bash or the script cannot be found, the test FAILS: a harness that cannot
@@ -411,7 +411,7 @@ public class ChannelAppendHelperInteropTests : IDisposable
 
         while (directory != null)
         {
-            var candidate = Path.Combine(directory.FullName, "kit", "channel-append.sh");
+            var candidate = Path.Combine(directory.FullName, "kit", "bin", "channel-append.sh");
 
             if (File.Exists(candidate))
                 return candidate;
@@ -420,7 +420,7 @@ public class ChannelAppendHelperInteropTests : IDisposable
         }
 
         throw new Exception(
-            $"kit/channel-append.sh was not found walking up from '{AppContext.BaseDirectory}'. "
+            $"kit/bin/channel-append.sh was not found walking up from '{AppContext.BaseDirectory}'. "
             + "This test asserts on the real script; without it there is nothing under test and a pass would be meaningless.");
     }
 

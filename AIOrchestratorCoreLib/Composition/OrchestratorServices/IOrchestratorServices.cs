@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Kit.PluginGate;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -20,4 +21,7 @@ public interface IOrchestratorServices
     IOrchestrationSessionStore Store { get; }
     IOrchestrationLauncher Launcher { get; }
     IBridgeEngine Engine { get; }
+
+    /// <summary>Whether sessions may start. The host's kit check records the verdict into it.</summary>
+    IPluginGate PluginGate { get; }
 }

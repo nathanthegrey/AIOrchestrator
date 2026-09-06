@@ -1,6 +1,7 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.GeneralSupervision;
+using AIOrchestratorCoreLib.Kit.PluginGate;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
@@ -18,6 +19,7 @@ internal sealed class OrchestrationLauncherModel(
     IOrchestratorConfigProvider configProvider,
     IOrchestrationSessionStore store,
     IReadOnlyList<ISessionRunner> runners,
+    IPluginGate pluginGate,
     IOrchestrationLog log) : IOrchestrationLauncher
 {
     /// <summary>The shell writes its pid file within ~1 s of starting; 40 × 500 ms is generous.</summary>
@@ -34,6 +36,12 @@ internal sealed class OrchestrationLauncherModel(
     /// forgotten at one of its three call sites.
     /// </summary>
     readonly IReadOnlyDictionary<SessionRunners, ISessionRunner> _runners = runners.ToDictionary(runner => runner.Kind);
+
+    /// <summary>
+    /// Consulted in Start_Session, AFTER the runner is resolved and BEFORE it is started — so the
+    /// kit is gated once for every transport in that dictionary, including the ones not written yet.
+    /// </summary>
+    readonly IPluginGate _pluginGate = pluginGate;
     readonly IOrchestrationLog _log = log;
 
     public IOrchestrationSession Start_Orchestration(string repoName, string repoPath)
@@ -422,6 +430,19 @@ internal sealed class OrchestrationLauncherModel(
         // headless turns answering the same brief, while nothing would ever respawn the window.
         if (runner.Kind == SessionRunners.Terminal && PrintSessionState_Store.Delete_IfExists(_paths, launch.Role, launch.OrchId, launch.MemberId))
             _log.Log_Warning(launch.OrchId, $"'{launch.MemberId}' was registered as print-run but its role is now runner: terminal — the stale registration was cleared and it is spawned in a window");
+
+        // THE KIT GATE. A session started against a kit this host was not built for would follow a
+        // protocol nobody here has read, and would do it silently — so it does not start.
+        //
+        // It REFUSES rather than throwing. The watchdog reaches this on its tick, inside the bridge's
+        // own loop with nothing catching, so an exception here would take the bridge down — and the
+        // bridge staying up is exactly how the owner gets TOLD about the bad kit. Refusing costs a
+        // session that would have been wrong anyway; throwing would cost the message about it.
+        if (!_pluginGate.Spawning_Allowed)
+        {
+            _log.Log_Error(launch.OrchId, $"REFUSED to start '{launch.MemberId}' ({launch.Role}) — {_pluginGate.Refusal}", null);
+            return runner;
+        }
 
         runner.Start(launch);
         return runner;

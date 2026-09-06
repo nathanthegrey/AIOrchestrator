@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Kit.PluginGate;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
@@ -21,9 +22,13 @@ public static class OrchestratorServices_Factory
         var log = OrchestrationLog_Factory.Create(paths);
         var store = OrchestrationSessionStore_Factory.Create(paths);
         var spawner = SessionSpawner_Factory.Create();
-        var launcher = OrchestrationLauncher_Factory.Create(paths, configProvider, store, spawner, log);
+        // Built here and RECORDED later, by the host's kit check: the verdict depends on a Claude
+        // home this composition root is not given, so it genuinely is not knowable yet. Until it is
+        // recorded the gate says yes, and the startup log says the check has not run.
+        var pluginGate = PluginGate_Factory.Create();
+        var launcher = OrchestrationLauncher_Factory.Create(paths, configProvider, store, spawner, log, pluginGate);
         var engine = BridgeEngine_Factory.Create(paths, configProvider, store, launcher, log);
 
-        return new OrchestratorServicesModel(paths, configProvider, log, store, launcher, engine);
+        return new OrchestratorServicesModel(paths, configProvider, log, store, launcher, engine, pluginGate);
     }
 }
