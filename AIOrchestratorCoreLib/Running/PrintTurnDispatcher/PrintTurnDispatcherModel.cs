@@ -3,30 +3,36 @@ using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
+using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
+using AIOrchestratorCoreLib.Running.TurnCursor;
 using AIOrchestratorCoreLib.Running.TurnExecutor;
 using AIOrchestratorCoreLib.Running.TurnResult;
+using AIOrchestratorCoreLib.Running.TurnSource;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Usage;
 
 namespace AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
 
 /// <summary>
-/// THE QUEUE IS THE CHANNEL. A print session has no process to hold a queue in, so its pending
-/// work is defined by the file: every inbound entry above the state's last-handled index is
-/// pending, and one turn takes all of them. That gives FIFO per session, coalescing (entries that
-/// land within the window ride together), and restart recovery (a bridge that died mid-turn finds
-/// the same entries pending) without a queue object anywhere.
+/// THE QUEUE IS THE CHANNELS. A bridge-driven session has no process to hold a queue in, so its
+/// pending work is defined by the files: every inbound entry of every channel it is woken by whose
+/// identity is not yet in that channel's cursor is pending, and one turn takes all of them. That gives
+/// FIFO per session, coalescing (entries that land within the window ride together, ACROSS channels),
+/// and restart recovery (a bridge that died mid-turn finds the same entries pending) without a queue
+/// object anywhere.
 ///
-/// Per tick, per registered session: read the channel, select the pending entries, wait out the
-/// coalesce window, then start ONE turn on a background task — never more than one per session,
-/// never more than the global and per-orchestration slots allow. The task runs the process,
-/// writes the session's entry from the JSON result, records a <c>turn_ended</c> entry for the
-/// supervisor, and persists the state. A failed attempt (timeout, non-zero exit, <c>is_error</c>)
-/// is counted and retried after a backoff under the SAME request id; at <see cref="MAX_ATTEMPTS"/>
-/// the session stalls — an alert entry, no further attempts — until new traffic arrives.
+/// Per tick, per registered session: resolve its channels, read them, select the pending entries, wait
+/// out the coalesce window, then start ONE turn on a background task — never more than one per session,
+/// never more than the global and per-orchestration slots allow. The task runs the process, writes the
+/// session's entries from the result — each part into the channel it was addressed to — records a
+/// <c>turn_ended</c> entry, and persists the cursors. A failed attempt (timeout, non-zero exit,
+/// <c>is_error</c>) is counted and retried after a backoff under the SAME request id; at
+/// <see cref="MAX_ATTEMPTS"/> the session stalls — an alert entry, no further attempts — until the
+/// pending set changes.
 ///
 /// Idempotency: a request id already in the executed list is skipped without running. The prompt
 /// of the first resumed turn after a bridge start lists the executed turns, so a transcript that
@@ -43,6 +49,10 @@ namespace AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
 /// and that is the point: two transports must never grow two answers to "has this turn already
 /// run".
 /// </para>
+/// <para>
+/// NOR IS "WHICH CHANNELS" — that is <see cref="TurnSources_Resolver"/>, resolved fresh every tick so a
+/// member added mid-life becomes a source of its supervisor's next turn with nothing re-registered.
+/// </para>
 /// </summary>
 internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 {
@@ -50,6 +60,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     const string RUNNER_ENV_VAR = PrintTurn_Words.RUNNER_ENV_VAR;
     const string TURN_ENDED_SUBJECT = PrintTurn_Words.TURN_ENDED_SUBJECT;
     const string TURN_STALLED_SUBJECT = PrintTurn_Words.TURN_STALLED_SUBJECT;
+    const string MISADDRESSED_SUBJECT = PrintTurn_Words.MISADDRESSED_SUBJECT;
     const int ENTRY_APPEND_ATTEMPTS = 3;
     const int ENTRY_APPEND_RETRY_MILLISECONDS = 300;
     static readonly TimeSpan STOP_GRACE = TimeSpan.FromSeconds(15);
@@ -67,6 +78,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     readonly Dictionary<string, SessionTracker> _trackers = [];
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
     readonly HashSet<string> _warnedStaleRegistrations = [];
+    readonly HashSet<string> _warnedArchiveGaps = [];
     readonly SemaphoreSlim _globalSlots;
     readonly int _slotsPerOrchestration;
 
@@ -93,14 +105,31 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// <summary>What the dispatcher remembers about a session BETWEEN ticks and only until restart — nothing here is truth, the state file is.</summary>
     sealed class SessionTracker
     {
-        public int NewestPendingIndex;
-        public DateTime NewestPendingSeenAt;
+        /// <summary>
+        /// The pending set as one string, so "has anything changed since I last looked" is one
+        /// comparison across every channel at once. It is built from entry IDENTITIES and never from
+        /// indices or counts — the same reason the cursor is (see <see cref="ChannelEntry_Digest"/>).
+        /// </summary>
+        public string PendingSignature = string.Empty;
+
+        public DateTime PendingSeenAt;
         public DateTime? LastFailureAt;
-        public int StalledAtIndex = -1;
+
+        /// <summary>The pending set a stall happened on; null while nothing is stalled.</summary>
+        public string? StalledOnSignature;
 
         /// <summary>True until this dispatcher instance has run the session once — the "resumed after a restart" signal for the prompt.</summary>
         public bool FirstTurnSinceStart = true;
     }
+
+    /// <summary>
+    /// One source and what of it is waiting, as of this tick. It carries the PENDING ENTRIES AND NOTHING
+    /// ELSE on purpose: an earlier shape also held the file's whole contents and the cursor it was read
+    /// against, and neither had a reader — a snapshot nobody consumes is how the next person reasons
+    /// from a stale copy of a file that has since been appended to. <see cref="Advance_Cursors"/> re-reads
+    /// deliberately, and this leaves it nothing to re-read from.
+    /// </summary>
+    readonly record struct SourceRead(ITurnSource Source, IReadOnlyList<IChannelEntry> Pending);
 
     public int InFlightCount
     {
@@ -120,10 +149,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var registered in Discover_RegisteredSessions())
         {
-            // A STALE REGISTRATION IS NOT A MANDATE. The state file says a session WAS print-run;
+            // A STALE REGISTRATION IS NOT A MANDATE. The state file says a session WAS bridge-driven;
             // config.json says whether it still is. Flipped back to terminal, the launcher spawns a
             // window for this member — and without this check the dispatcher would keep firing
-            // `claude -p` turns into the same channel, two sessions answering one brief. The file is
+            // turns into the same channel, two sessions answering one brief. The file is
             // deleted by the launcher at the next spawn; until then, this is the gate.
             if (!Is_StillBridgeDriven(configs, registered.Role))
             {
@@ -248,36 +277,117 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         var state = PrintSessionState_Store.Read_OrNull(stateFile);
 
-        if (state == null || !File.Exists(state.ChannelFilePath))
+        if (state == null)
             return;
 
-        var entries = ChannelEntry_Parser.Parse_All(File.ReadAllText(state.ChannelFilePath));
-        var pending = PrintTurn_Trigger.Select_Pending(role, entries, state.LastHandledEntryIndex);
+        var sources = TurnSources_Resolver.Resolve(_paths, _store, role, orchId, memberId);
+        var reads = Read_Sources(stateFile, ref state, role, sources);
 
-        if (pending.Count == 0)
+        if (reads.Count == 0)
+            return;
+
+        var ordered = PendingTraffic_Orderer.Order([.. reads.Select(read => (read.Source, read.Pending))]);
+
+        if (ordered.Count == 0)
             return;
 
         var tracker = Get_Tracker(key);
-        var newest = pending[^1].Index;
+        var signature = Describe_PendingSignature(ordered);
 
-        if (tracker.NewestPendingIndex != newest)
+        if (tracker.PendingSignature != signature)
         {
-            tracker.NewestPendingIndex = newest;
-            tracker.NewestPendingSeenAt = nowLocal;
+            tracker.PendingSignature = signature;
+            tracker.PendingSeenAt = nowLocal;
         }
 
-        // Entries still landing ride the same turn: wait until the newest has been quiet for the window.
-        if (nowLocal - tracker.NewestPendingSeenAt < configs.CoalesceWindow)
+        // Entries still landing ride the same turn, whichever channel they land on: wait until the set
+        // has been unchanged for the window.
+        if (nowLocal - tracker.PendingSeenAt < configs.CoalesceWindow)
             return;
 
-        // Stalled after MAX_ATTEMPTS: nothing runs until an entry newer than the one it stalled on arrives.
-        if (state.FailedAttempts >= MAX_ATTEMPTS && newest <= tracker.StalledAtIndex)
+        // Stalled after MAX_ATTEMPTS: nothing runs until the pending set changes — which is what "new
+        // traffic arrives" means once a cursor is a set of identities rather than a number.
+        if (state.FailedAttempts >= MAX_ATTEMPTS && signature == tracker.StalledOnSignature)
             return;
 
         if (tracker.LastFailureAt != null && nowLocal - tracker.LastFailureAt.Value < _retryBackoff)
             return;
 
-        Start_Turn(key, stateFile, state, pending, tracker, configs);
+        Start_Turn(key, stateFile, state, ordered, sources, tracker, configs);
+    }
+
+    /// <summary>
+    /// Reads every source, baselining the ones this session has never seen and dropping the cursors of
+    /// sources it no longer has. A change to the cursor set is PERSISTED HERE, before any turn: a
+    /// baseline taken on a tick that starts no turn must survive a restart, or the same history is
+    /// absorbed and announced again on every tick for ever.
+    /// </summary>
+    IReadOnlyList<SourceRead> Read_Sources(string stateFile, ref IPrintSessionState state, SessionRoles role, IReadOnlyList<ITurnSource> sources)
+    {
+        var known = state.Cursors.ToDictionary(cursor => cursor.SourceKey, StringComparer.Ordinal);
+
+        List<SourceRead> reads = [];
+        List<ITurnCursor> cursors = [];
+        var changed = false;
+
+        foreach (var source in sources)
+        {
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(source.ChannelFilePath));
+
+            if (!known.TryGetValue(source.Key, out var cursor))
+            {
+                // A SOURCE THAT APPEARS WHILE THE SESSION IS RUNNING STARTS EMPTY, so everything in it
+                // is traffic and none of it is absorbed. This is the opposite of the baseline taken at
+                // REGISTRATION, and deliberately: a channel that turns up now belongs to a member that
+                // was created now, and its very first entry — the member's boot greeting, landing
+                // between its spawn and the next tick — is exactly what a supervisor is here to answer.
+                // Absorbing it would swallow the one entry this rule can ever see.
+                cursor = TurnCursor_Factory.Create_Empty(source);
+                changed = true;
+
+                _log.Log_Info(state.OrchId, $"'{state.MemberId}' is now also woken by channel '{source.Key}'");
+            }
+
+            cursors.Add(cursor);
+            Warn_IfEntriesWereArchivedUndelivered(state, source, cursor, entries);
+
+            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, entries, cursor)));
+        }
+
+        // A cursor whose source is gone (a closed member) is dropped with it — kept, it would be one
+        // more key nothing matches and one more channel path nobody reads.
+        if (changed || cursors.Count != state.Cursors.Count)
+        {
+            state = PrintSessionState_Factory.CreateFrom_Existing_Cursors(state, cursors);
+            PrintSessionState_Store.Write(stateFile, state);
+        }
+
+        return reads;
+    }
+
+    /// <summary>
+    /// THE ONE HOLE THIS CURSOR HAS, MADE AUDIBLE. Only the LIVE file is read, so entries compaction
+    /// archived before the bridge ever handed them over are gone from its view — the same one-way hole
+    /// <see cref="Bridge.BridgeState_Store"/> describes for the mirror, reachable here only if a session
+    /// went undelivered for more than <see cref="Channel_Compactor.COMPACT_ABOVE_ENTRIES"/> entries.
+    /// Reading the archive every tick is exactly what compaction exists to avoid, so this detects the
+    /// gap instead of closing it: everything still live sitting above the highest index ever delivered
+    /// means entries left in between. Said once per channel per app life.
+    /// </summary>
+    void Warn_IfEntriesWereArchivedUndelivered(IPrintSessionState state, ITurnSource source, ITurnCursor cursor, IReadOnlyList<IChannelEntry> entries)
+    {
+        if (cursor.Delivered.Count == 0 || entries.Count == 0)
+            return;
+
+        var lowestLive = entries.Min(entry => entry.Index);
+
+        if (lowestLive <= cursor.HighWaterIndex + 1)
+            return;
+
+        if (!_warnedArchiveGaps.Add($"{state.OrchId}/{state.MemberId}/{source.Key}"))
+            return;
+
+        _log.Log_Warning(state.OrchId, $"'{state.MemberId}': channel '{source.Key}' now starts at entry [{lowestLive}] but nothing above [{cursor.HighWaterIndex}] was ever delivered to this session — entries [{cursor.HighWaterIndex + 1}]–[{lowestLive - 1}] were archived without starting a turn and are only in '{Path.GetFileName(Channel_Compactor.Build_ArchiveFilePath(source.ChannelFilePath))}'");
     }
 
     /// <summary>
@@ -302,7 +412,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// per-call budget.
     /// </para>
     /// </summary>
-    void Start_Turn(string key, string stateFile, IPrintSessionState state, IReadOnlyList<IChannelEntry> pending, SessionTracker tracker, IRunnerConfigs configs)
+    void Start_Turn(string key, string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, IReadOnlyList<ITurnSource> sources, SessionTracker tracker, IRunnerConfigs configs)
     {
         lock (_lock)
         {
@@ -311,7 +421,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             using var suppressed = ExecutionContext.SuppressFlow();
 
-            _inFlight[key] = Task.Run(() => Execute_Turn_Async(key, stateFile, state, pending, tracker, configs));
+            _inFlight[key] = Task.Run(() => Execute_Turn_Async(key, stateFile, state, pending, sources, tracker, configs));
         }
     }
 
@@ -345,7 +455,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     // ----- the turn -----
 
-    async Task Execute_Turn_Async(string key, string stateFile, IPrintSessionState state, IReadOnlyList<IChannelEntry> pending, SessionTracker tracker, IRunnerConfigs configs)
+    async Task Execute_Turn_Async(string key, string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, IReadOnlyList<ITurnSource> sources, SessionTracker tracker, IRunnerConfigs configs)
     {
         var cancellationToken = _shutdown.Token;
         var orchestrationSlots = Get_OrchestrationSlots(state.OrchId);
@@ -360,7 +470,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
                 try
                 {
-                    await Run_Turn_Async(stateFile, state, pending, tracker, configs, cancellationToken);
+                    await Run_Turn_Async(stateFile, state, pending, sources, tracker, configs, cancellationToken);
                 }
                 finally
                 {
@@ -374,7 +484,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
         catch (OperationCanceledException)
         {
-            // Shutdown: the state was not advanced, so the same entries are pending at the next start.
+            // Shutdown: the cursors were not advanced, so the same entries are pending at the next start.
         }
         catch (Exception ex)
         {
@@ -388,13 +498,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
     }
 
-    async Task Run_Turn_Async(string stateFile, IPrintSessionState state, IReadOnlyList<IChannelEntry> pending, SessionTracker tracker, IRunnerConfigs configs, CancellationToken cancellationToken)
+    async Task Run_Turn_Async(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, IReadOnlyList<ITurnSource> sources, SessionTracker tracker, IRunnerConfigs configs, CancellationToken cancellationToken)
     {
         if (state.FailedAttempts >= MAX_ATTEMPTS)
         {
             // New traffic after a stall: the counter starts over for this turn.
             state = PrintSessionState_Factory.CreateFrom_Existing_AttemptsReset(state);
-            tracker.StalledAtIndex = -1;
+            tracker.StalledOnSignature = null;
         }
 
         var turnNumber = state.NextTurnNumber;
@@ -454,9 +564,9 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         };
 
         var attempt = state.FailedAttempts + 1;
-        _log.Log_Info(state.OrchId, $"{SessionRunner_Names.Get_Word(executor.Kind)} turn {requestId} started — attempt {attempt}, entries [{pending[0].Index}]–[{pending[^1].Index}], {(resumeTranscript ? "resume" : fresh ? "fresh session" : "first turn")} {sessionId}");
+        _log.Log_Info(state.OrchId, $"{SessionRunner_Names.Get_Word(executor.Kind)} turn {requestId} started — attempt {attempt}, {Describe_Traffic(pending)}, {(resumeTranscript ? "resume" : fresh ? "fresh session" : "first turn")} {sessionId}");
 
-        var result = await executor.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, alreadyExecuted, environment, configs.TurnTimeout, cancellationToken);
+        var result = await executor.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecuted, environment, configs.TurnTimeout, cancellationToken);
 
         // The runner rethrows on shutdown rather than reporting a timeout, so nothing below runs
         // for a turn the app cancelled: no failure counted, no turn_ended entry, no attempt spent.
@@ -466,9 +576,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (TurnOutcomes.Is_Success(result))
         {
-            var (subject, body) = PrintTurnEntry_Splitter.Split(result.ResultText);
-
-            if (!Append_SessionEntry_WithRetry(state, subject, body))
+            if (!Write_Reply(state, sources, result.ResultText))
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
@@ -477,8 +585,9 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             Append_TurnEnded(state, requestId, attempt, pending, result, outcome, null);
 
-            var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, pending[0].Index, pending[^1].Index, DateTime.UtcNow, outcome, result.TotalCostUsd);
-            PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, result.SessionId ?? sessionId));
+            var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, pending[0].Entry.Index, pending[^1].Entry.Index, DateTime.UtcNow, outcome, result.TotalCostUsd);
+
+            PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, result.SessionId ?? sessionId, Advance_Cursors(state, sources, pending)));
             tracker.LastFailureAt = null;
 
             _log.Log_Info(state.OrchId, $"Turn {requestId} ended — {outcome}, {Describe_Cost(result)}, {result.Elapsed.TotalSeconds:F1} s wall");
@@ -488,7 +597,115 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, null);
     }
 
-    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<IChannelEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note)
+    /// <summary>
+    /// EVERY DELIVERED ENTRY IS RECORDED, whichever channel it came from and whether or not the session
+    /// answered that channel. Delivered means handed over; a supervisor that reads a spoke and says
+    /// nothing has still read it, and re-handing it the same entry next tick would be a loop.
+    ///
+    /// <para>
+    /// The live file is re-read here rather than reused from the tick's read, because the turn has since
+    /// appended to it: pruning against a stale copy would keep identities compaction has moved out and,
+    /// worse, would be a second opinion about what the file contains.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending)
+    {
+        var byKey = state.Cursors.ToDictionary(cursor => cursor.SourceKey, StringComparer.Ordinal);
+
+        List<ITurnCursor> advanced = [];
+
+        foreach (var source in sources)
+        {
+            if (!byKey.TryGetValue(source.Key, out var cursor))
+                continue;
+
+            var delivered = pending.Where(item => item.Source.Key == source.Key).Select(item => item.Entry).ToList();
+            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(source.ChannelFilePath));
+
+            advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
+        }
+
+        return advanced;
+    }
+
+    // ----- the reply -----
+
+    /// <summary>
+    /// The session's final message, filed into the channels it addressed. Returns whether every part
+    /// landed — a false is a locked channel, which the caller treats as a failed turn so the same
+    /// entries are still pending on the retry.
+    ///
+    /// <para>
+    /// A SESSION WITH ONE CHANNEL IS NOT SPLIT. It was never told the format, and a report that happened
+    /// to contain a line beginning "to:" would be cut in half by a rule written for somebody else.
+    /// </para>
+    /// <para>
+    /// A PARTIAL WRITE COSTS A DUPLICATE, AND THAT IS THE CHOICE. If one of several blocks cannot be
+    /// appended — its channel held by another writer for the whole budget — the turn is reported failed
+    /// and retried, so the blocks that DID land are written a second time. The alternative is to accept
+    /// the partial write, which loses the block that failed with nobody told. A duplicated entry is
+    /// visible in a file a human reads; a missing verdict is not, and the session that was waiting for it
+    /// waits for ever. Same rule as everywhere else here: fail towards the visible side.
+    /// </para>
+    /// </summary>
+    bool Write_Reply(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string resultText)
+    {
+        var author = SessionRole_Names.Get_Author(state.Role);
+        var ownChannel = state.ChannelFilePath;
+
+        if (sources.Count <= 1)
+        {
+            var (soleSubject, soleBody) = PrintTurnEntry_Splitter.Split(resultText);
+            return Append_SessionEntry_WithRetry(ownChannel, author, soleSubject, soleBody);
+        }
+
+        var byKey = sources.ToDictionary(source => source.Key, StringComparer.OrdinalIgnoreCase);
+        var blocks = TurnReply_Splitter.Split(resultText);
+
+        if (blocks.Count == 0)
+        {
+            var (emptySubject, emptyBody) = PrintTurnEntry_Splitter.Split(resultText);
+            return Append_SessionEntry_WithRetry(ownChannel, author, emptySubject, emptyBody);
+        }
+
+        List<string> misaddressed = [];
+        var allLanded = true;
+
+        foreach (var block in blocks)
+        {
+            var target = ownChannel;
+
+            if (block.SourceKey != null)
+            {
+                if (byKey.TryGetValue(block.SourceKey, out var source))
+                    target = source.ChannelFilePath;
+                else
+                    misaddressed.Add(block.SourceKey);
+            }
+
+            var (subject, body) = PrintTurnEntry_Splitter.Split(block.Text);
+
+            if (!Append_SessionEntry_WithRetry(target, author, subject, body))
+                allLanded = false;
+        }
+
+        // NEVER SILENTLY REROUTED. The block is in the owner channel either way; this says it was meant
+        // for somewhere else, so a supervisor addressing a member that has since closed — or mistyping
+        // its id — reads about it instead of wondering why the member never answered.
+        if (misaddressed.Count > 0)
+        {
+            ChannelAppender.Append_AppEntry(
+                ownChannel,
+                AppEntryAudiences.Agent,
+                $"{MISADDRESSED_SUBJECT} {state.MemberId} — {string.Join(", ", misaddressed.Distinct())}",
+                $"Part(s) of the last turn were addressed to {string.Join(", ", misaddressed.Distinct().Select(key => $"'{key}'"))}, which {(misaddressed.Distinct().Count() == 1 ? "is not a channel" : "are not channels")} this session is woken by. They were written HERE instead, in order.\n\nAddressable this turn: {string.Join(", ", sources.Select(source => source.Key))}",
+                DateTime.Now);
+        }
+
+        return allLanded;
+    }
+
+    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note)
     {
         var outcome = note == null ? TurnOutcomes.Describe(result) : TurnOutcomes.ERROR;
 
@@ -502,7 +719,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             _log.Log_Warning(state.OrchId, $"'{state.MemberId}' changed runner after {attempt} failed attempt(s) — the attempt counter starts again on the new one");
             state = PrintSessionState_Factory.CreateFrom_Existing_AttemptsReset(state);
-            tracker.StalledAtIndex = -1;
+            tracker.StalledOnSignature = null;
         }
 
         var failed = PrintSessionState_Factory.CreateFrom_Existing_AttemptFailed(state);
@@ -511,16 +728,16 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (failed.FailedAttempts >= MAX_ATTEMPTS)
         {
-            tracker.StalledAtIndex = pending[^1].Index;
+            tracker.StalledOnSignature = Describe_PendingSignature(pending);
 
-            var alert = $"Turn {requestId} failed {failed.FailedAttempts} times ({outcome}{(note == null ? string.Empty : $": {note}")}) — not retried until new traffic arrives in the channel";
+            var alert = $"Turn {requestId} failed {failed.FailedAttempts} times ({outcome}{(note == null ? string.Empty : $": {note}")}) — not retried until new traffic arrives in the channels";
             _log.Log_Error(state.OrchId, alert, null);
 
             ChannelAppender.Append_AppEntry(
                 state.ChannelFilePath,
                 AppEntryAudiences.Agent,
                 $"{TURN_STALLED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — {outcome} × {failed.FailedAttempts}",
-                $"{alert}\n\nrequest_id: {requestId}\nlast exit_code: {result.ExitCode}\napi_error_status: {Describe_ApiErrorStatus(result)}\nstderr (tail): {Tail(result.RawStderr, 600)}",
+                $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast exit_code: {result.ExitCode}\napi_error_status: {Describe_ApiErrorStatus(result)}\nstderr (tail): {Tail(result.RawStderr, 600)}",
                 DateTime.Now);
 
             return;
@@ -529,13 +746,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         _log.Log_Warning(state.OrchId, $"Turn {requestId} attempt {attempt} {outcome}{(note == null ? string.Empty : $" ({note})")} — retry after {_retryBackoff.TotalSeconds:F0} s; {Tail(result.RawStderr, 200)}");
     }
 
-    bool Append_SessionEntry_WithRetry(IPrintSessionState state, string subject, string body)
+    bool Append_SessionEntry_WithRetry(string channelFilePath, ChannelAuthors author, string subject, string body)
     {
-        var author = SessionRole_Names.Get_Author(state.Role);
-
         for (var attempt = 0; attempt < ENTRY_APPEND_ATTEMPTS; attempt++)
         {
-            if (ChannelAppender.Append_SessionEntry(state.ChannelFilePath, author, subject, body, DateTime.Now))
+            if (ChannelAppender.Append_SessionEntry(channelFilePath, author, subject, body, DateTime.Now))
                 return true;
 
             Thread.Sleep(ENTRY_APPEND_RETRY_MILLISECONDS);
@@ -547,15 +762,16 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// <summary>
     /// The record the supervisor reads (agent audience — the owner cannot act on it, decision 15):
     /// outcome, cost, duration, api_error_status. A member that "forgets" to report does not
-    /// vanish; a turn that failed is visible where the brief was written.
+    /// vanish; a turn that failed is visible where the brief was written. It goes in the session's OWN
+    /// channel whichever channels the turn read, so one turn leaves exactly one record.
     /// </summary>
-    void Append_TurnEnded(IPrintSessionState state, string requestId, int attempt, IReadOnlyList<IChannelEntry> pending, ITurnResult result, string outcome, string? note)
+    void Append_TurnEnded(IPrintSessionState state, string requestId, int attempt, IReadOnlyList<PendingEntry> pending, ITurnResult result, string outcome, string? note)
     {
         var body =
             $"request_id: {requestId}\n" +
             $"outcome: {outcome}{(note == null ? string.Empty : $" — {note}")}\n" +
             $"attempt: {attempt}\n" +
-            $"entries: [{pending[0].Index}]–[{pending[^1].Index}]\n" +
+            $"{Describe_Traffic(pending)}\n" +
             $"cost_usd: {(result.TotalCostUsd?.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")}\n" +
             $"duration_ms: {(result.DurationMs?.ToString() ?? "unknown")} (api {(result.DurationApiMs?.ToString() ?? "unknown")}), wall {result.Elapsed.TotalSeconds:F1} s\n" +
             $"api_error_status: {Describe_ApiErrorStatus(result)}\n" +
@@ -564,6 +780,35 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (!ChannelAppender.Append_AppEntry(state.ChannelFilePath, AppEntryAudiences.Agent, $"{TURN_ENDED_SUBJECT} {state.MemberId} turn {requestId[(requestId.LastIndexOf('/') + 1)..]} — {outcome}", body, DateTime.Now))
             _log.Log_Warning(state.OrchId, $"turn_ended for {requestId} could not be appended (channel locked) — the turn itself is recorded in the state file");
+    }
+
+    /// <summary>
+    /// What the turn was handed, per channel: <c>entries: owner [4]–[5], imp-1 [12]</c>. The indices are
+    /// there to be read by a human next to the file, not to be compared with anything — the cursor stopped
+    /// depending on them for the reasons <see cref="ChannelEntry_Digest"/> gives.
+    /// </summary>
+    static string Describe_Traffic(IReadOnlyList<PendingEntry> pending)
+    {
+        List<string> parts = [];
+
+        foreach (var group in pending.GroupBy(item => item.Source.Key, StringComparer.Ordinal))
+        {
+            var indices = group.Select(item => item.Entry.Index).ToList();
+
+            parts.Add(indices.Count == 1 ? $"{group.Key} [{indices[0]}]" : $"{group.Key} [{indices[0]}]–[{indices[^1]}]");
+        }
+
+        return $"entries: {string.Join(", ", parts)}";
+    }
+
+    /// <summary>
+    /// The pending set as one comparable string. Identities, in the order the turn would read them, so
+    /// any change — a new entry anywhere, one channel gaining traffic while another is quiet — produces a
+    /// different signature and restarts the coalesce window.
+    /// </summary>
+    static string Describe_PendingSignature(IReadOnlyList<PendingEntry> pending)
+    {
+        return string.Join('|', pending.Select(item => $"{item.Source.Key}:{ChannelEntry_Digest.Compute(item.Entry)}"));
     }
 
     static string Describe_ApiErrorStatus(ITurnResult result)

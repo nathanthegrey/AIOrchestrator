@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 using AIOrchestratorCoreLib.Running.TurnResult;
@@ -23,6 +23,11 @@ namespace AIOrchestratorCoreLib.Running.TurnExecutor;
 /// prompt at all, while a stream has no command line to put it on and boots by sending it as its
 /// first message. That decision belongs to whoever knows the transport.
 /// </para>
+/// <para>
+/// The entries arrive PAIRED WITH THEIR CHANNEL and the whole source set comes with them, because a
+/// session woken by several channels cannot answer without being told which is which — and the prompt
+/// is the only place that can tell it.
+/// </para>
 /// </summary>
 public interface ITurnExecutor
 {
@@ -34,7 +39,8 @@ public interface ITurnExecutor
         string sessionId,
         bool resumeTranscript,
         string requestId,
-        IReadOnlyList<IChannelEntry> pending,
+        IReadOnlyList<PendingEntry> pending,
+        IReadOnlyList<TurnSource.ITurnSource> sources,
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,

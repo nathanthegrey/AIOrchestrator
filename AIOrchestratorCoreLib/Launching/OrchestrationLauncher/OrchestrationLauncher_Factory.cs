@@ -25,8 +25,8 @@ public static class OrchestrationLauncher_Factory
         return Create(paths, configProvider, store,
         [
             SessionRunner_Factory.Create_Terminal(spawner),
-            SessionRunner_Factory.Create_Print(paths, log),
-            SessionRunner_Factory.Create_Stream(paths, log),
+            SessionRunner_Factory.Create_Print(paths, store, log),
+            SessionRunner_Factory.Create_Stream(paths, store, log),
         ], log, pluginGate);
     }
 

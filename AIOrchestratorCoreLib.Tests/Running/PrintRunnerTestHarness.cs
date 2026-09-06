@@ -180,7 +180,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
 
     ISessionRunner Create_Runner(SessionRunners runner)
     {
-        return runner == SessionRunners.Stream ? SessionRunner_Factory.Create_Stream(Paths, Log) : SessionRunner_Factory.Create_Print(Paths, Log);
+        return runner == SessionRunners.Stream ? SessionRunner_Factory.Create_Stream(Paths, Store, Log) : SessionRunner_Factory.Create_Print(Paths, Store, Log);
     }
 
     /// <summary>

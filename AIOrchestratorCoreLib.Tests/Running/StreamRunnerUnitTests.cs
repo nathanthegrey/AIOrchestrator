@@ -19,11 +19,18 @@ public class StreamRunnerUnitTests
 {
     // ----- Runner_Support -----
 
+    /// <summary>
+    /// The supervisor is runnable on BOTH bridge-driven transports now. It was print-unrunnable only
+    /// because the trigger was single-channel, which was never a property of the transport: the
+    /// dispatcher owns the trigger and hands both executors the same pending entries. Stream stays the
+    /// recommended one on latency (p50 1.27 s against 5.77 s), which is a different question from what
+    /// is supported.
+    /// </summary>
     [Fact]
-    public void TheSupervisorIsStreamRunnable_AndHasNeverBeenPrintRunnable()
+    public void TheSupervisorIsRunnableOnBothBridgeDrivenTransports()
     {
         Assert.True(Runner_Support.Supports(SessionRunners.Stream, SessionRoles.Supervisor));
-        Assert.False(Runner_Support.Supports(SessionRunners.Print, SessionRoles.Supervisor));
+        Assert.True(Runner_Support.Supports(SessionRunners.Print, SessionRoles.Supervisor));
 
         // The communicator's input is the supervisor's transcript rather than a channel, so no
         // bridge-driven runner can wake it at all.
@@ -39,14 +46,23 @@ public class StreamRunnerUnitTests
         Assert.False(Runner_Support.Is_BridgeDriven(SessionRunners.Terminal));
     }
 
+    /// <summary>
+    /// The single-source limit is GONE, and this is the test that used to pin it. A supervisor is woken
+    /// by the owner channel AND every open spoke, on both bridge-driven transports — so what used to be
+    /// a warning is now a resolved source list, and the two runners must not differ about it.
+    /// </summary>
     [Fact]
-    public void AStreamSupervisorIsToldWhatWakesIt_BecauseItIsNotEverything()
+    public void BothBridgeDrivenRunners_RunTheSupervisor_AndNeitherIsSingleSourceAnyMore()
     {
-        var limit = Runner_Support.Describe_SingleSourceLimit_OrNull(SessionRoles.Supervisor);
+        Assert.True(Runner_Support.Supports(SessionRunners.Stream, SessionRoles.Supervisor));
+        Assert.True(Runner_Support.Supports(SessionRunners.Print, SessionRoles.Supervisor));
 
-        Assert.NotNull(limit);
-        Assert.Contains("OWNER channel only", limit);
-        Assert.Null(Runner_Support.Describe_SingleSourceLimit_OrNull(SessionRoles.Implementer));
+        foreach (var role in SessionRole_Names.ALL)
+            Assert.Equal(Runner_Support.Supports(SessionRunners.Stream, role), Runner_Support.Supports(SessionRunners.Print, role));
+
+        // The one role neither can run, and not for want of channels: its input is the supervisor's
+        // transcript, which is not a channel at all.
+        Assert.False(Runner_Support.Supports(SessionRunners.Stream, SessionRoles.Communicator));
     }
 
     // ----- the ladder -----
@@ -137,7 +153,7 @@ public class StreamRunnerUnitTests
     {
         var paths = SupervisionPaths_Factory.Create(Path.Combine(Path.GetTempPath(), $"aiorch-stream-args-{Guid.NewGuid():N}"));
         var state = AIOrchestratorCoreLib.Running.PrintSessionState.PrintSessionState_Factory.Create_New(
-            "11111111-1111-1111-1111-111111111111", SessionRoles.Supervisor, "repo-1", "sup", "/repo", "haiku", paths.Get_OwnerChannelFile("repo-1"));
+            "11111111-1111-1111-1111-111111111111", SessionRoles.Supervisor, "repo-1", "sup", "/repo", "haiku", paths.Get_OwnerChannelFile("repo-1"), []);
 
         var arguments = StreamTurnCommand_Builder.Build_Arguments(state, AIOrchestratorCoreLib.Running.RoleRunnerConfig.RoleRunnerConfig_Factory.Create_Default(SessionRoles.Supervisor), state.SessionId, resumeTranscript: false, null);
 

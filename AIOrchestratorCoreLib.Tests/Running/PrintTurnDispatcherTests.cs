@@ -62,7 +62,8 @@ public class PrintTurnDispatcherTests
         Assert.Contains("duration_ms: 4200", ended.Body);
         Assert.Contains("api_error_status: none", ended.Body);
 
-        Assert.Equal(1, state.LastHandledEntryIndex);
+        // The cursor is the delivered IDENTITIES of its one source, not a number — one entry was handed over.
+        Assert.Single(Assert.Single(state.Cursors).Delivered);
         Assert.Equal(2, state.NextTurnNumber);
         Assert.Equal($"{orchId}/{memberId}/1", state.ExecutedTurns[0].RequestId);
     }
@@ -250,7 +251,7 @@ public class PrintTurnDispatcherTests
         // The state says turn 1 ran but its index was never advanced — the crash-between-writes shape.
         var poisoned = PrintSessionState_Factory.Create(
             registered.SessionId, sessionStarted: true, registered.Role, registered.OrchId, registered.MemberId, registered.WorkingDirectory, registered.Model, registered.ChannelFilePath,
-            lastHandledEntryIndex: 0, nextTurnNumber: 1, failedAttempts: 0,
+            registered.Cursors, nextTurnNumber: 1, failedAttempts: 0,
             [ExecutedTurn_Factory.Create(1, PrintTurn_RequestId.Build(orchId, memberId, 1), 1, 1, DateTime.UtcNow, "success", 0.01)]);
         PrintSessionState_Store.Write(stateFile, poisoned);
         harness.Write_Scenario("""{"default":{"result":"turn two\n\nran"}}""");
@@ -350,7 +351,7 @@ public class PrintTurnDispatcherTests
         Assert.Equal(0, dispatcher.InFlightCount);
         var state = harness.Read_State(SessionRoles.Implementer, orchId, memberId);
         Assert.Empty(state.ExecutedTurns);
-        Assert.Equal(0, state.LastHandledEntryIndex);
+        Assert.Empty(Assert.Single(state.Cursors).Delivered);
 
         // A SHUTDOWN IS NOT A TIMEOUT. Closing the app while a turn runs cancels the same linked
         // token the per-turn timeout uses; read as one, three ordinary restarts spent all three

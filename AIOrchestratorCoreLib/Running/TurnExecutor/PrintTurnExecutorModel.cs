@@ -1,4 +1,4 @@
-using AIOrchestratorCoreLib.Channels.ChannelEntry;
+using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.PrintTurnRunner;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
@@ -29,14 +29,15 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         string sessionId,
         bool resumeTranscript,
         string requestId,
-        IReadOnlyList<IChannelEntry> pending,
+        IReadOnlyList<PendingEntry> pending,
+        IReadOnlyList<TurnSource.ITurnSource> sources,
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
         var arguments = PrintTurnCommand_Builder.Build_Arguments(state, roleConfig, sessionId, resumeTranscript, null);
-        var prompt = resumeTranscript ? PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns) : null;
+        var prompt = resumeTranscript ? PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources) : null;
 
         var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
 

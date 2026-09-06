@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
+using AIOrchestratorCoreLib.Running.TurnCursor;
 using AIOrchestratorCoreLib.Storage;
 using AIOrchestratorCoreLib.SupervisionPaths;
 
@@ -8,10 +9,15 @@ namespace AIOrchestratorCoreLib.Running.PrintSessionState;
 
 /// <summary>
 /// Reads and writes <c>print-session.json</c>, and knows where it lives for each role: beside a
-/// member's channel, in the general supervisor's home, and (for the roles this stage does not
-/// run) beside the orchestration's session.json under a role-prefixed name. The file's presence
-/// is what tells the watchdog "this slot has no pid file BY DESIGN", so the location rule lives
-/// here and nowhere else.
+/// member's channel, in the general supervisor's home, and (for the singleton roles) beside the
+/// orchestration's session.json under a role-prefixed name. The file's presence is what tells the
+/// watchdog "this slot has no pid file BY DESIGN", so the location rule lives here and nowhere else.
+///
+/// <para>
+/// WHICH CHANNELS a session is woken by is NOT here — that is
+/// <see cref="TurnSource.TurnSources_Resolver"/>, because for a supervisor the answer depends on the
+/// roster and changes while the session runs. This file stores how far each of them has been delivered.
+/// </para>
 /// </summary>
 public static class PrintSessionState_Store
 {
@@ -29,25 +35,13 @@ public static class PrintSessionState_Store
         };
     }
 
-    /// <summary>The one channel this role's turns are triggered from (see <see cref="Runner_Support"/>).</summary>
-    public static string Resolve_ChannelFile(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
-    {
-        return role switch
-        {
-            SessionRoles.Implementer or SessionRoles.Reviewer => paths.Get_ImplementerChannelFile(orchId, memberId),
-            SessionRoles.Solo or SessionRoles.Supervisor or SessionRoles.Communicator => paths.Get_OwnerChannelFile(orchId),
-            SessionRoles.General => paths.GeneralChannelFile,
-            _ => throw new Exception($"Unhandled SessionRoles: {role}"),
-        };
-    }
-
     public static bool Exists(ISupervisionPaths paths, SessionRoles role, string orchId, string memberId)
     {
         return File.Exists(Get_StateFile(paths, role, orchId, memberId));
     }
 
     /// <summary>
-    /// Clears a registration — the role is no longer print-run, so the session goes back to a
+    /// Clears a registration — the role is no longer bridge-driven, so the session goes back to a
     /// terminal. Returns whether a file was actually removed. Best-effort: a file that cannot be
     /// deleted is reported by the caller, never thrown at a spawn that is otherwise fine.
     /// </summary>
@@ -98,7 +92,7 @@ public static class PrintSessionState_Store
             Read_String(root, "working_directory", stateFile),
             root["model"]?.GetValue<string?>(),
             Read_String(root, "channel_file", stateFile),
-            root["last_handled_entry_index"]?.GetValue<int>() ?? 0,
+            Parse_Cursors(root, stateFile),
             root["next_turn_number"]?.GetValue<int>() ?? Math.Max(1, executed.Count + 1),
             root["failed_attempts"]?.GetValue<int>() ?? 0,
             executed);
@@ -122,6 +116,27 @@ public static class PrintSessionState_Store
             });
         }
 
+        var sources = new JsonArray();
+
+        foreach (var cursor in state.Cursors)
+        {
+            var delivered = new JsonArray();
+
+            // Sorted so two writes of the same state produce the same bytes: a file that reshuffles a
+            // hash set on every turn is one nobody can diff, and this one is read by hand when a session
+            // is not being woken by something everyone can see in the channel.
+            foreach (var identity in cursor.Delivered.OrderBy(identity => identity, StringComparer.Ordinal))
+                delivered.Add(identity);
+
+            sources.Add(new JsonObject
+            {
+                ["key"] = cursor.SourceKey,
+                ["channel_file"] = cursor.ChannelFilePath,
+                ["high_water_index"] = cursor.HighWaterIndex,
+                ["delivered"] = delivered,
+            });
+        }
+
         var root = new JsonObject
         {
             ["session_id"] = state.SessionId,
@@ -132,13 +147,53 @@ public static class PrintSessionState_Store
             ["working_directory"] = state.WorkingDirectory,
             ["model"] = state.Model,
             ["channel_file"] = state.ChannelFilePath,
-            ["last_handled_entry_index"] = state.LastHandledEntryIndex,
+            ["sources"] = sources,
             ["next_turn_number"] = state.NextTurnNumber,
             ["failed_attempts"] = state.FailedAttempts,
             ["executed_turns"] = turns,
         };
 
         Atomic_FileWriter.Write_AllText(stateFile, root.ToJsonString(JsonWriting.INDENTED));
+    }
+
+    /// <summary>
+    /// The cursors, or none. NO CURSORS IS A MEANINGFUL STATE and not a defect: it is what a file
+    /// written before this shape existed reads as, and what a session registered without a roster reads
+    /// as. The dispatcher baselines every unseen source on sight and says how much history that absorbed,
+    /// which is the safe direction — the alternative, treating an absent cursor as "nothing delivered",
+    /// hands a whole channel's backlog to a session as if it had just been said to it.
+    /// </summary>
+    static IReadOnlyList<ITurnCursor> Parse_Cursors(JsonObject root, string stateFile)
+    {
+        List<ITurnCursor> cursors = [];
+
+        if (root["sources"] is not JsonArray sources)
+            return cursors;
+
+        foreach (var node in sources)
+        {
+            if (node is not JsonObject source)
+                continue;
+
+            HashSet<string> delivered = [];
+
+            if (source["delivered"] is JsonArray identities)
+            {
+                foreach (var identity in identities)
+                {
+                    if (identity?.GetValue<string>() is string text && text.Length > 0)
+                        delivered.Add(text);
+                }
+            }
+
+            cursors.Add(TurnCursor_Factory.Create(
+                Read_String(source, "key", stateFile),
+                Read_String(source, "channel_file", stateFile),
+                source["high_water_index"]?.GetValue<int>() ?? 0,
+                delivered));
+        }
+
+        return cursors;
     }
 
     static IExecutedTurn Parse_Turn(JsonObject turn, string stateFile)
