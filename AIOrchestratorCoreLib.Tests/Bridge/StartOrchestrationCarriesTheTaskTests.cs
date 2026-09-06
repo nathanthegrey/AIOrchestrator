@@ -43,6 +43,7 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
     readonly IOrchestrationSessionStore _store;
     readonly IOrchestratorConfigProvider _configProvider;
     readonly RecordingLog_Fake _log = new();
+    readonly IEngineStateStore _engineState = EngineStateStore_Factory.Create_InMemory();
 
     public StartOrchestrationCarriesTheTaskTests()
     {
@@ -98,6 +99,12 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
         // THE ORDER, pinned where it is decided. At the moment the launcher handed the session back —
         // after the supervisor was registered and its channels baselined — the task was not there yet.
         Assert.DoesNotContain(TASK, launcher.OwnerChannelWhenTheLaunchReturned, StringComparison.Ordinal);
+
+        // AND THE OWNER IS RECORDED AS WAITING FOR THE ANSWER. Without this the crew's first reply is
+        // filtered as narration and never reaches the phone: the flag is normally raised by the owner
+        // typing into a TOPIC, and this owner spoke to the concierge instead. Asserted through the
+        // persisted snapshot rather than a field, because surviving a restart is half the claim.
+        Assert.Contains(orchId, _engineState.Load_OrEmpty().OwnerAwaitingAnswer);
     }
 
     /// <summary>
@@ -123,6 +130,10 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
         await Task.Delay(500);
 
         Assert.Empty(Owner_Entries(launcher.StartedOrchId!));
+
+        // And no wait is recorded either: nothing was asked, so nothing is owed an answer. A flag
+        // raised here would push the next piece of narration the crew wrote, for ever.
+        Assert.DoesNotContain(launcher.StartedOrchId!, _engineState.Load_OrEmpty().OwnerAwaitingAnswer);
     }
 
     IOrchestrationLauncher Build_RealLauncher()
@@ -134,7 +145,7 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
     {
         return BridgeEngine_Factory.Create_WithDecisionState(
             _paths, _configProvider, _store, launcher, _log, new CapturingTelegram_Fake(),
-            MessageTranslator_Factory.Create(_log), EngineStateStore_Factory.Create_InMemory(),
+            MessageTranslator_Factory.Create(_log), _engineState,
             Clock_Factory.Create_System());
     }
 

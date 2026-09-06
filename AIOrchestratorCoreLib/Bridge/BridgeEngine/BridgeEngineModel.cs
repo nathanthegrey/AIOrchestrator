@@ -3994,6 +3994,23 @@ internal sealed class BridgeEngineModel(
                         $"Orchestration '{session.OrchId}' is up, but its owner channel was locked and the task could not be written into it. Tell it what you need in its own topic.");
                 }
 
+                if (taskFiled)
+                {
+                    // THE OWNER IS WAITING FOR AN ANSWER TO IT, and nothing else would ever say so.
+                    // The flag is raised when the owner types into a TOPIC; this task arrived through
+                    // the concierge instead, so without this line the crew's first reply is filtered
+                    // as narration (OwnerPush_Policy: a supervisor entry pushes only when it asks,
+                    // answers something asked, or reports being blocked). The orchestration would come
+                    // up, get a topic, do the work and tell the owner nothing — asked from the phone,
+                    // answered into a room the phone never rang for.
+                    lock (_ownerStateLock)
+                        _ownerAwaitingAnswer.Add(session.OrchId);
+
+                    // Persisted for the reason R1 gives about its own flag: an answer in flight across
+                    // a restart must not be silently downgraded to narration on the way back up.
+                    Persist_EngineState();
+                }
+
                 var crew = isBasic
                     ? "One solo session spawned — no supervisor, no implementers; you talk to it directly."
                     : "Supervisor and implementer imp-1 spawned;";
