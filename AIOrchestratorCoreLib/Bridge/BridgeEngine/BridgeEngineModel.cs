@@ -3463,6 +3463,40 @@ internal sealed class BridgeEngineModel(
         var client = _telegramClient
             ?? throw new Exception("Send_QuestionWithButtons_Async called without a Telegram client");
 
+        // A SECOND OPEN QUESTION IS COACHED, NOT REFUSED — and the refusal was tried first.
+        //
+        // `kit/commands/supervisor.md:323` carries "A QUESTION ENDS YOUR TURN — one open question at
+        // a time" as a HARD RULE, and 721 lines later the same file says "build that and ask in
+        // passing". Nothing here ever counted, so the owner ended up with a merge question, 004, 267
+        // and 277 live at once and reported that they could not answer a moving target.
+        //
+        // ENFORCING IT AS A HARD CAP BROKE SOMETHING REAL, which is how this ended up advisory:
+        // DecisionStateSurvivesARestartTests opens two questions in one orchestration on purpose,
+        // /pending filters a topic's questions in the plural, and every question already carries its
+        // own nonce, deadline and default. The app deliberately supports several open decisions and
+        // made each one individually resolvable. The hole was never the count — it was that a TYPED
+        // reply could not be attributed, and AnswerBinding_Decider now closes exactly that: with two
+        // open, a typed reply binds nothing and the owner taps the one they meant.
+        //
+        // So the count is a smell to tell the session about, not a thing to prevent. The audience is
+        // Agent, so this coaching never reaches the phone.
+        if (Would_BeASecondOpenQuestion(channel.OrchId))
+        {
+            _log.Log_Info(
+                channel.OrchId,
+                "a second question went out while one was still open — the owner must tap, since a typed reply cannot be bound");
+
+            ChannelAppender.Append_AppEntry(
+                channel.FilePath,
+                AppEntryAudiences.Agent,
+                "a second question while one is still open",
+                "A question of yours was already open with the owner when this one went out. Both are "
+                + "live and both are tappable, but a TYPED reply now binds to neither — the app cannot "
+                + "tell which one they meant, so it will leave both open rather than guess. Prefer "
+                + "waiting for the first answer.",
+                DateTime.Now);
+        }
+
         var prompt = questionPrompt;
 
         if (_configProvider.Get_Current().TelegramItalianLayer && channel.IsOwnerChannel)
@@ -10050,6 +10084,22 @@ internal sealed class BridgeEngineModel(
     /// so the caller can take the keyboards down too; a caller that only needs the state cleared can
     /// ignore it.
     /// </summary>
+    /// <summary>
+    /// Whether this orchestration already has the owner's attention on a question.
+    ///
+    /// <para>
+    /// PER ORCHESTRATION, NOT GLOBAL. Two orchestrations are two topics on the phone and two
+    /// separate conversations; a question in one says nothing about the other, and capping across
+    /// them would make a busy project silence a quiet one. Within a topic a short reply cannot be
+    /// told apart, which is the whole reason for the cap.
+    /// </para>
+    /// </summary>
+    bool Would_BeASecondOpenQuestion(string orchId)
+    {
+        lock (_ownerStateLock)
+            return _openQuestions.Values.Any(question => question.OrchId == orchId);
+    }
+
     List<(long MessageId, long ButtonGroupId, string QuestionText)> Clear_OpenQuestions(string orchId)
     {
         List<(long MessageId, long ButtonGroupId, string QuestionText)> answered = [];
@@ -10093,13 +10143,43 @@ internal sealed class BridgeEngineModel(
     /// falls back to removing the buttons alone, exactly as the tap path does: the record is nice, a
     /// live keyboard on an answered question is a bug.
     ///
+    /// AN ANSWER BELONGS TO ITS QUESTION, and the old rule here did not believe that. It was stated
+    /// in this summary as <i>any owner message answers whatever was pending</i>, and it swept the
+    /// whole orchestration on every inbound message. The owner reported both halves of the damage:
+    /// their own question "A che punto siamo?" filed as `✅ answered:` under a merge question, and
+    /// one reply closing four questions at once with the same words written under each.
+    ///
+    /// <see cref="AnswerBinding_Decider"/> now decides, and it declines far more often than it
+    /// binds. What it declines stays OPEN — buttons live, glyph on, deadline and reminder still
+    /// running, still listed in <c>/pending</c> — because a question nobody answered should look
+    /// like a question nobody answered.
+    ///
     /// The TAPPED question is not in this list: <see cref="Handle_CallbackTap_Async"/> removes its
-    /// own entry before routing, and consumes its own group. What this closes on that path is any
-    /// OTHER question still open in the same orchestration, which is the same rule the state clear
-    /// has always applied — any owner message answers whatever was pending.
+    /// own entry before routing, and consumes its own group. It used to close every OTHER question
+    /// in the orchestration on the way past, which is the same defect wearing a different hat; the
+    /// decider stops that too, since a tap echo arriving with two questions still open reads as
+    /// ambiguous rather than as an answer to both.
     /// </summary>
     async Task Close_AnsweredQuestions_Async(string orchId, string answerText, CancellationToken cancellationToken)
     {
+        int openCount;
+
+        lock (_ownerStateLock)
+            openCount = _openQuestions.Values.Count(question => question.OrchId == orchId);
+
+        var binding = AnswerBinding_Decider.Decide(openCount, answerText);
+
+        if (!AnswerBinding_Decider.Binds(binding))
+        {
+            // WRITTEN DOWN EVERY TIME. A question that stays open because of a rule is a fact the
+            // owner may ask about later, and an unexplained open question is indistinguishable from
+            // the defect this replaced.
+            if (openCount > 0)
+                _log.Log_Info(orchId, AnswerBinding_Decider.Describe(binding, openCount));
+
+            return;
+        }
+
         var answered = Clear_OpenQuestions(orchId);
 
         if (answered.Count == 0)
