@@ -1815,9 +1815,24 @@ internal sealed class BridgeEngineModel(
                 if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
                     continue;
 
-                // Transcript growing = genuinely working (a long build, a big read). NOT orphaned:
-                // this is the false positive the whole detector has to avoid.
-                if (Is_SessionMidTurn(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE)))
+                // WORKING MEANS DO NOT DISTURB — and the app now answers that from its OWN dispatcher
+                // rather than from a status-line file a headless session never writes. This guard has
+                // been silently false on every bridge-driven host since the day it was written, which
+                // is why members inside long turns were nudged every eight minutes for being busy:
+                // a member in a turn cannot consume its channel, so its unread entries age past the
+                // threshold and it is woken for the very reason it should be left alone. Each of those
+                // wakes costs it a turn.
+                var working = Resolve_MemberWorking(Running.SessionRoles.Implementer, session.OrchId, member.MemberId);
+
+                if (working == WorkingVerdicts.Working)
+                    continue;
+
+                // UNKNOWN FALLS BACK, it does not decide. A terminal-run member does render a status
+                // line, so the old probe is the right answer for it — and for a bridge-driven member
+                // the app has simply learnt nothing yet, which is not permission to wake it on the
+                // strength of a file that does not exist.
+                if (working == WorkingVerdicts.Unknown
+                    && Is_SessionMidTurn(Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE)))
                     continue;
 
                 if (!alreadyNudged)
@@ -1887,7 +1902,11 @@ internal sealed class BridgeEngineModel(
                     Is_BridgeDriven(Running.SessionRoles.Implementer, session.OrchId, member.MemberId),
                     _clock.UtcNow - nudgedUtc,
                     TimeSpan.FromMinutes(ORPHAN_CONFIRM_MINUTES),
-                    SessionActivity_Probe.Is_MidTurn(memberUsageFile),
+                    // EITHER SOURCE OF LIFE COUNTS. The app's own dispatcher answers for a
+                    // bridge-driven member; the status-line probe answers for a terminal one. Asking
+                    // both means neither host is judged on evidence it cannot produce.
+                    Resolve_MemberWorking(Running.SessionRoles.Implementer, session.OrchId, member.MemberId) == WorkingVerdicts.Working
+                        || SessionActivity_Probe.Is_MidTurn(memberUsageFile),
                     SessionActivity_Probe.Get_LastActivityUtc_OrNull(memberUsageFile),
                     nudgedUtc);
 
@@ -10077,6 +10096,36 @@ internal sealed class BridgeEngineModel(
         return Running.Runner_Support.Is_BridgeDriven(runner)
             && Running.Runner_Support.Supports(runner, role)
             && Running.PrintSessionState.PrintSessionState_Store.Exists(_paths, role, orchId, memberId);
+    }
+
+    /// <summary>
+    /// Whether a member is working, answered from what THIS app wrote — the dispatcher's in-flight map
+    /// and the turn it recorded when it finished — instead of from a status-line file that a headless
+    /// session never produces.
+    ///
+    /// <para>
+    /// UNKNOWN IS RETURNED, NOT SWALLOWED. Every caller has to decide what to do about not knowing,
+    /// and the ones that used to get a bare <c>false</c> were the ones that told the owner a working
+    /// member was idle. See <see cref="MemberWorking_Decider"/> for the measured incident.
+    /// </para>
+    /// </summary>
+    WorkingVerdicts Resolve_MemberWorking(Running.SessionRoles role, string orchId, string memberId)
+    {
+        if (!Is_BridgeDriven(role, orchId, memberId))
+            return WorkingVerdicts.Unknown;
+
+        var stateFile = Running.PrintSessionState.PrintSessionState_Store.Get_StateFile(_paths, role, orchId, memberId);
+        var state = Running.PrintSessionState.PrintSessionState_Store.Read_OrNull(stateFile);
+
+        DateTime? lastTurnEndedUtc = state == null || state.ExecutedTurns.Count == 0
+            ? null
+            : state.ExecutedTurns[^1].EndedUtc;
+
+        return MemberWorking_Decider.Decide(
+            state != null,
+            _printTurns.Is_TurnInFlight(orchId, memberId),
+            lastTurnEndedUtc,
+            _clock.UtcNow);
     }
 
     bool Would_BeASecondOpenQuestion(string orchId)

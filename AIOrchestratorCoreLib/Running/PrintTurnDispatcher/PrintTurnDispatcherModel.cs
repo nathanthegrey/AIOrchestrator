@@ -149,6 +149,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
     }
 
+    public bool Is_TurnInFlight(string orchId, string memberId)
+    {
+        // THE SAME KEY Consider_Session builds, and deliberately not a second way of spelling it: two
+        // constructions of one key are two that can drift, and this one decides whether a working
+        // member is described as idle.
+        var key = $"{orchId}/{memberId}";
+
+        lock (_lock)
+            return _inFlight.ContainsKey(key);
+    }
+
     public void Tick(DateTime nowLocal)
     {
         if (_shutdown.IsCancellationRequested)
