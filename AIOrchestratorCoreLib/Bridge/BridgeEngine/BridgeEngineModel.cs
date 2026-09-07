@@ -2229,7 +2229,10 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Nudge_IdleSupervisor(IOrchestrationSession session)
     {
-        if (Is_SessionMidTurn(OwnerFacingSession_Locator.Get_UsageFile(_paths, session.OrchId, session)))
+        if (Is_Working(
+                Running.SessionRoles.Supervisor, session.OrchId,
+                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
+                OwnerFacingSession_Locator.Get_UsageFile(_paths, session.OrchId, session)))
             return;
 
         List<string> waitingMembers = [];
@@ -8481,7 +8484,9 @@ internal sealed class BridgeEngineModel(
             ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId))));
 
         var supervisorContextSuffix = Build_ContextSuffix_ForSupervisor(supervisorUsage);
-        var supervisorLine = SessionActivity_Probe.Is_MidTurn(supervisorUsage)
+        var supervisorLine = Is_Working(
+            Running.SessionRoles.Supervisor, session.OrchId,
+            Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsage)
             ? $"working now{Describe_Activity_Suffix(supervisorUsage)}{supervisorContextSuffix}"
             : ownerOwesReply ? $"{MemberState_Descriptor.WAITING_ON_OWNER}{supervisorContextSuffix}" : $"idle — waiting{supervisorContextSuffix}";
 
@@ -8501,7 +8506,13 @@ internal sealed class BridgeEngineModel(
             var channelFile = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, member.MemberId);
             var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var declared = MemberState_Resolver.Resolve(entries);
-            var workingNow = SessionActivity_Probe.Is_MidTurn(Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
+            // THE LINE THE OWNER ACTUALLY READS. In the fincanva-1 run of 2026-09-07 this said
+            // "briefed — not started yet" for five members that were running turns for two hours, and
+            // the words "working now" never appeared once — because the file it read cannot exist on
+            // a headless host. It asks the app now.
+            var workingNow = Is_Working(
+                Running.SessionRoles.Implementer, session.OrchId, member.MemberId,
+                Path.Combine(memberFolder, UsageTotals_Reader.SESSION_USAGE_FILE));
 
             var lastWrite = File.Exists(channelFile)
                 ? $" · last wrote {SessionDuration_Formatter.Describe(DateTime.UtcNow - File.GetLastWriteTimeUtc(channelFile))} ago"
@@ -8561,10 +8572,10 @@ internal sealed class BridgeEngineModel(
         return $" · {Formatting.ContextUsage_Formatter.Describe_OrNull(context)}";
     }
 
-    string Describe_SessionActivity(string usageFilePath, string idleText)
-    {
-        return SessionActivity_Probe.Is_MidTurn(usageFilePath) ? "working now" : idleText;
-    }
+    // Describe_SessionActivity LIVED HERE and is deleted rather than left for someone to reach for.
+    // It had no callers, and it answered "working now" or an idle word straight from the status-line
+    // probe — the exact shape that told the owner a working member was idle on every headless host.
+    // Is_Working is the replacement, and it takes the identity this one had no way to ask for.
 
     // Describe_DeclaredState USED TO LIVE HERE and it is gone, not moved. It took the same three
     // arguments as MemberState_Descriptor.Describe_ForOwner and answered the same question, so it
@@ -9812,7 +9823,10 @@ internal sealed class BridgeEngineModel(
     {
         var orchFolder = _paths.Get_OrchestrationFolder(session.OrchId);
 
-        if (Is_SessionMidTurn(Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE)))
+        if (Is_Working(
+                Running.SessionRoles.Supervisor, session.OrchId,
+                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
+                Path.Combine(orchFolder, UsageTotals_Reader.SESSION_USAGE_FILE)))
             return true;
 
         foreach (var member in session.Members)
@@ -9823,7 +9837,7 @@ internal sealed class BridgeEngineModel(
             var memberUsage = Path.Combine(
                 _paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
-            if (Is_SessionMidTurn(memberUsage))
+            if (Is_Working(Running.SessionRoles.Implementer, session.OrchId, member.MemberId, memberUsage))
                 return true;
         }
 
@@ -10109,6 +10123,27 @@ internal sealed class BridgeEngineModel(
     /// member was idle. See <see cref="MemberWorking_Decider"/> for the measured incident.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// "Is it working?" for a surface that must answer yes or no. Asks what the app knows first and
+    /// falls back to the status-line probe only when it knows nothing — which is the right answer for
+    /// a terminal-run session, and no worse than today's for anything else.
+    ///
+    /// <para>
+    /// A SURFACE THAT CAN SAY NOTHING SHOULD USE <see cref="Resolve_MemberWorking"/> DIRECTLY and
+    /// render Unknown as an omission. This overload exists for the lines whose grammar has only two
+    /// branches; it is the smaller half of the fix, not the whole of it.
+    /// </para>
+    /// </summary>
+    bool Is_Working(Running.SessionRoles role, string orchId, string memberId, string usageFilePath)
+    {
+        return Resolve_MemberWorking(role, orchId, memberId) switch
+        {
+            WorkingVerdicts.Working => true,
+            WorkingVerdicts.Idle => false,
+            _ => SessionActivity_Probe.Is_MidTurn(usageFilePath),
+        };
+    }
+
     WorkingVerdicts Resolve_MemberWorking(Running.SessionRoles role, string orchId, string memberId)
     {
         if (!Is_BridgeDriven(role, orchId, memberId))
@@ -10877,7 +10912,9 @@ internal sealed class BridgeEngineModel(
         // is the solo, and reading the empty supervisor slot made a working solo look idle.
         var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
 
-        if (!Is_SessionMidTurn(supervisorUsageFile))
+        if (!Is_Working(
+                Running.SessionRoles.Supervisor, orchId,
+                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsageFile))
             return null;
 
         var speaker = Describe_Speaker(orchId);
@@ -12061,7 +12098,9 @@ internal sealed class BridgeEngineModel(
             var entries = ChannelHistory_Counter.Read_AllEntries(channelFile);
             var usageFile = Path.Combine(_paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
-            memberLines.Add($"{member.MemberId}: {Describe_AwayMemberState(member.MemberId, entries, usageFile)}");
+            memberLines.Add($"{member.MemberId}: {Describe_AwayMemberState(
+                member.MemberId, entries, usageFile,
+                Is_Working(Running.SessionRoles.Implementer, session.OrchId, member.MemberId, usageFile))}");
         }
 
         if (memberLines.Count == 0)
@@ -12079,14 +12118,23 @@ internal sealed class BridgeEngineModel(
         return $"🌙 {string.Join('\n', lines)}";
     }
 
-    static string Describe_AwayMemberState(string memberId, IReadOnlyList<Channels.ChannelEntry.IChannelEntry> entries, string usageFilePath)
+    /// <summary>
+    /// <paramref name="working"/> is passed IN rather than read here: the caller knows the member's
+    /// identity and can ask the app, while this method only ever had a path — and that path is a
+    /// status-line file no headless session writes. The path is still needed for the context figure,
+    /// which is honest about being absent.
+    /// </summary>
+    static string Describe_AwayMemberState(
+        string memberId,
+        IReadOnlyList<Channels.ChannelEntry.IChannelEntry> entries,
+        string usageFilePath,
+        bool working)
     {
         var state = MemberState_Resolver.Resolve(entries);
 
         if (state == MemberStates.BlockedOnOwner)
             return "BLOCKED — needs you";
 
-        var working = SessionActivity_Probe.Is_MidTurn(usageFilePath);
         var lastBrief = entries.LastOrDefault(e => e.Author == ChannelAuthors.Supervisor);
 
         var task = lastBrief == null
@@ -12545,7 +12593,9 @@ internal sealed class BridgeEngineModel(
 
             var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
 
-            var supervisorBusy = Is_SessionMidTurn(supervisorUsageFile);
+            var supervisorBusy = Is_Working(
+                Running.SessionRoles.Supervisor, orchId,
+                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsageFile);
 
             // THE BUBBLE IS THE WHOLE "THINKING…" STORY NOW: up while the session is mid-turn, and
             // while a free session has not yet picked the message up — down at the nudge, the one
