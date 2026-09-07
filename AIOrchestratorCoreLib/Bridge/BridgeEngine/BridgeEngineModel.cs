@@ -8889,6 +8889,33 @@ internal sealed class BridgeEngineModel(
                 await Toggle_AwaitingTest_Async(client, threadId, cancellationToken);
                 return true;
 
+            case "pc":
+                // A TAPPED /pc MUST END TERMINAL MODE ELSEWHERE TOO, and this is the one line the
+                // typed command does not hand over. The inbound loop calls this for every owner
+                // MESSAGE; taps are drained further down and never meet it, so without it, tapping
+                // /pc here would leave another topic's 💻 lit - and "nobody sits at two terminals"
+                // is the whole reason the flip exists.
+                Flip_OtherTerminals_IfPresenceCommand(threadId, isPresenceCommandItself: true);
+
+                // NOT deferred the way the typed command is. That deferral keeps the toggle from
+                // racing the ✓ acks of the batch it arrived in; this tap was acknowledged above,
+                // before the switch, so there is nothing left to race.
+                await Apply_PresenceCommand_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "close":
+                // Parks the same request a session would, so a MISTAP cannot end an orchestration:
+                // the owner still confirms with ✅/✋. That is why this calls the command's own
+                // method rather than the close path underneath it - a second route that skipped the
+                // prompt is exactly the drift this shared button set exists to prevent.
+                await Request_Close_FromCommand_Async(client, threadId, cancellationToken);
+                return true;
+
+            // /refresh NO LONGER RENDERS A BUTTON (the owner replaced it with /pc and /close on
+            // 2026-09-07), and this case deliberately stays. The status line is REPOSTED when it
+            // gets buried, so superseded pulse messages keep their old keyboard on the owner's
+            // phone indefinitely - tapping one should still refresh the topic rather than be told
+            // the button is from an older build, which is what the default arm below would say.
             case "refresh":
                 await Refresh_TopicName_Async(client, threadId, cancellationToken);
                 return true;
