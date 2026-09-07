@@ -28,7 +28,9 @@ if [ -z "${AIORCH_ID:-}" ]; then
   exit 0
 fi
 
-FLAG_FILE="$HOME/.claude/supervision/$AIORCH_ID/.awaiting-answer"
+SUPERVISION_ROOT="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"
+
+FLAG_FILE="$SUPERVISION_ROOT/$AIORCH_ID/.awaiting-answer"
 
 if [ ! -f "$FLAG_FILE" ]; then
   exit 0
@@ -143,7 +145,7 @@ if [ -z "$TARGET" ]; then
   exit 0
 fi
 
-SUPERVISION="$HOME/.claude/supervision/$AIORCH_ID"
+SUPERVISION="$SUPERVISION_ROOT/$AIORCH_ID"
 
 # THE LEDGER is a record of work that already happened, not a change to what the owner is deciding —
 # and the Stop hook can demand it, so it must never be unreachable. Matched as a whole path ending,

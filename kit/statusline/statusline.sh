@@ -52,7 +52,7 @@ member="${AIORCH_MEMBER:-}"
 
 # Hoisted out of the telemetry probe below, which used to be the only thing that computed it. The
 # probe runs only when there is stdin to dump; the progress read has to work regardless.
-supervision_root="$HOME/.claude/supervision"
+supervision_root="${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}"
 
 # How old a progress artefact may be before it is treated as absent. The app rewrites it at least
 # once a minute while it is alive, so anything past this means the app is not running and the number
