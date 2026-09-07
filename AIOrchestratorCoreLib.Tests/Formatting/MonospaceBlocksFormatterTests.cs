@@ -4,8 +4,10 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Formatting;
 
 /// <summary>
-/// ASCII mockups are how the owner picks between layout options from their phone. Two things must
-/// hold: the drawing keeps its exact characters and alignment, and the translator never touches it.
+/// ASCII mockups are how the owner picks between layout options from their phone. What this class
+/// still owns is the second half of that: the translator never touches a drawing. The RENDERING of
+/// the block moved to TelegramHtml_Renderer on 2026-09-07 — its tests moved with it, so there is
+/// one place a &lt;pre&gt; is asserted rather than two that can disagree.
 /// </summary>
 public class MonospaceBlocksFormatterTests
 {
@@ -44,29 +46,5 @@ public class MonospaceBlocksFormatterTests
 
         Assert.Contains("quale dei due?", restored);
         Assert.Contains("|  general |  [x] dark   |", restored);
-    }
-
-    [Fact]
-    public void Build_Html_WrapsTheDrawingInPre_AndEscapesEverything()
-    {
-        var html = MonospaceBlocks_Formatter.Build_Html("before\n```\n<b>a & b</b>\n```\nafter");
-
-        Assert.Contains("<pre>", html);
-        Assert.Contains("&lt;b&gt;a &amp; b&lt;/b&gt;", html);
-        Assert.Contains("before", html);
-        Assert.Contains("after", html);
-    }
-
-    [Fact]
-    public void Has_Blocks_TellsPlainProseApartFromAMockup()
-    {
-        Assert.True(MonospaceBlocks_Formatter.Has_Blocks(MOCKUP_MESSAGE));
-        Assert.False(MonospaceBlocks_Formatter.Has_Blocks("🔴 Sup: done — branch ready to merge"));
-    }
-
-    [Fact]
-    public void Build_Html_PlainProse_IsJustEscapedText()
-    {
-        Assert.Equal("a &lt; b &amp; c", MonospaceBlocks_Formatter.Build_Html("a < b & c"));
     }
 }

@@ -31,16 +31,30 @@ public interface ITelegramApiClient
     Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Sends HTML-formatted text — used for ASCII mockups, which need a &lt;pre&gt; block to keep a
-    /// monospaced font. Telegram rejects malformed HTML, so the caller must escape everything.
+    /// Sends HTML-formatted text — every piece of agent-written prose, so the Markdown agents write
+    /// arrives rendered instead of literal. Telegram rejects malformed HTML, so the caller must
+    /// escape everything; <see cref="TelegramHtml_Renderer"/> is the one place that does.
     /// </summary>
     Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The HTML send WITH an inline keyboard — the decision message, whose question text is written
+    /// by an agent and whose buttons are not. Only the text is parsed; a button label is never HTML.
+    /// </summary>
+    Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
 
     /// <summary>
     /// Rewrites an already-sent message. Used for the delivery receipt, which EVOLVES in place
     /// (✓ → ✓✓ → ✓✓ · handoff) instead of stacking three messages in the topic.
     /// </summary>
     Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The same rewrite, parsed as HTML. Its own method rather than a flag on the one above for the
+    /// reason stated throughout this interface: a mode reachable by accident is a mode that will be
+    /// reached by accident, and here the accident is Telegram refusing the edit outright.
+    /// </summary>
+    Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken);
 
     /// <summary>
     /// Rewrites a message AND its buttons. Distinct from the plain edit because that one sends no

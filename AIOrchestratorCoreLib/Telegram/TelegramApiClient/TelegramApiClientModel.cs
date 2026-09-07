@@ -158,6 +158,22 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
     }
 
+    public async Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["text"] = html,
+            ["parse_mode"] = "HTML",
+            ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(Wrap_OneButtonPerRow(buttons)) },
+        };
+
+        if (messageThreadId != null)
+            payload["message_thread_id"] = messageThreadId.Value;
+
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
+    }
+
     public async Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
@@ -165,6 +181,19 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["chat_id"] = _supergroupChatId,
             ["message_id"] = messageId,
             ["text"] = text,
+        };
+
+        await Post_Async("editMessageText", payload, cancellationToken);
+    }
+
+    public async Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_id"] = messageId,
+            ["text"] = html,
+            ["parse_mode"] = "HTML",
         };
 
         await Post_Async("editMessageText", payload, cancellationToken);
