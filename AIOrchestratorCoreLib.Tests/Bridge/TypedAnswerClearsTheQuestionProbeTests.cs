@@ -360,10 +360,22 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
         }
     }
 
+    // RECORDED SINCE 2026-09-07, when the mirror started sending every entry as HTML. It used to
+    // ignore this call because only ASCII mockups came through it; leaving it blind now would hide
+    // the whole conversation from a probe that counts what reached the phone.
     public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
     {
-        lock (_lock)
-            return Task.FromResult<long?>(_nextMessageId++);
+        return Send_Message_Async(messageThreadId, html, cancellationToken);
+    }
+
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
     }
 
     // The General topic's name is not this probe's subject; accepting it silently keeps the rename

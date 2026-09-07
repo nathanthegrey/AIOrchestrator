@@ -283,6 +283,17 @@ internal sealed class TypingRecordingTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        return Task.FromResult<long?>(Record(html));
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        Record(html);
+        return Task.CompletedTask;
+    }
+
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
         Record(text);

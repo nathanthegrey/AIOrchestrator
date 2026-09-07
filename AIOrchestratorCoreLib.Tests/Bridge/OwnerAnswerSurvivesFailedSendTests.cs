@@ -430,6 +430,19 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Record_AndMaybeFail(html);
     }
 
+    // THE RENDERED PATH RECORDS EXACTLY LIKE THE PLAIN ONE. Since 2026-09-07 every piece of agent
+    // prose leaves as HTML, so a fake that only watched the plain calls would see an empty topic and
+    // report the traffic it is here to prove as absent.
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
+    }
+
     /// <summary>
     /// Hangs until the caller's token is cancelled, then throws exactly what a cancelled await throws.
     /// This is how the shutdown case gets a send genuinely IN FLIGHT at cancellation time — cancelling

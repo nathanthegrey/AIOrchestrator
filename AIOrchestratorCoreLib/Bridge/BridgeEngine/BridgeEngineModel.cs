@@ -3283,58 +3283,31 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Sends one mirrored chunk, as HTML when it carries a fenced block so an ASCII mockup keeps a
-    /// MONOSPACED font and its alignment. Telegram rejects malformed HTML (a chunk boundary can
-    /// split a fence), so a rejection falls back to plain text — a mangled mockup beats a lost
-    /// message.
+    /// Sends one mirrored chunk, ALWAYS as HTML, because a channel entry is Markdown: agents write
+    /// `**bold**`, bullet lists and fenced mockups because that is how they write, and until
+    /// 2026-09-07 the mirror sent every one of them through plain `sendMessage`. The owner read
+    /// `**GOAL 2: V1 LIVE**` on their phone, markers and all.
+    ///
+    /// <para>
+    /// THE CHUNKING HAPPENS ON THE MARKDOWN, before this method, and that ordering is load-bearing:
+    /// <see cref="TelegramMessage_Chunker"/> splits on line boundaries and each chunk is rendered
+    /// from Markdown on its own, so a split can never land inside a tag this renderer opened. The
+    /// one construct a split does cut is a fenced block, and the renderer closes an unterminated
+    /// fence itself rather than emitting half a &lt;pre&gt;.
+    /// </para>
+    /// <para>
+    /// The 400-only fallback, and why a timeout must NOT take it, is argued in
+    /// <see cref="TelegramProse_Sender"/> — this site is where that rule was first written down
+    /// (the sixteen-site sweep regression rev-6 caught), and moving the send there is what stops it
+    /// being re-derived per call site.
+    /// </para>
     /// </summary>
     async Task<long?> Send_MirrorChunk_Async(long? threadId, string chunk, CancellationToken cancellationToken)
     {
         var client = _telegramClient
             ?? throw new Exception("Send_MirrorChunk_Async called without a Telegram client");
 
-        if (MonospaceBlocks_Formatter.Has_Blocks(chunk))
-        {
-            try
-            {
-                return await client.Send_HtmlMessage_Async(threadId, MonospaceBlocks_Formatter.Build_Html(chunk), cancellationToken);
-            }
-            // DELIBERATELY BARE — DO NOT "COMPLETE" THE SWEEP HERE. It was filtered once, in the
-            // sixteen-site pass, and that was a REGRESSION which rev-6 caught; this comment replaces
-            // the wrong one.
-            //
-            // The sweep's premise does not hold at this site. It assumed a bare rethrow kills the tick.
-            // Here it does not: the ONLY caller is Mirror_Append_Async, whose own OperationCanceled
-            // catch is ALREADY filtered, with a generic sibling that logs at ERROR and returns false so
-            // the tailer re-emits the entry. A timeout was therefore caught one frame up and turned
-            // into an orderly retry — the desired behaviour, already in place.
-            //
-            // Filtering here made a timeout fall into the catch below, which is written for "Telegram
-            // rejected malformed HTML" — an instant 400 — and which FALLS THROUGH TO A SECOND LIVE CALL
-            // (the plain-text send at the end of this method) against a host that has just proved it
-            // does not answer. Two ~90-second waits inside a loop that ticks every 2 seconds. It also
-            // misdiagnosed a network timeout as "HTML mockup send rejected", dropped the severity from
-            // ERROR to WARNING, and — if the HTML send reached Telegram and only the RESPONSE timed out
-            // — posted a DUPLICATE to the owner's topic.
-            //
-            // This is the rule stated ~100 lines below at Announce_SupervisorFree_Async and applied
-            // there and at Publish_DeliveryReceipt_Async: A FALLBACK IS FOR "THAT CALL FAILED", NOT FOR
-            // "THE ENDPOINT IS UNREACHABLE". Three identical shapes; two were reasoned about correctly
-            // and this one was swept.
-            //
-            // THE TEST BEFORE FILTERING ANY SITE IS NOT "is it bare" — it is "does an escape here reach
-            // an UNFILTERED frame, and does the generic catch below make another live call".
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _log.Log_Warning(GLOBAL_ORCH_ID, $"HTML mockup send rejected, falling back to plain text: {ex.Message}");
-            }
-        }
-
-        return await client.Send_Message_Async(threadId, chunk, cancellationToken);
+        return await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, threadId, chunk, cancellationToken);
     }
 
     /// <summary>
@@ -3461,7 +3434,11 @@ internal sealed class BridgeEngineModel(
 
         var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithTerms, isHighRisk, out var buttonGroupId);
 
-        var messageId = await client.Send_MessageWithButtons_Async(threadId, promptWithTerms, buttons, cancellationToken);
+        // THROUGH THE RENDERER like the mirrored body above it, and for the same reason: this text is
+        // the agent's QUESTION: line and their OPTION: wording, so it carries their Markdown. The
+        // BUTTONS do not — a label is never parsed, whatever it contains.
+        var messageId = await TelegramProse_Sender.Send_WithButtons_Async(
+            client, _log, channel.OrchId, threadId, promptWithTerms, buttons, cancellationToken);
 
         Remember_TopicMessage(threadId, messageId);
 
@@ -8870,8 +8847,10 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                await client.Edit_MessageText_Async(
-                    tap.MessageId.Value,
+                // The stored QuestionText is the MARKDOWN that was sent, so the rewrite must render
+                // it again — an HTML send followed by a plain edit would put the markers back.
+                await TelegramProse_Sender.Edit_Async(
+                    client, _log, GLOBAL_ORCH_ID, tap.MessageId.Value,
                     QuestionPrompt_Builder.Build_AnsweredText(registered.QuestionText, registered.OptionText),
                     cancellationToken);
             }
@@ -8985,8 +8964,8 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                await client.Edit_MessageText_Async(
-                    tap.MessageId.Value,
+                await TelegramProse_Sender.Edit_Async(
+                    client, _log, orchId, tap.MessageId.Value,
                     QuestionPrompt_Builder.Build_ConfirmationText(registered.QuestionText, registered.OptionText, code, guardrails.HighRiskCodeExpiryMinutes),
                     cancellationToken);
             }
@@ -9127,8 +9106,8 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                await client.Edit_MessageText_Async(
-                    confirmation.MessageId.Value,
+                await TelegramProse_Sender.Edit_Async(
+                    client, _log, orchId, confirmation.MessageId.Value,
                     QuestionPrompt_Builder.Build_AnsweredText(confirmation.QuestionText, confirmation.OptionText),
                     cancellationToken);
             }
@@ -9280,8 +9259,8 @@ internal sealed class BridgeEngineModel(
 
         var remaining = question.DeadlineUtc.Value - nowUtc;
 
-        await client.Edit_MessageText_Async(
-            question.MessageId,
+        await TelegramProse_Sender.Edit_Async(
+            client, _log, question.OrchId, question.MessageId,
             QuestionPrompt_Builder.Build_TimedOutText(question.Text, $"Still waiting — about {Math.Max(1, (int)remaining.TotalMinutes)} minutes left."),
             cancellationToken);
     }
@@ -9354,8 +9333,8 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                await _telegramClient.Edit_MessageText_Async(
-                    question.MessageId,
+                await TelegramProse_Sender.Edit_Async(
+                    _telegramClient, _log, question.OrchId, question.MessageId,
                     QuestionPrompt_Builder.Build_TimedOutText(question.Text, outcome),
                     cancellationToken);
             }
@@ -10092,8 +10071,8 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await client.Edit_MessageText_Async(
-                question.MessageId,
+            await TelegramProse_Sender.Edit_Async(
+                client, _log, GLOBAL_ORCH_ID, question.MessageId,
                 QuestionPrompt_Builder.Build_AnsweredByMessageText(questionText, answerText),
                 cancellationToken);
         }
@@ -11820,8 +11799,9 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                await _telegramClient.Edit_MessageText_Async(
-                    entry.MessageId, $"{entry.Text}{AwayMode_Policy.PARKED_SUFFIX}", cancellationToken);
+                await TelegramProse_Sender.Edit_Async(
+                    _telegramClient, _log, orchId, entry.MessageId,
+                    $"{entry.Text}{AwayMode_Policy.PARKED_SUFFIX}", cancellationToken);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
             // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.

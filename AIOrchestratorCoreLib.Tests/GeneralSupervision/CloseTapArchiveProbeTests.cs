@@ -385,7 +385,19 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
 
     public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
     {
-        return Task.FromResult<long?>(_nextMessageId++);
+        return Send_Message_Async(messageThreadId, html, cancellationToken);
+    }
+
+    // The confirming button is read off the SEND, so the rendered send has to reach the same reader
+    // or this probe taps nothing at all.
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
     }
 
     public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken)
