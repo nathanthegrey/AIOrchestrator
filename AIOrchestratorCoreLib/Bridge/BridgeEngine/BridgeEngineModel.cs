@@ -81,6 +81,13 @@ internal sealed class BridgeEngineModel(
     const int NARRATION_REPEAT_SECONDS = 180;
 
     /// <summary>
+    /// How often the typing bubble is refreshed while the owner waits. Telegram clears a chat action
+    /// after about five seconds, so anything slower flickers; the tick is 2 s, so this lands on every
+    /// other tick.
+    /// </summary>
+    const int TYPING_REFRESH_SECONDS = 4;
+
+    /// <summary>
     /// How long a nudged, idle session may stay frozen before it is declared ORPHANED. The nudge
     /// changed its channel, so a live watcher fires within seconds — this window is generous
     /// enough that only a genuinely absent listener runs it out.
@@ -587,11 +594,18 @@ internal sealed class BridgeEngineModel(
     readonly HashSet<string> _repostImpossibleOrchIds = [];
 
     /// <summary>
-    /// Owner messages handed over and NOT yet answered by their supervisor. Tracked so a receipt
-    /// can never stay frozen on "thinking…" — the owner always learns what became of what they
-    /// sent, even if the supervisor goes idle without replying.
+    /// Owner messages handed over and NOT yet answered by their supervisor. Tracked so the owner
+    /// always learns what became of what they sent — the typing bubble while it is being worked on,
+    /// a nudge if the supervisor goes idle without replying.
     /// </summary>
     readonly Dictionary<string, PendingOwnerReply> _pendingOwnerReplies = [];
+
+    /// <summary>
+    /// Last typing refresh per topic, so the bubble is re-sent on <see cref="TYPING_REFRESH_SECONDS"/>
+    /// rather than on every tick. Guarded by <see cref="_ownerStateLock"/>: delivery can run from the
+    /// inbound loop (GO) and the refresh runs on the mirror tick.
+    /// </summary>
+    readonly Dictionary<long, DateTime> _lastTypingSentUtcByThread = [];
 
     /// <summary>
     /// The last half-hour SLOT each orchestration has spent, LOCAL — not a clock reading, and named
@@ -10604,19 +10618,31 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            // The batch's ✓ becomes "✓✓" — plus a TRUTHFUL handoff line (can the recipient
-            // answer now, or is it mid-turn with the communicator covering the wait?). One
-            // message that evolves, never a pile of ✓ / ✓✓ / thinking lines.
-            var handoffLine = Build_HandoffLine(target.OrchId);
+            // The batch's ✓ becomes "✓✓" — plus a handoff line ONLY when the recipient is busy and
+            // the owner needs to know who covers the wait. A FREE recipient gets no words at all:
+            // "thinking…" is what the typing bubble says, natively and silently, and
+            // Resolve_PendingOwnerReplies_Async keeps it up for as long as the wait lasts (owner,
+            // 2026-09-07: every exchange arrived as two status messages plus the answer).
+            var handoffLine = Build_BusyHandoffLine_OrNull(target.OrchId);
 
-            var receiptText = Should_SendHandoffLine(target.OrchId, handoffLine)
+            var receiptText = handoffLine != null && Should_SendHandoffLine(target.OrchId, handoffLine)
                 ? $"✓✓  ·  {handoffLine}"
                 : "✓✓";
 
-            var receiptMessageId = await Publish_DeliveryReceipt_Async(_telegramClient, target.ThreadId, receiptText, cancellationToken);
+            // A bare ✓✓ only ever EDITS the tick already sitting under the owner's message. With
+            // nothing to edit it is not sent — a second message saying "delivered" is the noise this
+            // replaces. A busy line is information and still earns a message of its own — keyed on
+            // the TEXT, not on the session being busy: a busy line suppressed as a repeat leaves a
+            // bare ✓✓ behind, and that one is not worth a message either.
+            var carriesInformation = receiptText != "✓✓";
+
+            var receiptMessageId = await Publish_DeliveryReceipt_Async(
+                _telegramClient, target.ThreadId, receiptText, sendWhenNothingToEdit: carriesInformation, cancellationToken);
+
+            await Show_Typing_BestEffort_Async(_telegramClient, target.ThreadId, cancellationToken);
 
             // Tracked until the supervisor actually answers — the owner must never be left
-            // staring at a receipt frozen on "thinking…".
+            // with a bubble that never resolves into anything.
             lock (_ownerStateLock)
             {
                 _pendingOwnerReplies[target.OrchId] = new PendingOwnerReply
@@ -10670,27 +10696,24 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// What happens to the message the owner just sent. "thinking…" is only honest when the
-    /// recipient is free to pick it up; a session already mid-turn cannot, and saying so (with
-    /// who will cover the wait) is the whole point of having a communicator.
+    /// What happens to the message the owner just sent, in words — and only when words are needed.
+    /// A recipient that is free to pick it up gets NO line: the typing bubble already says so. A
+    /// session already mid-turn cannot pick it up, and saying so (with who will cover the wait) is
+    /// the whole point of having a communicator, because a bubble cannot say WHY.
     /// </summary>
-    string Build_HandoffLine(string orchId)
+    string? Build_BusyHandoffLine_OrNull(string orchId)
     {
-        var speaker = Describe_Speaker(orchId);
-
         // The SESSION THAT TALKS TO THE OWNER, never "the supervisor": in a basic orchestration that
         // is the solo, and reading the empty supervisor slot made a working solo look idle.
         var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
 
-        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
-        {
-            return Is_SessionMidTurn(supervisorUsageFile)
-                ? $"{speaker}: busy — will read this the moment the current turn ends"
-                : $"{speaker}: thinking…";
-        }
-
         if (!Is_SessionMidTurn(supervisorUsageFile))
-            return $"{speaker}: thinking…";
+            return null;
+
+        var speaker = Describe_Speaker(orchId);
+
+        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
+            return $"{speaker}: busy — will read this the moment the current turn ends";
 
         // Say WHAT it is doing, not just that it is busy — read straight off its transcript, which
         // is where the communicator used to read it, minus the session and the turn it cost.
@@ -10699,6 +10722,45 @@ internal sealed class BridgeEngineModel(
         return activity == null
             ? $"{speaker}: busy mid-task — they'll pick this up when the current turn ends"
             : $"{speaker}: busy — {activity} — they'll pick this up when the current turn ends";
+    }
+
+    /// <summary>
+    /// The owner's "is it doing anything?" answered the way every chat app answers it — with the
+    /// typing bubble, not with a message. Cadenced, best-effort, never a notification: Telegram
+    /// clears it on its own after ~5 s or when the next real message lands, so an outage can at
+    /// worst leave the bubble absent, never a stale line in the topic.
+    /// </summary>
+    async Task Show_Typing_BestEffort_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var key = messageThreadId ?? 0;
+        var now = DateTime.UtcNow;
+
+        lock (_ownerStateLock)
+        {
+            if (_lastTypingSentUtcByThread.TryGetValue(key, out var lastSentUtc)
+                && (now - lastSentUtc).TotalSeconds < TYPING_REFRESH_SECONDS)
+            {
+                return;
+            }
+
+            // Stamped BEFORE the call, so a failing endpoint is retried on the cadence, not every tick.
+            _lastTypingSentUtcByThread[key] = now;
+        }
+
+        try
+        {
+            await client.Send_TypingAction_Async(messageThreadId, cancellationToken);
+        }
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled, so a bare rethrow would escalate a failed refresh into a shutdown.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Typing indicator refresh failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -12107,7 +12169,7 @@ internal sealed class BridgeEngineModel(
     /// send the same words again minutes later, wearing a "nothing has moved" warning that would be
     /// untrue.
     /// </summary>
-    (string Text, bool IsCompletion) Build_TurnEndedText(string orchId, PendingOwnerReply pending)
+    (string? Text, bool IsCompletion) Build_TurnEndedText(string orchId, PendingOwnerReply pending)
     {
         var speaker = Describe_Speaker(orchId);
 
@@ -12128,8 +12190,12 @@ internal sealed class BridgeEngineModel(
             }
         }
 
+        // ANSWERED, AND NOTHING WAS LEFT UNSAID: the answer the owner is reading IS the completion,
+        // and the bubble going down under it says the turn ended. "done for now — turn ended" after
+        // it was the second of two status messages per exchange (owner, 2026-09-07). Null, not a
+        // line: the caller sends nothing.
         if (string.IsNullOrWhiteSpace(lastWords))
-            return ($"✓✓  ·  {speaker}: done for now — turn ended, nothing left running", true);
+            return (null, true);
 
         // The entry's own text carries its speaker glyph already, so this adds only the fact the
         // owner cannot see from it: that the session has STOPPED, rather than being mid-sentence.
@@ -12146,6 +12212,17 @@ internal sealed class BridgeEngineModel(
 
         var (turnEndedText, isCompletion) = Build_TurnEndedText(orchId, pending);
 
+        if (turnEndedText == null)
+        {
+            _log.Log_Info(orchId, "Turn ended after the owner was answered — nothing further to say, nothing sent");
+            return;
+        }
+
+        // The narration line, when one was drawn, is the message the owner is looking at; the tick
+        // is the fallback. Neither exists for a free recipient answered inside the narration delay,
+        // which is the case that now says nothing at all above.
+        var canvasMessageId = pending.NarrationMessageId ?? pending.ReceiptMessageId;
+
         // No receipt to edit — one failed narration edit is enough to drop the id — so SEND it.
         // The owner's complaint that created this announcement was being left watching a "busy"
         // line that never changed, and a transient Telegram error silently reproducing that exact
@@ -12158,7 +12235,7 @@ internal sealed class BridgeEngineModel(
         // complaint is that a finished job reaches them as silence, and quietly rewriting a receipt
         // they have already read reproduces it exactly. New information the owner is waiting for
         // gets a message; a repeat of information they have gets an edit.
-        if (pending.ReceiptMessageId == null || isCompletion)
+        if (canvasMessageId == null || isCompletion)
         {
             // WRAPPED AT THE CALL SITE, NOT IN THE SHARED METHOD. This call sat outside any try, and
             // Send_DirectReply_BestEffort_Async's own OperationCanceled catch is bare — so a Telegram
@@ -12190,7 +12267,7 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await _telegramClient.Edit_MessageText_Async(pending.ReceiptMessageId.Value, turnEndedText, cancellationToken);
+            await _telegramClient.Edit_MessageText_Async(canvasMessageId.Value, turnEndedText, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -12299,6 +12376,17 @@ internal sealed class BridgeEngineModel(
 
             var supervisorBusy = Is_SessionMidTurn(supervisorUsageFile);
 
+            // THE BUBBLE IS THE WHOLE "THINKING…" STORY NOW: up while the session is mid-turn, and
+            // while a free session has not yet picked the message up — down at the nudge, the one
+            // moment "an answer is coming" stops being true enough to imply. After the answer it
+            // stays up only while the session is still working, which is exactly what it means.
+            if (_telegramClient != null
+                && Resolve_EffectiveMode(orchId) == TelegramDeliveryModes.Normal
+                && (supervisorBusy || (!pending.Answered && !pending.Nudged)))
+            {
+                await Show_Typing_BestEffort_Async(_telegramClient, pending.ThreadId, cancellationToken);
+            }
+
             // The communicator's whole job, done from this loop: while the supervisor is mid-turn
             // and the owner is waiting, say concretely what it is doing. First after ~45 s (an idle
             // supervisor answers for itself well inside that, which is the better outcome), then
@@ -12400,10 +12488,15 @@ internal sealed class BridgeEngineModel(
             // that cannot be kept in step.
             var text = $"✓✓  ·  {Describe_Speaker(orchId)}: turn ended without a reply — nudged, an answer is coming";
 
+            // The same canvas the busy narration draws on: a receipt that was never published (a
+            // free recipient gets none now) does not turn this into a second message when a
+            // narration line already stands.
+            var nudgeCanvasMessageId = pending.NarrationMessageId ?? pending.ReceiptMessageId;
+
             try
             {
-                if (pending.ReceiptMessageId != null)
-                    await _telegramClient.Edit_MessageText_Async(pending.ReceiptMessageId.Value, text, cancellationToken);
+                if (nudgeCanvasMessageId != null)
+                    await _telegramClient.Edit_MessageText_Async(nudgeCanvasMessageId.Value, text, cancellationToken);
                 else
                     await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, text, cancellationToken);
             }
@@ -12441,9 +12534,12 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// Turns the last ✓ of the batch into the final receipt, in place. Falls back to sending a new
-    /// message when there is nothing to edit or the edit fails (Telegram refuses very old edits).
+    /// message when there is nothing to edit or the edit fails (Telegram refuses very old edits) —
+    /// but only when <paramref name="sendWhenNothingToEdit"/> says the text is worth a message of its
+    /// own. A bare ✓✓ is not: it confirms what the typing bubble already implies, and as a fresh
+    /// message it was one of the two status lines per exchange the owner asked to lose.
     /// </summary>
-    async Task<long?> Publish_DeliveryReceipt_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
+    async Task<long?> Publish_DeliveryReceipt_Async(ITelegramApiClient client, long? messageThreadId, string text, bool sendWhenNothingToEdit, CancellationToken cancellationToken)
     {
         var messageId = Take_ReceiptMessageId_OrNull(messageThreadId);
 
@@ -12460,9 +12556,14 @@ internal sealed class BridgeEngineModel(
             }
             catch (Exception ex)
             {
-                _log.Log_Warning(GLOBAL_ORCH_ID, $"Receipt edit failed, sending a new message: {ex.Message}");
+                _log.Log_Warning(GLOBAL_ORCH_ID, sendWhenNothingToEdit
+                    ? $"Receipt edit failed, sending a new message: {ex.Message}"
+                    : $"Receipt edit failed; the bare ✓✓ is not worth a new message, so none is sent: {ex.Message}");
             }
         }
+
+        if (!sendWhenNothingToEdit)
+            return null;
 
         try
         {

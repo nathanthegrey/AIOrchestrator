@@ -37,6 +37,14 @@ public interface ITelegramApiClient
     Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Telegram's own "is typing…" bubble (<c>sendChatAction</c>). It is not a message: nothing lands
+    /// in the topic and nobody is notified. The client shows it in the chat header for about five
+    /// seconds and clears it the moment the bot's next message arrives, so a wait longer than that
+    /// re-sends it on a cadence.
+    /// </summary>
+    Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Rewrites an already-sent message. Used for the delivery receipt, which EVOLVES in place
     /// (✓ → ✓✓ → ✓✓ · handoff) instead of stacking three messages in the topic.
     /// </summary>

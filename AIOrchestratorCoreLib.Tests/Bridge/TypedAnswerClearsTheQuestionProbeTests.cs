@@ -277,6 +277,12 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
 /// </summary>
 internal sealed class RecordingTelegram_Fake : ITelegramApiClient
 {
+    // The typing bubble is not this probe's subject; it creates no message, so it is not recorded.
+    public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     const string EMPTY_UPDATES = "{\"ok\":true,\"result\":[]}";
 
     readonly object _lock = new();
