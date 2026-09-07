@@ -14,7 +14,7 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// Two renderings and one tap handler is three places to forget a command, and the failure mode is
 /// silent: a button that renders and does nothing, or worse, a bar above the keyboard offering a
 /// verb the lexer no longer knows. So the set lives HERE, once, and both renderings plus the parser
-/// are derived from <see cref="BUTTONS"/> — adding a fifth command is one line in one array.
+/// are derived from <see cref="BUTTONS"/> — adding another command is one line in one array.
 ///
 /// The two renderings carry different strings for the same command, and neither is decoration:
 ///   - the inline label is read by a HUMAN on a phone, so it gets an emoji and stays short;
@@ -53,8 +53,8 @@ public static class TopicCommandButtons
 
     /// <summary>
     /// Two per row. On a phone a four-across row shrinks each button to a thumb-missing sliver,
-    /// and one-per-row eats four rows of screen above the input box; two rows of two is the shape
-    /// that stays readable without pushing the conversation off the top.
+    /// and one-per-row eats a whole row of screen per command above the input box; two-across is
+    /// the shape that stays readable without pushing the conversation off the top.
     /// </summary>
     const int REPLY_KEYBOARD_COLUMNS = 2;
 
@@ -78,15 +78,24 @@ public static class TopicCommandButtons
         ("show",   "👁 /show"),
         ("merge",  "🔀 /merge"),
         ("test",   "🧪 /test"),
-        // /refresh EARNS A STANDING BUTTON on the owner's call, 2026-08-25: *"It happens so often
-        // that the question mark gets stuck that this command should be one of the main command
-        // buttons always present."* It is the only button here that repairs the topic LIST rather
-        // than acting on the work, and it is wanted precisely at the moment the owner cannot trust
-        // what the list is telling them.
-        ("refresh", "♻ /refresh"),
+        // /pc AND /close REPLACE /refresh on the owner's call, 2026-09-07: *"Let's remove the
+        // /refresh button from the pulse message, an place the /close and /pc command as buttons
+        // instead."* /refresh survives as a typed command and keeps its entry in Telegram's "/"
+        // menu - only the standing button went, so nothing it repaired became unreachable.
+        //
+        // They share the last row because both act on the SESSION rather than on its work: the
+        // rows above look at it (/screen, /show) and act on the code (/merge, /test).
+        //
+        // 💻 for /pc is no more a free choice than 🧪 is for /test: it is the glyph the topic
+        // NAME already carries while terminal presence is on, so the button and the state it
+        // toggles read as one thing. /close is the only button here that ENDS anything, and it is
+        // also the only one whose tap does not act on its own - it parks a request the owner
+        // confirms.
+        ("pc",     "💻 /pc"),
+        ("close",  "🏁 /close"),
     ];
 
-    /// <summary>The commands offered, in display order: "show", "merge", "test", "screen".</summary>
+    /// <summary>The commands offered, in display order: "screen", "show", "merge", "test", "pc", "close".</summary>
     public static IReadOnlyList<string> Commands { get; } = BUTTONS.Select(button => button.Command).ToArray();
 
     /// <summary>
