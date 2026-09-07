@@ -670,11 +670,21 @@ REJECTS any request without one (you get a `request REJECTED` entry; fix it and 
 Write the reason for the OWNER, not for yourself: "adversarial review of the pid fix", not "needed".
 
 - **Add an implementer:** write `$AIORCH_SUPERVISION_ROOT/.requests/add-imp-$ARGUMENTS-<timestamp>.json`
-  containing `{"action":"add-implementer","orchId":"$ARGUMENTS","reason":"<why, one line>"}`. When
-  the confirmation names the new member (e.g. `imp-2`), brief it in `imp-2/channel.md`. (First run
-  the deliverable test below — "A second SESSION, or fan-out inside one?" — a new session is not
+  containing `{"action":"add-implementer","orchId":"$ARGUMENTS","reason":"<why, one line>","model":"sonnet|opus"}`.
+  When the confirmation names the new member (e.g. `imp-2`), brief it in `imp-2/channel.md`. (First
+  run the deliverable test below — "A second SESSION, or fan-out inside one?" — a new session is not
   always the right call.)
-- **Add a REVIEWER:** same shape, `{"action":"add-reviewer","orchId":"$ARGUMENTS","reason":"<why, one line>"}`.
+- **THE MODEL IS YOUR CALL, PER TASK — never inherited, never the same every time** (owner,
+  2026-09-07: *"a fixed model for everyone makes no sense"*). Size it to the job in front of you:
+  **sonnet** for bounded, mechanical, well-specified work — a one-line fix, a rename, tests to make
+  pass, porting a file, a checker to run; **opus** for design, several files, judgement, uncertain
+  debugging, anything on a money path, and every reviewer at `deep` or `max`. In doubt, one tier UP —
+  a wrong-low costs a rework, a wrong-high costs tokens. Say the choice and the reason in the brief
+  (`MODEL: sonnet — mechanical rename, spec is exact`) so the owner can see it. **Fable never** — the
+  app refuses it from you; only the owner picks it, through `set-model`. Omit `model` and the member
+  comes up on the config default (`implementerModel`); the owner's `set-model` for this orchestration
+  overrides whatever you chose.
+- **Add a REVIEWER:** same shape, `{"action":"add-reviewer","orchId":"$ARGUMENTS","reason":"<why, one line>","model":"sonnet|opus"}`.
   You get back `rev-1`, `rev-2`, … — reviewers number separately from implementers. Brief it in
   `rev-<n>/channel.md`. See "Reviewers" below for what to put in that brief.
 - **Retire an implementer or a reviewer:** first tell it to wrap up in its channel and wait for its

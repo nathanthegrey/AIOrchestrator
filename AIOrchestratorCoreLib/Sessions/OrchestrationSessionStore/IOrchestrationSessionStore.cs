@@ -19,6 +19,9 @@ public interface IOrchestrationSessionStore
     /// <summary>Adds a member of the given KIND (imp-N or rev-N); the id carries the kind everywhere.</summary>
     IOrchestrationSession Add_Member(string orchId, MemberKinds kind);
 
+    /// <summary>Same, with the model the requester chose for this member's task (null = the role's default).</summary>
+    IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model);
+
     void Set_TelegramTopicId(string orchId, long topicId);
 
     /// <summary>Remembers the topic's one status message, so a restart edits rather than re-posts.</summary>

@@ -85,6 +85,11 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
 
     public IOrchestrationSession Add_Member(string orchId, MemberKinds kind)
     {
+        return Add_Member(orchId, kind, null);
+    }
+
+    public IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model)
+    {
         lock (_writeLock)
         {
             var session = Get_Session(orchId);
@@ -99,7 +104,7 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
                 File.WriteAllText(channelFile, ChannelSeed_Builder.Build_ImplementerChannelSeed(orchId, memberId));
 
             List<IOrchestrationMember> members = [.. session.Members];
-            members.Add(OrchestrationMember_Factory.Create(memberId, null, null));
+            members.Add(OrchestrationMember_Factory.Create(memberId, null, null, null, model));
 
             var updated = OrchestrationSession_Factory.CreateFrom_Existing_WithMembers(session, members);
             Save(updated);
@@ -226,7 +231,7 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
                     // rather than at that call site so it holds for every caller of this store method,
                     // present and future: setting a pid is not a statement about whether a member is
                     // open.
-                    members.Add(OrchestrationMember_Factory.Create(memberId, pid, DateTime.UtcNow, member.ClosedUtc));
+                    members.Add(OrchestrationMember_Factory.Create(memberId, pid, DateTime.UtcNow, member.ClosedUtc, member.Model));
                     found = true;
                 }
                 else

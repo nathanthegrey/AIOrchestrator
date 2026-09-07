@@ -1,6 +1,7 @@
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.Spawning.SpawnCommand;
@@ -45,6 +46,45 @@ public class OrchestrationLauncherTests : IDisposable
     public void Dispose()
     {
         Directory.Delete(_tempRoot, recursive: true);
+    }
+
+    /// <summary>
+    /// Three tiers: the owner's set-model for the orchestration, then the model the supervisor asked
+    /// for when it requested the member, then the config default. The member's model is on the
+    /// record, so a respawn keeps the size the task was given; the owner's override still wins.
+    /// </summary>
+    [Fact]
+    public void Add_Member_SpawnsOnTheRequestedModel_KeepsItAcrossRespawn_AndYieldsToTheOwnersOverride()
+    {
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _spawner.SpawnedCommands.Clear();
+
+        var withMember = _launcher.Add_Member(session.OrchId, MemberKinds.Implementer, "sonnet");
+        var memberId = withMember.Members[^1].MemberId;
+
+        Assert.Equal("sonnet", withMember.Members[^1].Model);
+        Assert.Contains("sonnet", Join(_spawner.SpawnedCommands[^1]));
+
+        // Reloaded from disk, not from memory: the model survives the session file.
+        Assert.Equal("sonnet", _store.Get_Session(session.OrchId).Members.Single(m => m.MemberId == memberId).Model);
+
+        _spawner.SpawnedCommands.Clear();
+        _launcher.Respawn_Implementer(session.OrchId, memberId);
+        Assert.Contains("sonnet", Join(_spawner.SpawnedCommands[^1]));
+
+        _store.Set_ImplementerModelOverride(session.OrchId, "opus");
+        _spawner.SpawnedCommands.Clear();
+        _launcher.Respawn_Implementer(session.OrchId, memberId);
+
+        var command = Join(_spawner.SpawnedCommands[^1]);
+        Assert.Contains("opus", command);
+        Assert.DoesNotContain("sonnet", command);
+    }
+
+    /// <summary>The claude invocation travels base64-encoded inside the terminal script; read it decoded.</summary>
+    static string Join(ISpawnCommand command)
+    {
+        return AIOrchestratorCoreLib.Spawning.SpawnCommand_Builder.Decode_SessionScript(command);
     }
 
     [Fact]

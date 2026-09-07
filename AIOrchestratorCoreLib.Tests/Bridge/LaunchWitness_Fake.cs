@@ -52,6 +52,7 @@ internal sealed class LaunchWitness_Fake(IOrchestrationLauncher inner, ISupervis
     public IOrchestrationSession Promote_ToFullCrew(string orchId) => inner.Promote_ToFullCrew(orchId);
     public IOrchestrationSession Demote_ToBasic(string orchId) => inner.Demote_ToBasic(orchId);
     public IOrchestrationSession Add_Member(string orchId, MemberKinds kind) => inner.Add_Member(orchId, kind);
+    public IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model) => inner.Add_Member(orchId, kind, model);
     public void Respawn_Supervisor(string orchId) => inner.Respawn_Supervisor(orchId);
     public void Respawn_Communicator(string orchId) => inner.Respawn_Communicator(orchId);
     public void Respawn_Implementer(string orchId, string memberId) => inner.Respawn_Implementer(orchId, memberId);
