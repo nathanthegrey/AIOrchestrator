@@ -132,6 +132,24 @@ if command -v claude >/dev/null 2>&1; then
         reinstall_reason='the installed copy differs from this checkout'
     fi
 
+    # THE HOST'S OWN VERIFIER READS gitCommitSha TOO (PluginVersion_Verifier), NOT ONLY THIS
+    # SCRIPT'S diff. On the VPS on 2026-09-07 a stage that touched no kit file still moved HEAD,
+    # `diff -rq` above read identical (correctly — the text really had not changed), and the host
+    # refused to spawn anyone over a recorded commit it no longer recognised. A content compare that
+    # is silent about SHA cannot catch that, so it is compared here too and reinstalls on its own,
+    # even when the byte-for-byte diff found nothing.
+    if [ -z "$reinstall_reason" ] && command -v git >/dev/null 2>&1; then
+        installed_plugins_file="$claude_folder/plugins/installed_plugins.json"
+        if [ -f "$installed_plugins_file" ]; then
+            checkout_sha="$(git -C "$kit_folder" rev-parse HEAD 2>/dev/null || true)"
+            installed_sha="$(jq -r --arg id 'aiorch@aiorch-local' \
+                '.plugins[$id][0].gitCommitSha // empty' "$installed_plugins_file" 2>/dev/null || true)"
+            if [ -n "$checkout_sha" ] && [ -n "$installed_sha" ] && [ "$checkout_sha" != "$installed_sha" ]; then
+                reinstall_reason="the installed record's commit ($installed_sha) differs from this checkout's HEAD ($checkout_sha) — the host's verifier reads this field even when the text compares identical"
+            fi
+        fi
+    fi
+
     if [ -n "$reinstall_reason" ]; then
         warn "aiorch: $reinstall_reason — REINSTALLING (an update would report success and change nothing)."
         claude plugin uninstall aiorch >/dev/null 2>&1 || true

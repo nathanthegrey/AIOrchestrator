@@ -32,6 +32,26 @@ public interface IRunnerConfigs
     TimeSpan SilenceLimit { get; }
 
     /// <summary>
+    /// THE MEMORY CEILING ONE SESSION MAY REACH BEFORE THE KERNEL KILLS IT — written the way
+    /// systemd writes a size ("3G", "3072M"), or one of the words <c>none</c>/<c>off</c>/<c>0</c>
+    /// for no ceiling at all.
+    ///
+    /// <para>
+    /// Observed on the VPS 2026-09-07: sessions are spawned as CHILDREN of the daemon and therefore
+    /// share its cgroup, so a 6.5 GB allocator inside one implementer had the whole
+    /// <c>aiorchestrator</c> unit OOM-killed three times in ten minutes — the bridge, every other
+    /// session, and every turn in flight, for one session's mistake. A session that exceeds this
+    /// must die ALONE.
+    /// </para>
+    /// <para>
+    /// It is a STRING rather than a byte count because it is written by a human into config.json and
+    /// handed to systemd verbatim; parsing it to a number and back would introduce a spelling this
+    /// host invented. See <see cref="SessionSandbox.MemorySize_Parser"/> for the reading.
+    /// </para>
+    /// </summary>
+    string SessionMemoryMax { get; }
+
+    /// <summary>
     /// Configurations the loader REFUSED, in the owner's own terms — one line each, logged once by
     /// the launcher. A refusal is not a parse error (config.json still loads, the role falls back to
     /// terminal): it is a setting that would have done something the app must not do, and the only

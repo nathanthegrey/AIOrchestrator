@@ -21,11 +21,23 @@ public static class PluginVersion_Verifier
     /// cannot answer the question must not answer it with a refusal. The caller says so out loud
     /// instead; see <c>KitAssets_Bootstrapper</c>.
     /// </param>
+    /// <param name="contentMatches">
+    /// WHAT THE FILES SAY, when they could be read: true when the installed tree is byte-identical
+    /// to the one this host ships (<see cref="KitContent_Digest"/>), false when it is not, null when
+    /// one of the two trees could not be digested.
+    ///
+    /// IT OUTRANKS THE COMMIT, in both directions, and that is the 2026-09-07 correction. The commit
+    /// is a proxy for the content: on the VPS a stage that touched no file under <c>kit/</c> still
+    /// moved HEAD, the recorded gitCommitSha differed from the build's, and a kit that was identical
+    /// was refused — no session could start, over a number. Where the content itself is known the
+    /// proxy has no vote; where it is not, the commit is still the best question available.
+    /// </param>
     public static PluginVerdicts Decide(
         InstalledPluginReading reading,
         string expectedVersion,
         IReadOnlyList<string>? shadowingCommands = null,
-        string? expectedCommitSha = null)
+        string? expectedCommitSha = null,
+        bool? contentMatches = null)
     {
         if (shadowingCommands is { Count: > 0 })
             return PluginVerdicts.Shadowed;
@@ -39,10 +51,19 @@ public static class PluginVersion_Verifier
         if (reading.Version != expectedVersion)
             return PluginVerdicts.VersionMismatch;
 
-        // THE NUMBER IS RIGHT; IS THE TEXT? Only asked when BOTH sides can answer: an unstamped build
-        // or an install record with no gitCommitSha leaves the question open, and an open question is
-        // reported by the caller, not converted into a refusal here. Checked after the version because
-        // a wrong version is the more actionable message when somehow both are wrong.
+        // THE NUMBER IS RIGHT; IS THE TEXT? Asked of the FILES first, because they are the thing the
+        // question is actually about — the commit below is only ever a stand-in for them.
+        if (contentMatches == true)
+            return reading.Enabled ? PluginVerdicts.Ok : PluginVerdicts.Disabled;
+
+        if (contentMatches == false)
+            return PluginVerdicts.ContentMismatch;
+
+        // Neither tree could be digested, so the proxy is the best question left. Only asked when
+        // BOTH sides can answer it: an unstamped build or an install record with no gitCommitSha
+        // leaves the question open, and an open question is reported by the caller, not converted
+        // into a refusal here. Checked after the version because a wrong version is the more
+        // actionable message when somehow both are wrong.
         if (expectedCommitSha != null
             && reading.CommitSha != null
             && !Build.BuildCommit_Reader.Names_TheSameCommit(reading.CommitSha, expectedCommitSha))
@@ -65,7 +86,8 @@ public static class PluginVersion_Verifier
         string expectedVersion,
         string pluginId,
         IReadOnlyList<string>? shadowingCommands = null,
-        string? expectedCommitSha = null)
+        string? expectedCommitSha = null,
+        bool? contentMatches = null)
     {
         var found = reading.Version ?? "nothing installed";
         var where = reading.InstallPath ?? "no install path on record";
@@ -88,11 +110,20 @@ public static class PluginVersion_Verifier
             // update aiorch`, and it answers "already at the latest version (1.0.0)" while changing
             // nothing (measured 2026-09-07, CLI 2.1.263) — so a message that only said "reinstall"
             // would be followed by an update, a success line, and the same refusal on the next start.
+            // NAMES WHICH QUESTION FAILED, because the two are not equally strong and an operator
+            // has to know which one they are being refused over: the files differing is a fact, the
+            // commits differing is a suspicion that the file comparison could not confirm.
+            PluginVerdicts.ContentMismatch when contentMatches == false =>
+                $"The installed {pluginId} kit is version {found} — the right NUMBER over the WRONG TEXT. Its files at "
+                + $"{where} DIFFER from the ones this host ships, so its sessions would read protocols this build was "
+                + $"not made against. `{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the version string and "
+                + $"reports success. Reinstall it: {KitPlugin.REINSTALL_COMMAND}",
+
             PluginVerdicts.ContentMismatch =>
-                $"The installed {pluginId} kit is version {found} — the right NUMBER over the WRONG TEXT. It was taken "
-                + $"from commit {reading.CommitSha}, and this host was built from {expectedCommitSha}, at {where}. "
-                + $"`{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the version string and reports success. "
-                + $"Reinstall it: {KitPlugin.REINSTALL_COMMAND}",
+                $"The installed {pluginId} kit is version {found} — the right NUMBER over a TEXT THIS HOST COULD NOT "
+                + $"COMPARE. It was taken from commit {reading.CommitSha}, and this host was built from "
+                + $"{expectedCommitSha}, at {where}. `{KitPlugin.UPDATE_COMMAND}` will NOT fix it: it compares the "
+                + $"version string and reports success. Reinstall it: {KitPlugin.REINSTALL_COMMAND}",
 
             PluginVerdicts.Disabled =>
                 $"The {pluginId} kit is installed at {found} ({where}) but DISABLED, so sessions would load none of it. "

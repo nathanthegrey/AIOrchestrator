@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using AIOrchestratorCoreLib.Running.ClaudeInvocation;
+using AIOrchestratorCoreLib.Running.SessionSandbox;
 using AIOrchestratorCoreLib.Running.TurnResult;
 
 namespace AIOrchestratorCoreLib.Running.PrintTurnRunner;
@@ -10,10 +11,17 @@ namespace AIOrchestratorCoreLib.Running.PrintTurnRunner;
 /// closed, stdout/stderr drained concurrently so a chatty turn cannot deadlock on a full pipe.
 /// Every <c>CLAUDECODE*</c> / <c>CLAUDE_CODE_*</c> variable is scrubbed from the child: a bridge
 /// started from inside a Claude Code session would otherwise spawn sessions that refuse to nest.
+///
+/// <para>
+/// THE INVOCATION IS RESOLVED THROUGH <see cref="ISessionSandbox"/> AT EVERY START, never held
+/// pre-wrapped: the ceiling is read live from config.json like every other runner setting, so an
+/// operator raising it on the VPS applies to the next turn rather than to the next restart.
+/// </para>
 /// </summary>
-internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation) : IPrintTurnRunner
+internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation, ISessionSandbox sandbox) : IPrintTurnRunner
 {
     readonly IClaudeInvocation _invocation = invocation;
+    readonly ISessionSandbox _sandbox = sandbox;
 
     public async Task<ITurnResult> Run_Async(
         IReadOnlyList<string> arguments,
@@ -25,8 +33,10 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation) : IPrin
     {
         var stopwatch = Stopwatch.StartNew();
 
-        using var process = Process.Start(Build_StartInfo(arguments, workingDirectory, environment))
-            ?? throw new Exception($"Process.Start returned null for '{_invocation.Executable}'");
+        var invocation = _sandbox.Wrap(_invocation);
+
+        using var process = Process.Start(Build_StartInfo(invocation, arguments, workingDirectory, environment))
+            ?? throw new Exception($"Process.Start returned null for '{invocation.Executable}'");
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
@@ -79,11 +89,11 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation) : IPrin
         return TurnResult_Parser.Parse(timedOut ? -1 : process.ExitCode, timedOut, stdout, stderr, stopwatch.Elapsed);
     }
 
-    ProcessStartInfo Build_StartInfo(IReadOnlyList<string> arguments, string workingDirectory, IReadOnlyDictionary<string, string> environment)
+    static ProcessStartInfo Build_StartInfo(IClaudeInvocation invocation, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlyDictionary<string, string> environment)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = _invocation.Executable,
+            FileName = invocation.Executable,
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -95,7 +105,7 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation) : IPrin
             StandardErrorEncoding = new UTF8Encoding(false),
         };
 
-        foreach (var leading in _invocation.LeadingArguments)
+        foreach (var leading in invocation.LeadingArguments)
             startInfo.ArgumentList.Add(leading);
 
         foreach (var argument in arguments)

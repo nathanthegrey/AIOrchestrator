@@ -234,6 +234,11 @@ that were explicitly requested"*, because every discovery became work.
 - If a turn-end hook (e.g. a style check) fires while you still have deliverables: satisfy the
   hook, then CONTINUE with your remaining numbered contract items — the hook is never the
   deliverable, and stopping after it is the known failure mode.
+- **This machine also runs the bridge and every other session — never stress it.** Never run a
+  memory- or CPU-pressure experiment, never allocate on purpose, never run anything whose purpose
+  is to load the box. To investigate an intermittent: run the suite as-is and repeat it, or ask
+  the owner for a machine of its own. A session that exceeds its memory cap is killed alone — the
+  app enforces that; it is a fact, not a threat.
 
 ## Fan out — parallel agents are YOURS to use
 

@@ -119,4 +119,59 @@ public class PrintTurnEntrySplitterTests
     {
         Assert.Equal(PrintTurnEntry_Splitter.EMPTY_SUBJECT, PrintTurnEntry_Splitter.Split(null).Subject);
     }
+
+    /// <summary>
+    /// THE EXACT LINE, from the general channel's entry #52 on 2026-09-07. It is short and it is
+    /// followed by a blank line, so it satisfied the subject contract perfectly — and every reader
+    /// of that channel got a sentence about the mechanism where the news should have been.
+    /// </summary>
+    [Fact]
+    public void ThePrintRunnerPreamble_NeverReachesTheChannel()
+    {
+        var (subject, body) = PrintTurnEntry_Splitter.Split(
+            "Now writing my final message (which is the channel entry in print-runner mode):\n\nkit check OK — sessions can start\n\nThe blocker is cleared.");
+
+        Assert.Equal("kit check OK — sessions can start", subject);
+        Assert.Equal("The blocker is cleared.", body);
+        Assert.DoesNotContain("print-runner mode", subject);
+        Assert.DoesNotContain("print-runner mode", body);
+    }
+
+    /// <summary>
+    /// The structural half, which needs no vocabulary at all: whatever the preamble says, a line
+    /// ending in a colon that is followed by a header the session wrote ITSELF is preamble.
+    /// </summary>
+    [Fact]
+    public void APreambleBeforeAnEchoedHeader_IsStripped_WhateverItsWording()
+    {
+        var (subject, body) = PrintTurnEntry_Splitter.Split(
+            "Filing the entry now, as follows:\n\n## [52] FROM general — 2026-09-07 14:02 — kit check OK\n\nSessions can start.");
+
+        Assert.Equal("kit check OK", subject);
+        Assert.DoesNotContain("as follows", body);
+    }
+
+    /// <summary>
+    /// AND A REAL SUBJECT THAT ENDS IN A COLON SURVIVES. "any line ending in a colon" would have
+    /// eaten this, and losing a blocked flag is worse than keeping a narration line.
+    /// </summary>
+    [Theory]
+    [InlineData("BLOCKED ON OWNER:")]
+    [InlineData("QUESTION:")]
+    [InlineData("Two things need your call:")]
+    public void ASubjectThatEndsInAColon_IsNotMistakenForNarration(string subjectLine)
+    {
+        var (subject, _) = PrintTurnEntry_Splitter.Split($"{subjectLine}\n\nthe body of it");
+
+        Assert.Equal(subjectLine, subject);
+    }
+
+    /// <summary>Narration that is the WHOLE message still becomes an entry — "(no message)" would be worse.</summary>
+    [Fact]
+    public void NarrationWithNothingAfterIt_IsStillAnEntry()
+    {
+        var (subject, _) = PrintTurnEntry_Splitter.Split("Now writing my final message:");
+
+        Assert.Equal("Now writing my final message:", subject);
+    }
 }
