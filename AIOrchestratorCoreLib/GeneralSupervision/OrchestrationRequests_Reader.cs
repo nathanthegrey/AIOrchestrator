@@ -60,6 +60,11 @@ public static class OrchestrationRequests_Reader
     /// Every autonomous action costs the owner tokens, so it must justify itself: the app relays
     /// the reason to them. Rejecting is deliberate — a silent spawn left the owner in the dark.
     /// </summary>
+    /// <summary>Only the owner may choose this one, and only through set-model — never a session on its own.</summary>
+    public const string FORBIDDEN_MEMBER_MODEL = "fable";
+
+    public const string FORBIDDEN_MEMBER_MODEL_MESSAGE = "model 'fable' is not yours to choose — the owner selects it, through set-model; pick sonnet or opus for the task and drop a new file";
+
     public const string MISSING_REASON_MESSAGE = "missing 'reason' — every autonomous action must state WHY in one short line (it is relayed to the owner)";
 
     /// <summary>
@@ -296,7 +301,18 @@ public static class OrchestrationRequests_Reader
 
                     var kind = action == ADD_REVIEWER_ACTION ? MemberKinds.Reviewer : MemberKinds.Implementer;
 
-                    addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, kind, reason.Trim(), filePath));
+                    // Optional: the requester's per-task model. Fable is refused HERE, not merely
+                    // forbidden in the manual (decision 21 — the app enforces what it can): a
+                    // session may not put the owner on the most expensive model on its own judgement.
+                    var memberModel = root["model"]?.GetValue<string>()?.Trim();
+
+                    if (memberModel != null && memberModel.Length == 0)
+                        memberModel = null;
+
+                    if (memberModel != null && string.Equals(memberModel, FORBIDDEN_MEMBER_MODEL, StringComparison.OrdinalIgnoreCase))
+                        return FORBIDDEN_MEMBER_MODEL_MESSAGE;
+
+                    addImplementerRequests.Add(AddImplementerRequest_Factory.Create(orchId, kind, reason.Trim(), filePath, memberModel));
                     return null;
                 }
                 case PROMOTE_ORCHESTRATION_ACTION:

@@ -106,6 +106,11 @@ internal sealed class OrchestrationLauncherModel(
 
     public IOrchestrationSession Add_Member(string orchId, MemberKinds kind)
     {
+        return Add_Member(orchId, kind, null);
+    }
+
+    public IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model)
+    {
         // THE SHAPE GATE, and it is here rather than in the button because a click can only ask.
         // The desktop's "+ Implementer" reaches this method directly, so before this a click on a
         // basic card spawned an implementer beside the solo with NO supervisor and no stamp — the
@@ -119,7 +124,7 @@ internal sealed class OrchestrationLauncherModel(
         if (!OrchestrationShape.Can_AddMember(_store.Get_Session(orchId).SupervisorSpawnedUtc, kind))
             throw new Exception(OrchestrationShape.Describe_AddMemberRefusal(_store.Get_Session(orchId).SupervisorSpawnedUtc, kind));
 
-        var session = _store.Add_Member(orchId, kind);
+        var session = _store.Add_Member(orchId, kind, model);
         var newMember = session.Members[session.Members.Count - 1];
 
         Respawn_Implementer(orchId, newMember.MemberId);
@@ -375,7 +380,9 @@ internal sealed class OrchestrationLauncherModel(
         // The store no longer re-opens the member on the pid write, so the roster stays honest either
         // way — but without this the app would still open a terminal for a session it had retired,
         // and the owner would find a solo alive beside the supervisor that replaced it.
-        if (session.Members.FirstOrDefault(member => member.MemberId == memberId)?.ClosedUtc != null)
+        var member = session.Members.FirstOrDefault(member => member.MemberId == memberId);
+
+        if (member?.ClosedUtc != null)
         {
             _log.Log_Info(orchId, $"Respawn of '{memberId}' skipped — it was closed while the tick was in flight");
             return;
@@ -383,7 +390,12 @@ internal sealed class OrchestrationLauncherModel(
 
         var pidFile = _paths.Get_ImplementerPidFile(orchId, memberId);
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
-        var model = session.ImplementerModelOverride ?? _configProvider.Get_Current().ImplementerModel;
+
+        // THREE TIERS, IN THIS ORDER: the owner's set-model for this orchestration, then the model
+        // the supervisor asked for when it requested this member (sized to the task — on the record,
+        // so a respawn keeps it), then the config default. A fixed model per role made no sense to
+        // the owner (2026-09-07): a one-line fix and a redesign are not the same job.
+        var model = session.ImplementerModelOverride ?? member?.Model ?? _configProvider.Get_Current().ImplementerModel;
 
         var launch = SessionLaunch_Factory.Create(SessionRole_Names.From_MemberKind(kind), orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName);
 

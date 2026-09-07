@@ -20,6 +20,7 @@ public static class SessionJson_Serializer
                 ["pid"] = member.Pid,
                 ["spawnedUtc"] = member.SpawnedUtc?.ToString("O", CultureInfo.InvariantCulture),
                 ["closedUtc"] = member.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
+                ["model"] = member.Model,
             });
         }
 
@@ -74,7 +75,7 @@ public static class SessionJson_Serializer
                 var spawnedUtc = Get_DateTime_OrNull(memberObject, "spawnedUtc");
                 var memberClosedUtc = Get_DateTime_OrNull(memberObject, "closedUtc");
 
-                members.Add(OrchestrationMember_Factory.Create(memberId, pid, spawnedUtc, memberClosedUtc));
+                members.Add(OrchestrationMember_Factory.Create(memberId, pid, spawnedUtc, memberClosedUtc, Get_String_OrNull(memberObject, "model")));
             }
         }
 

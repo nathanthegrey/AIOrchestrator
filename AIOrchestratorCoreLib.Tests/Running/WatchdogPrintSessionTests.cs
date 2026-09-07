@@ -19,6 +19,7 @@ public class WatchdogPrintSessionTests
         public IOrchestrationSession Promote_ToFullCrew(string orchId) => throw new NotSupportedException();
         public IOrchestrationSession Demote_ToBasic(string orchId) => throw new NotSupportedException();
         public IOrchestrationSession Add_Member(string orchId, MemberKinds kind) => throw new NotSupportedException();
+        public IOrchestrationSession Add_Member(string orchId, MemberKinds kind, string? model) => throw new NotSupportedException();
         public void Respawn_Supervisor(string orchId) => Calls.Add($"sup:{orchId}");
         public void Respawn_Communicator(string orchId) => Calls.Add($"com:{orchId}");
         public void Respawn_Implementer(string orchId, string memberId) => Calls.Add($"imp:{orchId}/{memberId}");

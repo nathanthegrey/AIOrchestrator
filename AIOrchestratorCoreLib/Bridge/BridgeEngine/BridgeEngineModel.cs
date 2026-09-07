@@ -4091,9 +4091,12 @@ internal sealed class BridgeEngineModel(
         {
             try
             {
-                var session = _launcher.Add_Member(request.OrchId, request.Kind);
+                var session = _launcher.Add_Member(request.OrchId, request.Kind, request.Model);
                 var newMember = session.Members[session.Members.Count - 1];
                 var kindWord = request.Kind.ToString().ToLowerInvariant();
+
+                // The model is part of what the owner is paying for, so it rides beside the reason.
+                var modelWord = request.Model == null ? "" : $" ({request.Model})";
 
                 var briefingHint = request.Kind == MemberKinds.Reviewer
                     ? $"New reviewer '{newMember.MemberId}' spawned for orchestration '{request.OrchId}' — READ-ONLY (it cannot edit or commit). Its channel is {newMember.MemberId}/channel.md — brief it there, and the brief MUST name a review DEPTH (quick | standard | deep | max) and exactly what to review."
@@ -4103,7 +4106,7 @@ internal sealed class BridgeEngineModel(
                 // owner must never see a session appear (and burn tokens) without knowing why.
                 Append_OrchestrationAppEntry(
                     request.OrchId, AppEntryAudiences.Owner,
-                    $"{kindWord} '{newMember.MemberId}' added — {request.Reason}",
+                    $"{kindWord} '{newMember.MemberId}'{modelWord} added — {request.Reason}",
                     briefingHint);
             }
             catch (Exception ex)
