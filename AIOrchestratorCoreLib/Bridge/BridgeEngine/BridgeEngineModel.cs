@@ -1876,28 +1876,44 @@ internal sealed class BridgeEngineModel(
                     continue;
                 }
 
-                if ((DateTime.UtcNow - nudgedUtc).TotalMinutes < ORPHAN_CONFIRM_MINUTES)
-                    continue;
-
-                // ESCALATION, and the probe is the TRANSCRIPT, not the channel. The nudge changed
-                // the channel, so a live monitor fired and the session took a turn — but the
-                // protocol forbids acknowledgment-only entries, so a live, obedient session with
-                // nothing to say answers with SILENCE. Treating that silence as death respawned
-                // healthy sessions and threw away their context, repeatedly.
+                // ESCALATION — and it no longer touches the process. See OrphanEscalation_Decider for
+                // the measured incident that ended the kill: 19 ORPHANED events in three hours, every
+                // one of them a false positive, on a host where the evidence the old test demanded
+                // cannot exist at all.
                 var memberUsageFile = Path.Combine(
                     _paths.Get_ImplementerFolder(session.OrchId, member.MemberId), UsageTotals_Reader.SESSION_USAGE_FILE);
 
-                var lastActivityUtc = SessionActivity_Probe.Get_LastActivityUtc_OrNull(memberUsageFile);
+                var escalation = OrphanEscalation_Decider.Decide(
+                    Is_BridgeDriven(Running.SessionRoles.Implementer, session.OrchId, member.MemberId),
+                    _clock.UtcNow - nudgedUtc,
+                    TimeSpan.FromMinutes(ORPHAN_CONFIRM_MINUTES),
+                    SessionActivity_Probe.Is_MidTurn(memberUsageFile),
+                    SessionActivity_Probe.Get_LastActivityUtc_OrNull(memberUsageFile),
+                    nudgedUtc);
 
-                if (lastActivityUtc != null && lastActivityUtc > nudgedUtc)
-                {
-                    // It woke after the nudge: alive, and its monitor works. Nothing is wrong.
-                    _nudgedMemberUtc.Remove(memberKey);
+                if (!OrphanEscalation_Decider.Clears_TheClock(escalation))
                     continue;
-                }
 
                 _nudgedMemberUtc.Remove(memberKey);
-                await Recover_OrphanedImplementer_Async(session, member.MemberId, cancellationToken);
+
+                // WRITTEN DOWN EVERY TIME, including — especially — the quiet outcomes. The common
+                // case is now silence toward the owner, and silence with no record reads exactly like
+                // a detector somebody switched off.
+                _log.Log_Info(session.OrchId, OrphanEscalation_Decider.Describe(escalation, member.MemberId));
+
+                if (!OrphanEscalation_Decider.Reports(escalation))
+                    continue;
+
+                // A REPORT, NOT A RESPAWN. The supervisor can look at the member, ask it something, or
+                // close and re-add it — all of which it can already do, and all of which are decisions
+                // this loop has no business taking on evidence this thin.
+                Append_SupervisorAttention_UnlessMeeting(
+                    session.OrchId,
+                    $"{member.MemberId} may be deaf to wakes",
+                    $"{member.MemberId} was nudged {ORPHAN_CONFIRM_MINUTES} minutes ago, took no turn since, and has no "
+                    + "tool call in flight. It may be fine — check its channel before doing anything. If it really is "
+                    + "deaf, close it and add a replacement; the app will not restart it for you.",
+                    Resolve_Presence(session.OrchId));
             }
 
             Publish_AwaitingVerdict(session.OrchId, awaitingVerdict);
@@ -2353,74 +2369,19 @@ internal sealed class BridgeEngineModel(
         return true;
     }
 
-    /// <summary>
-    /// Last resort for a session that is ALIVE but has no way back: it ignored a channel change
-    /// while idle, so nothing is listening for it. Respawning is the only recovery — its files and
-    /// its channel survive, and the role command's boot re-reads the channel. In-conversation
-    /// context is lost, which is why this only runs after the nudge probe has failed.
-    /// </summary>
-    async Task Recover_OrphanedImplementer_Async(IOrchestrationSession session, string memberId, CancellationToken cancellationToken)
-    {
-        _log.Log_Error(session.OrchId, $"{memberId} is ORPHANED (idle, ignored a channel change) — respawning it", null);
-
-        try
-        {
-            SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(session.OrchId, memberId));
-            _launcher.Respawn_Implementer(session.OrchId, memberId);
-
-            // The kill and the respawn above have already happened and cannot be undone, so this
-            // entry is the ONLY thing that tells the respawned session why it restarted and where to
-            // resume. If it did not land, the session wakes with no explanation — and the owner must
-            // not then be told the orphan was handled. Escalated rather than logged: an unexplained
-            // respawn is a member that will sit there having lost its context and not know it.
-            if (!ChannelAppender.Append_AppEntry(
-                    Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, memberId), AppEntryAudiences.Agent,
-                    // The constant, not the text: Nudge_Decider has to recognise this entry as the app's
-                    // own wake rather than something to nudge the member about, and two copies of a string
-                    // are two copies that can drift.
-                    Nudge_Wording.RESPAWN_SUBJECT,
-                    "Your previous session went idle with nothing listening for new traffic, so the app restarted you. Your files and this channel are intact — read it from the top of the unanswered traffic and continue. Arm your watcher with the baseline captured BEFORE you read.",
-                    DateTime.Now))
-            {
-                _log.Log_Error(
-                    session.OrchId,
-                    $"{memberId} was respawned but the explanation could not be appended (channel locked) — it is awake with no idea why it restarted",
-                    null);
-
-                return;
-            }
-
-            Raise_OrchestrationActivity(session.OrchId);
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Error(session.OrchId, $"Orphan recovery for '{memberId}' failed", ex);
-            return;
-        }
-
-        if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
-            return;
-
-        try
-        {
-            await _telegramClient.Send_Message_Async(
-                session.TelegramTopicId,
-                $"⚠️ {memberId} was ORPHANED (alive but nothing listening — it ignored the nudge). Respawned it; its work on disk is untouched, but its in-session context is gone.",
-                cancellationToken);
-        }
-        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
-        // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
-        // Canonical account in Refresh_TopicStatusLines_Async; not repeated at each site on purpose.
-        // Cost HERE: a member whose monitor is dead is not recovered, and the tick that would retry it goes too.
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _log.Log_Warning(session.OrchId, $"Orphan-recovery alert send failed: {ex.Message}");
-        }
-    }
+    // Recover_OrphanedImplementer_Async LIVED HERE, and it is gone on purpose rather than left
+    // unreachable. It killed a member's process tree and respawned it whenever the escalation could
+    // not prove the member alive; OrphanEscalation_Decider now reports instead, and a destructive
+    // method with no callers is a loaded gun somebody rewires in six months.
+    //
+    // Introduced once and narrowed five times, every narrowing reacting to a false positive, with no
+    // case recorded anywhere in this repo of it rescuing a genuinely stuck member. Its founding
+    // incident (docs/investigations/2026-08-07-orphaned-session-watchers.md) was resolved by a human
+    // typing into a terminal, before the code existed, and that write-up already said it: "the
+    // watchdog never kills — it only spawns."
+    //
+    // Nudge_Wording.RESPAWN_SUBJECT stays where it is: Nudge_Decider reads it to recognise the
+    // respawn entries already sitting in members' channels from before this change.
 
     /// <summary>
     /// The ledger's missing feedback loop. A supervisor verdict with no PLAN.md update is now
@@ -10094,6 +10055,30 @@ internal sealed class BridgeEngineModel(
     /// told apart, which is the whole reason for the cap.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Whether this member's session is driven by the bridge rather than by a spawned shell — the
+    /// same question <c>SessionWatchdogModel.Is_PrintRun</c> asks, deliberately phrased the same way
+    /// so the two cannot drift apart.
+    ///
+    /// <para>
+    /// BOTH HALVES ARE NEEDED, and the config half is the one that is easy to forget: the state file
+    /// says a session WAS registered as bridge-driven, and nothing deletes it when the role is
+    /// flipped back to terminal. Answering from the file alone would exempt that slot for ever.
+    /// </para>
+    /// <para>
+    /// READ PER TICK, NEVER CACHED. The runner is owner-configurable and can change under a running
+    /// session; a cached answer would keep exempting a slot that stopped being exempt.
+    /// </para>
+    /// </summary>
+    bool Is_BridgeDriven(Running.SessionRoles role, string orchId, string memberId)
+    {
+        var runner = _configProvider.Get_Current().Runners.Get_ForRole(role).Runner;
+
+        return Running.Runner_Support.Is_BridgeDriven(runner)
+            && Running.Runner_Support.Supports(runner, role)
+            && Running.PrintSessionState.PrintSessionState_Store.Exists(_paths, role, orchId, memberId);
+    }
+
     bool Would_BeASecondOpenQuestion(string orchId)
     {
         lock (_ownerStateLock)
