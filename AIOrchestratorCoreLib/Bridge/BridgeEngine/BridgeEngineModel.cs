@@ -4459,8 +4459,16 @@ internal sealed class BridgeEngineModel(
             _store.Close_Member(orchId, memberId);
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, memberId));
 
+            // AGENT, NOT OWNER — changed on 2026-09-07 with the evidence the original judgement
+            // lacked. In two hours the owner received seven member-lifecycle notices and reported
+            // them as noise: a close is an after-the-fact notice of a decision the SUPERVISOR took,
+            // with nothing to do and nothing to undo, and unlike an ADD it starts nothing spending.
+            //
+            // NOTHING IS LOST. The periodic STATUS block enumerates every member and marks a closed
+            // one "closed", so the roster still reaches the owner — in context, beside what the rest
+            // of the crew is doing, instead of as its own interruption.
             Append_OrchestrationAppEntry(
-                orchId, AppEntryAudiences.Owner,
+                orchId, AppEntryAudiences.Agent,
                 $"member '{memberId}' closed — {reason}",
                 $"'{memberId}' is retired: its terminal was closed and its channel stays on disk as audit trail. Your crew is yours to manage, so this took effect on your request without asking the owner.");
         }

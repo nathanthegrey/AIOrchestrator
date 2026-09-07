@@ -31,10 +31,18 @@ internal sealed class MessageTranslatorModel(IOrchestrationLog log) : IMessageTr
     const string TO_ITALIAN_INSTRUCTION =
         "You are a translation filter. Translate the message below to Italian. "
         + "Translate ALL the prose - never leave whole sentences in English. "
-        + "But keep the technical TERMS in English exactly as written, the way Italian professionals use them: "
-        + "financial/trading terms (Long, Short, spread, hedge ratio, backtest, drawdown), "
-        + "programming terms (commit, merge, branch, worktree, build, test, bug, refactor, deploy, review, grep), "
-        + "hardware terms, product names, code identifiers, file paths and error messages. "
+        // THE LIST IS CLOSED ON PURPOSE. It used to end with "hardware terms, product names, code
+        // identifiers, file paths and error messages" — an open invitation the model extended to
+        // ordinary English words, so the owner received Italian salted with "un-park", "mid-task",
+        // "row", "browser pass" and "findings". Those are not terms an Italian professional uses;
+        // they are the translator declining to translate. Anything not named below is prose.
+        + "But keep these technical TERMS in English exactly as written, the way Italian professionals "
+        + "use them, and ONLY these: "
+        + "financial/trading terms (Long, Short, spread, hedge ratio, backtest, drawdown); "
+        + "programming terms (commit, merge, branch, worktree, build, test, bug, refactor, deploy, review, grep); "
+        + "product names; file paths; code identifiers (anything with a dot, slash, underscore or CamelCase); "
+        + "and verbatim error messages. "
+        + "Every other English word is prose and MUST be translated, including project jargon. "
         + "Preserve formatting, line breaks, bullets and emoji exactly. "
         + "Reply with ONLY the translated text - no preamble, no quotes, no commentary.";
 
@@ -49,12 +57,34 @@ internal sealed class MessageTranslatorModel(IOrchestrationLog log) : IMessageTr
     {
         var translated = await Translate_Async(TO_ITALIAN_INSTRUCTION, text, TO_ITALIAN_MODEL, cancellationToken);
 
-        // Unchanged output on this direction means the model refused/failed silently — make it
-        // VISIBLE in the log so untranslated owner texts can be diagnosed instead of shrugged at.
-        if (translated == text && text.Trim().Length > 0)
-            _log.Log_Warning("", $"EN→IT translation returned the text unchanged ({text.Length} chars)");
+        if (translated != text)
+            return translated;
 
-        return translated;
+        // ONE RETRY, BECAUSE MOST OF THESE ARE TRANSIENT. Every failure path in Translate_Async — a
+        // 45 s timeout, a non-zero exit, empty output, an exception — hands back the input, and the
+        // common causes (a busy CLI, a cold start) succeed on a second attempt. A retry costs one
+        // more call on a message that has already failed; not retrying costs the owner an English
+        // message.
+        if (text.Trim().Length > 0)
+        {
+            _log.Log_Warning("", $"EN→IT translation returned the text unchanged ({text.Length} chars) — retrying once");
+
+            translated = await Translate_Async(TO_ITALIAN_INSTRUCTION, text, TO_ITALIAN_MODEL, cancellationToken);
+
+            if (translated != text)
+                return translated;
+        }
+
+        // AND IF IT STILL WILL NOT, THE OWNER IS TOLD. A log warning is not a channel to the person
+        // holding the phone: they received English in the middle of an Italian conversation with
+        // nothing to say why, and read it as a deliberate switch of language. See
+        // UntranslatedText_Marker for why only prose is marked.
+        if (!UntranslatedText_Marker.Should_Mark(translated))
+            return translated;
+
+        _log.Log_Warning("", $"EN→IT translation failed twice ({text.Length} chars) — the owner is getting it in English, marked");
+
+        return UntranslatedText_Marker.Mark(translated);
     }
 
     async Task<string> Translate_Async(string instruction, string text, string model, CancellationToken cancellationToken)
