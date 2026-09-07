@@ -31,16 +31,38 @@ public interface ITelegramApiClient
     Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Sends HTML-formatted text — used for ASCII mockups, which need a &lt;pre&gt; block to keep a
-    /// monospaced font. Telegram rejects malformed HTML, so the caller must escape everything.
+    /// Sends HTML-formatted text — every piece of agent-written prose, so the Markdown agents write
+    /// arrives rendered instead of literal. Telegram rejects malformed HTML, so the caller must
+    /// escape everything; <see cref="TelegramHtml_Renderer"/> is the one place that does.
     /// </summary>
     Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Telegram's own "is typing…" bubble (<c>sendChatAction</c>). It is not a message: nothing lands
+    /// in the topic and nobody is notified. The client shows it in the chat header for about five
+    /// seconds and clears it the moment the bot's next message arrives, so a wait longer than that
+    /// re-sends it on a cadence.
+    /// </summary>
+    Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The HTML send WITH an inline keyboard — the decision message, whose question text is written
+    /// by an agent and whose buttons are not. Only the text is parsed; a button label is never HTML.
+    /// </summary>
+    Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
 
     /// <summary>
     /// Rewrites an already-sent message. Used for the delivery receipt, which EVOLVES in place
     /// (✓ → ✓✓ → ✓✓ · handoff) instead of stacking three messages in the topic.
     /// </summary>
     Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The same rewrite, parsed as HTML. Its own method rather than a flag on the one above for the
+    /// reason stated throughout this interface: a mode reachable by accident is a mode that will be
+    /// reached by accident, and here the accident is Telegram refusing the edit outright.
+    /// </summary>
+    Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken);
 
     /// <summary>
     /// Rewrites a message AND its buttons. Distinct from the plain edit because that one sends no
@@ -65,19 +87,6 @@ public interface ITelegramApiClient
 
     /// <summary>The same send, with the buttons laid out in ROWS — see the row-aware edit above.</summary>
     Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken);
-
-    /// <summary>
-    /// sendMessage carrying a persistent REPLY keyboard — the bar of buttons that sits above the
-    /// owner's input box, which is a different thing from the inline keyboard above: an inline
-    /// button sends a callback_query, a reply-keyboard button sends its own TEXT as an ordinary
-    /// message. That is why the labels must be the literal slash commands — the tap arrives at the
-    /// bridge indistinguishable from the owner typing them, and needs no handler of its own.
-    ///
-    /// The keyboard is CHAT-level state, not message-level: it survives its carrier message and
-    /// stays up until something replaces it. Returns the carrier's message id so the previous one
-    /// can be cleaned up.
-    /// </summary>
-    Task<long?> Send_MessageWithReplyKeyboard_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<string>> keyboardRows, CancellationToken cancellationToken);
 
     /// <summary>Answers a button tap (stops the phone-side spinner); text shows as a small toast.</summary>
     Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken);

@@ -3,25 +3,23 @@ using System.Globalization;
 namespace AIOrchestratorCoreLib.Telegram;
 
 /// <summary>
-/// The owner's frequently-used commands, as permanent tappable buttons in a topic.
+/// The owner's frequently-used commands, as permanent tappable buttons on a topic's status line.
 ///
-/// They appear in TWO places at once, and that is the whole reason this class exists:
-///   1. an INLINE keyboard hanging off the topic's status-line message — one tap sends a
-///      callback_data payload back to the app, with no message in the chat;
-///   2. a persistent REPLY keyboard sitting above the input box — one tap sends the button's TEXT
-///      as an ordinary message, exactly as if the owner had typed it.
+/// They render as an INLINE keyboard hanging off that message — one tap sends a callback_data
+/// payload back to the app, leaving no message in the chat. The set lives HERE, once, and both the
+/// rendering and the parser derive from <see cref="BUTTONS"/>, so adding a sixth command is one
+/// line in one array and cannot leave a button that renders and does nothing.
 ///
-/// Two renderings and one tap handler is three places to forget a command, and the failure mode is
-/// silent: a button that renders and does nothing, or worse, a bar above the keyboard offering a
-/// verb the lexer no longer knows. So the set lives HERE, once, and both renderings plus the parser
-/// are derived from <see cref="BUTTONS"/> — adding a fifth command is one line in one array.
-///
-/// The two renderings carry different strings for the same command, and neither is decoration:
-///   - the inline label is read by a HUMAN on a phone, so it gets an emoji and stays short;
-///   - the reply-keyboard text is read by the app's COMMAND LEXER, because Telegram sends a reply
-///     button's text verbatim as a message. It must therefore be exactly "/show", "/merge",
-///     "/test", "/screen" — an emoji there would arrive as part of the message and the lexer would
-///     not recognise the command.
+/// THERE WAS A SECOND RENDERING, AND IT WAS REMOVED ON 2026-09-06: a persistent REPLY keyboard, the
+/// bar of literal slash commands above the input box, installed by sending a carrier message and
+/// deleting it again. IT NEVER WORKED. Telegram anchors a reply keyboard to the message that
+/// delivered it, so deleting that message takes the bar with it — measured on the owner's phone,
+/// send then delete, bar appears then vanishes on the same chat. The bar had only ever been SEEN
+/// when the process was killed between the send and the delete, leaving the carrier alive by
+/// accident; in normal operation the feature spent every launch sending a message, buzzing the
+/// owner's phone, and ending with the chat exactly as it started. Keeping it working would have
+/// cost a permanent junk line in General, for five commands already one tap away here and listed
+/// in the "/" menu besides. Do not reintroduce it without re-measuring that premise first.
 ///
 /// Callback data is prefixed "cmd:" so a tap cannot be confused with the other button families
 /// already flying around this bridge: "hold:"/"go:" (<see cref="HoldButton_Data"/>),
@@ -48,16 +46,6 @@ public static class TopicCommandButtons
     /// <summary>Splits the verb from the topic inside the payload body.</summary>
     const char FIELD_SEPARATOR = ':';
 
-    /// <summary>What Telegram's command lexer needs in front of the verb, on both sides.</summary>
-    const string COMMAND_MARKER = "/";
-
-    /// <summary>
-    /// Two per row. On a phone a four-across row shrinks each button to a thumb-missing sliver,
-    /// and one-per-row eats four rows of screen above the input box; two rows of two is the shape
-    /// that stays readable without pushing the conversation off the top.
-    /// </summary>
-    const int REPLY_KEYBOARD_COLUMNS = 2;
-
     /// <summary>
     /// THE source of truth. Display order is the order the owner reaches for them: look at it,
     /// land it, mark it for testing, photograph it.
@@ -71,9 +59,9 @@ public static class TopicCommandButtons
     static readonly (string Command, string Label)[] BUTTONS =
     [
         // /screen LEADS, on the owner's call: "the /screen command is crucial, it should be among
-        // the main commands always available" (2026-08-24). It was already in all three surfaces —
-        // this bar, the reply keyboard and the "/" menu — but it sat last, in the second row of a
-        // two-by-two, which is the least reachable of the four on a phone.
+        // the main commands always available" (2026-08-24). It was already in every surface it
+        // could be in — but it sat last, in the second row of a two-by-two, which is the least
+        // reachable of the four on a phone.
         ("screen", "📸 /screen"),
         ("show",   "👁 /show"),
         ("merge",  "🔀 /merge"),
@@ -94,17 +82,6 @@ public static class TopicCommandButtons
     /// not ours, and quietly accepting "cmd:SHOW:5" would mean accepting whatever else invented it.
     /// </summary>
     static readonly HashSet<string> KNOWN_COMMANDS = new(BUTTONS.Select(button => button.Command), StringComparer.Ordinal);
-
-    /// <summary>
-    /// Precomputed because the rows never vary by topic — the reply keyboard is per CHAT, not per
-    /// message, so there is nothing to substitute into it.
-    /// </summary>
-    static readonly IReadOnlyList<IReadOnlyList<string>> REPLY_KEYBOARD_ROWS =
-        Commands
-            .Select(command => COMMAND_MARKER + command)
-            .Chunk(REPLY_KEYBOARD_COLUMNS)
-            .Select(row => (IReadOnlyList<string>)row)
-            .ToArray();
 
     /// <summary>
     /// Inline-keyboard buttons for one topic: (callback_data, label), in <see cref="Commands"/>
@@ -173,12 +150,4 @@ public static class TopicCommandButtons
 
         return (command, messageThreadId);
     }
-
-    /// <summary>
-    /// Rows for the persistent reply keyboard. Each button's TEXT is what Telegram sends as an
-    /// ordinary message, so these are exactly "/show", "/merge", "/test", "/screen" — no emoji, no
-    /// padding, nothing decorative. Whatever is in this string lands in the chat as the owner's
-    /// message and has to survive the command lexer intact.
-    /// </summary>
-    public static IReadOnlyList<IReadOnlyList<string>> Build_ReplyKeyboardRows() => REPLY_KEYBOARD_ROWS;
 }

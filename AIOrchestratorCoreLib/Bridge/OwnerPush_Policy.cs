@@ -73,6 +73,11 @@ public static class OwnerPush_Policy
     /// </summary>
     public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply, string? subject = null)
     {
+        // Their own words, sent back to them with the session's label on, before anything the
+        // owner's wait could be waiting FOR — so this comes ahead of the wait, deliberately.
+        if (Is_OwnerRestatement(rawEntryText))
+            return false;
+
         if (ownerIsWaitingForAReply)
             return true;
 
@@ -115,6 +120,37 @@ public static class OwnerPush_Policy
     /// it firing on 2026-08-21: *"Everything went idle with an unsent supervisor entry — releasing
     /// it in case it was a question"*. This filter is the fast path; that is the guarantee.
     /// </summary>
+    /// <summary>
+    /// The session quoting the owner back to the owner — an entry whose whole body is
+    /// <c>Owner: "…"</c> and nothing else. It reached the phone as "🔴 Sup: Owner: 'Che ne pensi?…'"
+    /// (2026-09-07): a message from the session that says nothing the owner did not just type, and
+    /// worse, it spent their wait, so the real answer that followed was narration again. Such an
+    /// entry is never pushed, and never counts as the reply they were waiting for.
+    ///
+    /// Only the bare quotation is caught. A reply that OPENS by quoting them and goes on to answer
+    /// has more than one line of body, and is a reply.
+    /// </summary>
+    public static bool Is_OwnerRestatement(string rawEntryText)
+    {
+        if (string.IsNullOrEmpty(rawEntryText))
+            return false;
+
+        var bodyLines = rawEntryText.Split('\n')
+            .Select(line => line.TrimEnd())
+            .Where(line => line.Length > 0)
+            .SkipWhile(line => line.StartsWith("## ", StringComparison.Ordinal))
+            .ToList();
+
+        if (bodyLines.Count != 1)
+            return false;
+
+        return OwnerRestatement_Pattern.IsMatch(bodyLines[0].Trim());
+    }
+
+    static readonly System.Text.RegularExpressions.Regex OwnerRestatement_Pattern = new(
+        "^(the\\s+)?owner(\\s+(said|says|asked|asks|wrote|writes))?\\s*:\\s*[\"\u201C\u201D'\u2018\u2019\u00AB\u00BB].*[\"\u201C\u201D'\u2018\u2019\u00AB\u00BB]\\s*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     public static bool Asks_InProse(string rawEntryText)
     {
         if (string.IsNullOrEmpty(rawEntryText))

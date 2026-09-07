@@ -277,6 +277,12 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
 /// </summary>
 internal sealed class RecordingTelegram_Fake : ITelegramApiClient
 {
+    // The typing bubble is not this probe's subject; it creates no message, so it is not recorded.
+    public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     const string EMPTY_UPDATES = "{\"ok\":true,\"result\":[]}";
 
     readonly object _lock = new();
@@ -354,10 +360,22 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
         }
     }
 
+    // RECORDED SINCE 2026-09-07, when the mirror started sending every entry as HTML. It used to
+    // ignore this call because only ASCII mockups came through it; leaving it blind now would hide
+    // the whole conversation from a probe that counts what reached the phone.
     public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
     {
-        lock (_lock)
-            return Task.FromResult<long?>(_nextMessageId++);
+        return Send_Message_Async(messageThreadId, html, cancellationToken);
+    }
+
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
     }
 
     // The General topic's name is not this probe's subject; accepting it silently keeps the rename
@@ -365,17 +383,6 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
     public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
-    }
-
-    public Task<long?> Send_MessageWithReplyKeyboard_Async(
-        long? messageThreadId,
-        string text,
-        IReadOnlyList<IReadOnlyList<string>> keyboardRows,
-        CancellationToken cancellationToken)
-    {
-        // The persistent command bar is not this probe's subject. Accept it and hand back no id, so
-        // installing it cannot perturb the sends this test actually counts.
-        return Task.FromResult<long?>(null);
     }
 
     public Task<long?> Send_MessageWithButtons_Async(

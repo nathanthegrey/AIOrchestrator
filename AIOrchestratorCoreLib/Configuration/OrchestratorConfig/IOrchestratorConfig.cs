@@ -1,4 +1,7 @@
+using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
+using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
 
@@ -49,6 +52,33 @@ public interface IOrchestratorConfig
     /// Null or 0 = no guard.
     /// </summary>
     long? OrchestrationTokenBudget { get; }
+
+    /// <summary>
+    /// How each role's sessions run (terminal window vs transient print turns) and the print
+    /// dispatcher's limits — the <c>runners</c> / <c>printRunner</c> blocks. Absent blocks read as
+    /// terminal everywhere, so an existing config.json changes nothing.
+    /// </summary>
+    IRunnerConfigs Runners { get; }
+
+    /// <summary>
+    /// Which plan backend this machine runs. Null — the ordinary case — means PLAN.md alone, exactly
+    /// as before the seam existed. Hand-edited in config.json; no window writes it, which is why
+    /// <see cref="OrchestratorConfig_Loader"/> never serialises the key back out.
+    /// </summary>
+    PlanBackendSettings? PlanBackend { get; }
+
+    /// <summary>
+    /// What makes an irreversible decision hard to take by accident, and what stops the dispatcher
+    /// spending an allowance it is about to exhaust. Never null: an absent config.json yields the
+    /// guarded defaults, because a guard nobody configured must still be a guard.
+    /// </summary>
+    IGuardrailSettings Guardrails { get; }
+
+    /// <summary>
+    /// The <c>defaults</c> block: what a request that does not say gets. Never null — an absent block
+    /// means the shipped defaults, the same shape <see cref="Guardrails"/> has.
+    /// </summary>
+    IDefaultsSettings Defaults { get; }
 
     bool Is_TelegramConfigured();
 }

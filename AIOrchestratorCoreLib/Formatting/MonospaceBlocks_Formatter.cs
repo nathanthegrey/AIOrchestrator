@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace AIOrchestratorCoreLib.Formatting;
@@ -10,6 +9,13 @@ namespace AIOrchestratorCoreLib.Formatting;
 ///
 /// The same fences also mark the text that must NOT be translated by the Italian layer — a mockup
 /// or a code snippet is not prose, and translating it would corrupt the very thing being shown.
+///
+/// EXTRACTION ONLY, since 2026-09-07. This class used to render the &lt;pre&gt; block as well, and
+/// that made it the SECOND Markdown-to-Telegram-HTML formatter once the mirror had to render bold,
+/// bullets and links too. Two copies of a formatter is how they drift (CLAUDE.md decision 12), so
+/// the rendering — fences included — now lives once, in
+/// <see cref="Telegram.TelegramHtml_Renderer"/>. What is left here is the translator's concern:
+/// lifting the blocks out and putting them back.
 /// </summary>
 public static partial class MonospaceBlocks_Formatter
 {
@@ -17,11 +23,6 @@ public static partial class MonospaceBlocks_Formatter
     private static partial Regex FencedBlock_Regex();
 
     const string PLACEHOLDER_PREFIX = "⁣BLOCK";
-
-    public static bool Has_Blocks(string text)
-    {
-        return FencedBlock_Regex().IsMatch(text);
-    }
 
     /// <summary>
     /// Swaps fenced blocks for inert placeholders so surrounding prose can be translated while the
@@ -49,30 +50,5 @@ public static partial class MonospaceBlocks_Formatter
             restored = restored.Replace($"{PLACEHOLDER_PREFIX}{i}⁣", $"```\n{blocks[i]}```");
 
         return restored;
-    }
-
-    /// <summary>
-    /// Renders for Telegram's HTML parse mode: everything escaped, fenced blocks becoming &lt;pre&gt;
-    /// so they keep a monospaced font and their alignment.
-    /// </summary>
-    public static string Build_Html(string text)
-    {
-        var html = new StringBuilder();
-        var lastIndex = 0;
-
-        foreach (Match match in FencedBlock_Regex().Matches(text))
-        {
-            html.Append(Escape_Html(text[lastIndex..match.Index]));
-            html.Append("<pre>").Append(Escape_Html(match.Groups[1].Value.TrimEnd('\n'))).Append("</pre>");
-            lastIndex = match.Index + match.Length;
-        }
-
-        html.Append(Escape_Html(text[lastIndex..]));
-        return html.ToString();
-    }
-
-    static string Escape_Html(string text)
-    {
-        return text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
     }
 }

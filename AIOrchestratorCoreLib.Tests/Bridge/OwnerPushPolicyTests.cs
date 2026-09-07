@@ -115,6 +115,48 @@ public class OwnerPushPolicyTests
         Assert.False(OwnerPush_Policy.Should_Push(entry, false));
     }
 
+    /// <summary>
+    /// The owner's own words with the session's label on them (2026-09-07): not a reply, and it must
+    /// not spend the wait — so it is refused even while they ARE waiting, which is the one condition
+    /// that otherwise pushes anything.
+    /// </summary>
+    [Fact]
+    public void TheOwnerQuotedBackToThemselves_IsNotPushed_EvenWhileTheyWait()
+    {
+        var entry = "## [12] FROM supervisor — d — s\nOwner: \"What do you think? The old app does not ask for it.\"";
+
+        Assert.True(OwnerPush_Policy.Is_OwnerRestatement(entry));
+        Assert.False(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: true));
+    }
+
+    [Theory]
+    [InlineData("## [12] FROM supervisor — d — s\nThe owner said: “Che ne pensi? La vecchia app non lo richiede.”")]
+    [InlineData("## [12] FROM supervisor — d — s\n\nowner asked: 'is the rebuild done'\n")]
+    public void EveryShapeOfTheQuotation_IsARestatement(string entry)
+    {
+        Assert.True(OwnerPush_Policy.Is_OwnerRestatement(entry));
+    }
+
+    /// <summary>A reply that opens by quoting them and then answers is a reply; only the bare quote is caught.</summary>
+    [Fact]
+    public void AReplyThatQuotesThemAndGoesOn_IsPushed_WhileTheyWait()
+    {
+        var entry = "## [12] FROM supervisor — d — s\nOwner: \"is the rebuild done\"\nYes — 214 green, merged at 12:40.";
+
+        Assert.False(OwnerPush_Policy.Is_OwnerRestatement(entry));
+        Assert.True(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: true));
+    }
+
+    /// <summary>Their words without the "Owner:" label are just an answer in quotation marks — untouched.</summary>
+    [Fact]
+    public void AQuotedLineWithoutTheOwnerLabel_IsNotARestatement()
+    {
+        var entry = "## [12] FROM supervisor — d — s\n\"No card\" is the ruling, as in the old app.";
+
+        Assert.False(OwnerPush_Policy.Is_OwnerRestatement(entry));
+        Assert.True(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: true));
+    }
+
     [Fact]
     public void EmptyEntry_IsNeverPushed()
     {

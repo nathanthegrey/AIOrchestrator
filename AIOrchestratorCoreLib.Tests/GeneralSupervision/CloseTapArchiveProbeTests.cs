@@ -293,6 +293,12 @@ public class CloseTapArchiveProbeTests : IDisposable
 /// </summary>
 internal sealed class TappableTelegram_Fake : ITelegramApiClient
 {
+    // The typing bubble is not this probe's subject; it creates no message, so it is not recorded.
+    public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     const string EMPTY_UPDATES = "{\"ok\":true,\"result\":[]}";
 
     readonly object _lock = new();
@@ -328,17 +334,6 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
     public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
-    }
-
-    public Task<long?> Send_MessageWithReplyKeyboard_Async(
-        long? messageThreadId,
-        string text,
-        IReadOnlyList<IReadOnlyList<string>> keyboardRows,
-        CancellationToken cancellationToken)
-    {
-        // The persistent command bar is not this probe's subject. Accept it and hand back no id, so
-        // installing it cannot perturb the sends this test actually counts.
-        return Task.FromResult<long?>(null);
     }
 
     public Task<long?> Send_MessageWithButtons_Async(
@@ -390,7 +385,19 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
 
     public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
     {
-        return Task.FromResult<long?>(_nextMessageId++);
+        return Send_Message_Async(messageThreadId, html, cancellationToken);
+    }
+
+    // The confirming button is read off the SEND, so the rendered send has to reach the same reader
+    // or this probe taps nothing at all.
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
     }
 
     public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken)

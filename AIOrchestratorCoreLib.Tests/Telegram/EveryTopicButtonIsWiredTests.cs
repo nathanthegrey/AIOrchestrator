@@ -39,9 +39,10 @@ public class EveryTopicButtonIsWiredTests
     }
 
     /// <summary>
-    /// The REPLY keyboard sends the button's TEXT as an ordinary message, so that route needs the
-    /// command LEXER to know the verb. Same list, different mechanism, and either one missing leaves
-    /// half the button working — which is worse than none of it, because it works when tested one way.
+    /// The SAME verbs also arrive as ordinary TEXT — the "/" menu sends the literal "/show", and so
+    /// does the owner typing it — so that route needs the command LEXER to know the verb. Same list,
+    /// different mechanism, and either one missing leaves half the command working, which is worse
+    /// than none of it because it works when tested one way.
     /// </summary>
     [Fact]
     public void EveryButton_IsKnownToTheCommandLexer()
@@ -52,7 +53,8 @@ public class EveryTopicButtonIsWiredTests
         {
             Assert.True(
                 engineSource.Contains($"command == \"{command}\"", StringComparison.Ordinal),
-                $"the reply keyboard sends '/{command}' as a message, but no branch dispatches that verb — "
+                $"'/{command}' can arrive as plain text (the \"/\" menu, or the owner typing it), but no "
+                + "branch dispatches that verb — "
                 + "so the text is routed to the session as chat instead of running the command.");
         }
     }

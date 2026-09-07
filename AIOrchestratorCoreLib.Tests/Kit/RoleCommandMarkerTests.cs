@@ -242,25 +242,14 @@ public class RoleCommandMarkerTests
     /// Walks up to the repo root. The suite runs from bin/Debug/net10.0 and `kit` is not a project,
     /// so there is nothing to ask for this path — the same shape as reading App.xaml as text.
     /// </summary>
+    /// <summary>
+    /// Every role protocol in the kit. They live at kit/skills/&lt;role&gt;/SKILL.md since the kit became
+    /// a plugin, so the ROLE is the folder name and no longer the file name. Returns empty when the
+    /// kit cannot be found, and every caller asserts non-empty before asserting anything else — a
+    /// scan that found nothing is the strongest possible pass and means nothing at all.
+    /// </summary>
     static IReadOnlyList<string> Find_RoleCommandFiles()
     {
-        var folder = AppContext.BaseDirectory;
-
-        for (var depth = 0; depth < 8; depth++)
-        {
-            var candidate = Path.Combine(folder, "kit", "commands");
-
-            if (Directory.Exists(candidate))
-                return [.. Directory.GetFiles(candidate, "*.md")];
-
-            var parent = Directory.GetParent(folder);
-
-            if (parent == null)
-                break;
-
-            folder = parent.FullName;
-        }
-
-        return [];
+        return [.. KitRepoFiles.Find_AllRoleProtocols().Select(entry => entry.Path)];
     }
 }

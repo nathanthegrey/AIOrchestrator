@@ -1,10 +1,15 @@
+using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running.ClaudeInvocation;
+using AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
+using AIOrchestratorCoreLib.Running.PrintTurnRunner;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
+using AIOrchestratorCoreLib.Time.Clock;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 
@@ -87,13 +92,61 @@ public static class BridgeEngine_Factory
         ITelegramApiClient? telegramClient,
         IMessageTranslator translator)
     {
+        return Create_WithDecisionState(
+            paths, configProvider, store, launcher, log, telegramClient, translator,
+            EngineStateStore_Factory.Create_File(paths, log),
+            Clock_Factory.Create_System());
+    }
+
+    /// <summary>
+    /// THE RESTART TEST SEAM, added by the same idiom as the two above and for the same class of
+    /// reason.
+    ///
+    /// <para>
+    /// WHY IT HAD TO EXIST: the claim this stage makes is "kill the bridge with decisions pending
+    /// and start it again — nothing is lost". Asserting that needs TWO engines sharing ONE store,
+    /// and with the store built inside the factory the only way to share it is a filesystem and a
+    /// real clock, which turns a deadline test into a test that waits for the deadline. Handing in
+    /// an in-memory store and a clock the test moves makes both properties assertions instead of
+    /// arguments.
+    /// </para>
+    /// <para>
+    /// Every production caller uses the overload above. The watchdog's crash-loop counters are
+    /// restored HERE rather than inside the engine, because the engine is handed the watchdog
+    /// already built and the counters belong to it — the engine only persists them.
+    /// </para>
+    /// </summary>
+    public static IBridgeEngine Create_WithDecisionState(
+        ISupervisionPaths paths,
+        IOrchestratorConfigProvider configProvider,
+        IOrchestrationSessionStore store,
+        IOrchestrationLauncher launcher,
+        IOrchestrationLog log,
+        ITelegramApiClient? telegramClient,
+        IMessageTranslator translator,
+        IEngineStateStore engineStateStore,
+        IClock clock)
+    {
         // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
         var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
         var tailer = ChannelTailer_Factory.Create(fileOffsets);
 
-        var watchdog = SessionWatchdog_Factory.Create(paths, store, launcher, log);
+        var watchdog = SessionWatchdog_Factory.Create(paths, configProvider, store, launcher, log);
         var transcriber = Transcription.VoiceTranscriber.VoiceTranscriber_Factory.Create(log);
 
-        return new BridgeEngineModel(paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, translator, transcriber, lastUpdateId);
+        // The print dispatcher idles unless a role is configured `runner: print` — with a stock
+        // config.json it discovers no registered session and its tick costs one Load_All.
+        var printTurns = PrintTurnDispatcher_Factory.Create(paths, store, configProvider, ClaudeInvocation_Resolver.Resolve_ForThisOs(), log);
+
+        // ONE LOAD, here, for the reason the cursor above is also loaded here: a primary
+        // constructor's field initialisers cannot share a value between them, so loading inside the
+        // engine would mean reading the file once per restored field.
+        var restoredState = engineStateStore.Load_OrEmpty();
+
+        watchdog.Restore_ConsecutiveRespawns(restoredState.ConsecutiveRespawns);
+
+        return new BridgeEngineModel(
+            paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, translator, transcriber,
+            printTurns, lastUpdateId, engineStateStore, restoredState, clock);
     }
 }
