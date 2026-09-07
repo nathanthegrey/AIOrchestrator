@@ -32,6 +32,14 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// in three hours, every one of them a false positive.
 /// </para>
 /// </summary>
+// SERIALISED WITH THE CHANNEL-LOCK CLASSES, because this one starts a real engine and
+// BridgeEngineModel.Run_Async rewires the PROCESS-WIDE ChannelLock_Diagnostics sink on every
+// start. A class that does that while ChannelLockDiagnosticsTests is mid-assertion steals its
+// captured lines, and the theft is reported as that class's failure. 31 other classes start an
+// engine outside this collection and have the same effect; enrolling them all was MEASURED at
+// 6m26s against a 1m35s baseline — a 4x cost on every run, refused. This one is enrolled
+// because it is the thief this session added, and removing it costs nothing.
+[Collection(AIOrchestratorCoreLib.Tests.Channels.CHANNEL_LOCK_COLLECTION.NAME)]
 public class ANudgedMemberIsNeverRespawnedOnSilenceTests : IDisposable
 {
     readonly string _tempRoot;
