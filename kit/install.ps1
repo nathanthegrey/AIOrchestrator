@@ -82,8 +82,31 @@ if ($null -ne $claudeCmd) {
     $checkoutSignature = Get-KitContentSignature $kitFolder
     $installedSignature = Get-KitContentSignature $installed.installPath
 
-    if ($null -eq $installedSignature -or $installedSignature -ne $checkoutSignature) {
-        $why = if ($null -eq $installedSignature) { 'its install path is missing' } else { 'the installed copy differs from this checkout' }
+    # THE HOST'S OWN VERIFIER READS gitCommitSha TOO (PluginVersion_Verifier), NOT ONLY THIS
+    # SCRIPT'S file-hash compare — the twin of the block below and of install.sh. On the VPS on
+    # 2026-09-07 a stage that touched no kit file still moved HEAD, the content compare read
+    # identical (correctly — the text had not changed), and the host refused to spawn anyone over a
+    # recorded commit it no longer recognised. So the installed record is compared too, and
+    # reinstalls on its own even when the content compare found nothing.
+    $checkoutSha = $null
+    if ($null -ne (Get-Command git -ErrorAction SilentlyContinue)) {
+        try { $gitSha = (& git -C $kitFolder rev-parse HEAD 2>$null); if ($LASTEXITCODE -eq 0) { $checkoutSha = $gitSha.Trim() } } catch { $checkoutSha = $null }
+    }
+    $installedSha = $null
+    $installedPluginsFile = Join-Path $claudeFolder 'plugins\installed_plugins.json'
+    if (Test-Path -LiteralPath $installedPluginsFile) {
+        try {
+            $installedRecord = (Get-Content -LiteralPath $installedPluginsFile -Raw | ConvertFrom-Json).plugins.'aiorch@aiorch-local'[0]
+            $installedSha = $installedRecord.gitCommitSha
+        } catch { $installedSha = $null }
+    }
+    $shaMismatch = (-not [string]::IsNullOrWhiteSpace($checkoutSha)) -and (-not [string]::IsNullOrWhiteSpace($installedSha)) -and ($installedSha -ne $checkoutSha)
+
+    if ($null -eq $installedSignature -or $installedSignature -ne $checkoutSignature -or $shaMismatch) {
+        $why =
+            if ($null -eq $installedSignature) { 'its install path is missing' }
+            elseif ($installedSignature -ne $checkoutSignature) { 'the installed copy differs from this checkout' }
+            else { "the installed record's commit ($installedSha) differs from this checkout's HEAD ($checkoutSha) — the host's verifier reads this field even when the text compares identical" }
         Write-Host "aiorch: $why — REINSTALLING (an update would report success and change nothing)." -ForegroundColor Yellow
 
         & claude plugin uninstall aiorch *> $null

@@ -115,6 +115,11 @@ Rules that make the ladder real:
   before judging style or architecture — the standard is the repo's, never your habits.
 - A green test suite proves nothing on its own. Ask what a mutation of the changed line would do to
   the suite; if nothing fails, say so — that is a test-coverage finding.
+- **This machine also runs the bridge and every other session — never stress it.** Never run a
+  memory- or CPU-pressure experiment, never allocate on purpose, never run anything whose purpose
+  is to load the box. To investigate an intermittent: run the suite as-is and repeat it, or ask
+  the owner for a machine of its own. A session that exceeds its memory cap is killed alone — the
+  app enforces that; it is a fact, not a threat.
 
 ## Report schema (append to your channel; the supervisor relays it)
 

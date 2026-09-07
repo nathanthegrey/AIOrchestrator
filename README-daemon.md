@@ -33,6 +33,23 @@ every 30 s from the daemon's main loop, and the pings stop the moment the engine
 (SIGTERM, Ctrl-C, `launchctl unload`, `systemctl stop`) cancels the engine and kills every session it
 spawned, exactly like closing the WPF window; the watchdog respawns them on the next start.
 
+**Memory on a shared host**: this box also runs the bridge (and every other session the daemon is
+managing) — an unbounded session can starve all of them. Measured 2026-09-07: a 6.5 GB allocator on
+an 8 GB VPS OOM-killed the bridge three times and took every session down with it. Two layers:
+- **The app caps each session's own memory** on Linux via `runners.sessionMemoryMax` in
+  `config.json` — a cgroup limit around the spawned `claude` process, default `3G` (landing
+  alongside this stage). A session that exceeds it is killed alone; the bridge and every other
+  session keep running.
+- **The unit should cap itself too**: add `OOMPolicy=continue` (the daemon survives an OOM kill
+  inside its own cgroup instead of being torn down with it) and a `MemoryHigh`/`MemoryMax` pair
+  sized under the box's RAM, so the daemon process can never eat the machine even if a session
+  escapes its own limit. A **swapfile is advised** on small boxes — it turns a hard OOM kill into a
+  slowdown instead. See `00_Infrastructure/aiorch-vps/` for the concrete unit and swapfile recipe.
+
+A session that needs a plan tool via MCP gets it registered at **USER scope** for the service user
+(`claude mcp add -s user …`), not project scope: a project's `.mcp.json` applies only inside that
+project's folder, and the general supervisor runs in its own home directory, outside every project.
+
 **Status line**: the daemon installs `statusline.sh` (bash + jq, no python3) on macOS/Linux, `statusline.ps1` on Windows, wired into `~/.claude/settings.json` through the matching interpreter.
 **Measured on a MacBook (arm64, .NET SDK 10.0.400, warm NuGet cache), 2026-09-06**: `git clone` → `dotnet build`
 → daemon logging "Bridge started" = **6 s** (clone 0 s local, build 4 s, start 2 s); a self-contained

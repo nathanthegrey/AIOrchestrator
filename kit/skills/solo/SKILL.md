@@ -319,6 +319,11 @@ operation and stops, and I haven't received anything telling me 'done'."*
   system — those are the owner's call, and being the only session does not make them yours.
 - **Git:** stage by explicit path, never `git add -A`/`.`/`commit -a` (other sessions may share the
   tree). Multi-line commit messages via `git commit -F <tempfile>` on Windows PowerShell.
+- **This machine also runs the bridge and every other session — never stress it.** Never run a
+  memory- or CPU-pressure experiment, never allocate on purpose, never run anything whose purpose
+  is to load the box. To investigate an intermittent: run the suite as-is and repeat it, or ask
+  the owner for a machine of its own. A session that exceeds its memory cap is killed alone — the
+  app enforces that; it is a fact, not a threat.
 - **FAN OUT. Parallel agents are your DEFAULT, not an option you may decline.** You are the whole
   team here, so every minute you spend doing independently-shaped work in sequence is a minute the
   owner waits for nothing. **The moment a task contains two or more independent read-only pieces —

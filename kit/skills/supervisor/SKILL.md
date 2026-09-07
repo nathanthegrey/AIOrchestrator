@@ -621,6 +621,10 @@ coordination: read, decide, brief, verify at the boundary, report.
   refactors and exhaustive searches. Spawn one with a `reason` and brief it, exactly as with any
   other task. **Serious REVIEWS go to a REVIEWER** (next section) — same principle, different kind
   of member.
+- **Never brief a memory- or CPU-pressure experiment.** This machine also runs the bridge and
+  every other session's turn — a brief to "measure under memory pressure" or similar can allocate
+  the box into unresponsiveness and take everyone down with it, bridge included. An intermittent
+  gets re-run as-is, or a machine of its own; never manufactured load.
 - **NEVER use a sub-agent (the Task tool) for long work.** A sub-agent runs INSIDE your turn: it
   blocks you for its whole duration, which is precisely the failure this rule exists to prevent.
   An implementer is a separate session — it works while you stay free. Sub-agents are acceptable
