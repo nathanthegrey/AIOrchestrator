@@ -118,6 +118,21 @@ public class RoleHooksAreShippedTests
     }
 
     /// <summary>
+    /// A house skill is the opposite of a role: a session loads it by choice, so the flag that keeps a
+    /// model from entering a role must be OFF on it — and it must not be mistaken for a role either.
+    /// Pinned the day the first one (`subagents`, stage 1f) landed and was counted as a seventh role.
+    /// </summary>
+    [Fact]
+    public void AHouseSkill_IsNotARole_AndAModelMayLoadIt()
+    {
+        var houseSkills = KitRepoFiles.Find_AllHouseSkills();
+        Assert.Contains(houseSkills, entry => entry.Skill == "subagents");
+
+        foreach (var (skill, path) in houseSkills)
+            Assert.DoesNotContain("disable-model-invocation: true", File.ReadAllText(path));
+    }
+
+    /// <summary>
     /// The slash word a role answers to is the one Running/SessionRoles.cs composes. A skill's `name`
     /// IS that word, so a rename here silently breaks every spawn — measured: a name the CLI does not
     /// know answers "Unknown command" and the session dies on its first prompt.
