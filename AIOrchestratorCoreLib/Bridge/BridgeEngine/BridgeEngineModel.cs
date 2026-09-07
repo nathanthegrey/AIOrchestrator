@@ -349,6 +349,13 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
 
     /// <summary>
+    /// The last set of owner-message contract faults coached to each orchestration, so the same
+    /// advice is not repeated on every entry of the same shape. Deliberately NOT persisted: a fresh
+    /// run deserves to be told again, and this is coaching rather than state anything depends on.
+    /// </summary>
+    readonly Dictionary<string, string> _lastContractFaults = [];
+
+    /// <summary>
     /// WHICH unanswered thing each member was last nudged about — whatever
     /// `Nudge_Decider.Identify_NudgeSubject` returns for the channel, and NEVER an index or a stamp
     /// (see `Identify_LastConversationEntry_OrNull` for why those two are silent failures: both are
@@ -1880,7 +1887,11 @@ internal sealed class BridgeEngineModel(
                     if (!nudged)
                         continue;
 
-                    _nudgedMemberUtc[memberKey] = DateTime.UtcNow;
+                    // THE SAME CLOCK THE ESCALATION READS. This stamp starts the orphan window and
+                    // the escalation measures it with _clock; taking one from DateTime.UtcNow and the
+                    // other from the injected clock is how a window silently becomes a different
+                    // length under a test, and how a fake clock proves nothing.
+                    _nudgedMemberUtc[memberKey] = _clock.UtcNow;
                     _nudgedAboutEntry[memberKey] = conversationIdentity;
 
                     // The anti-loop memory is only worth having if it outlives the process: the app
@@ -3227,6 +3238,7 @@ internal sealed class BridgeEngineModel(
                 if (append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) && pieces.Count > 0)
                 {
                     Nudge_IfTooVerbose(append.Channel.OrchId, text, pieces.Count);
+                    Coach_OnContractFaults(append.Channel, entry.Body);
 
                     if (Note_SupervisorSpokeToOwner_AndJustWentQuiet(append.Channel.OrchId))
                         await Enter_QuietMode_Async(append.Channel.OrchId, cancellationToken);
@@ -10096,6 +10108,55 @@ internal sealed class BridgeEngineModel(
     /// told apart, which is the whole reason for the cap.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Checks an owner-facing entry against <see cref="OwnerMessage_Contract"/> and writes what is
+    /// wrong back into the session's own channel.
+    ///
+    /// <para>
+    /// THE MESSAGE STILL GOES. A validator that dropped an owner-facing entry would turn a formatting
+    /// fault into a lost answer, which is the worst outcome this system has — so the owner gets it and
+    /// the session gets told. The audience is Agent, so the coaching never reaches the phone.
+    /// </para>
+    /// <para>
+    /// ONE COACHING PER FAULT SET, not one per entry: a supervisor that writes the same shape three
+    /// times running has been told once, and repeating it would spend the channel this exists to keep
+    /// readable. The memory is per orchestration and dies with the process, which is the right
+    /// lifetime — a fresh run deserves to be told again.
+    /// </para>
+    /// </summary>
+    void Coach_OnContractFaults(Channels.DiscoveredChannel.IDiscoveredChannel channel, string body)
+    {
+        var faults = OwnerMessage_Contract.Check(body);
+
+        if (faults.Count == 0)
+            return;
+
+        var signature = string.Join(",", faults);
+
+        lock (_ownerStateLock)
+        {
+            if (_lastContractFaults.TryGetValue(channel.OrchId, out var previous) && previous == signature)
+                return;
+
+            _lastContractFaults[channel.OrchId] = signature;
+        }
+
+        _log.Log_Info(channel.OrchId, $"owner-message contract: {signature}");
+
+        List<string> lines = [];
+
+        foreach (var fault in faults)
+            lines.Add($"- {OwnerMessage_Contract.Describe(fault)}");
+
+        ChannelAppender.Append_AppEntry(
+            channel.FilePath,
+            AppEntryAudiences.Agent,
+            "the entry you just sent the owner breaks the message contract",
+            "It reached them anyway — this is not a rejection. Fix the shape on the next one:\n"
+            + string.Join("\n", lines),
+            DateTime.Now);
+    }
+
     /// <summary>
     /// Whether this member's session is driven by the bridge rather than by a spawned shell — the
     /// same question <c>SessionWatchdogModel.Is_PrintRun</c> asks, deliberately phrased the same way
