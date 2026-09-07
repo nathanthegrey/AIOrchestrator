@@ -38,6 +38,14 @@ public interface ITelegramApiClient
     Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Telegram's own "is typing…" bubble (<c>sendChatAction</c>). It is not a message: nothing lands
+    /// in the topic and nobody is notified. The client shows it in the chat header for about five
+    /// seconds and clears it the moment the bot's next message arrives, so a wait longer than that
+    /// re-sends it on a cadence.
+    /// </summary>
+    Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// The HTML send WITH an inline keyboard — the decision message, whose question text is written
     /// by an agent and whose buttons are not. Only the text is parsed; a button label is never HTML.
     /// </summary>

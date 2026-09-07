@@ -137,6 +137,12 @@ public class TelegramProseSenderTests
 /// </summary>
 internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
 {
+    // The typing bubble is not this probe's subject; it creates no message, so it is not recorded.
+    public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     public TelegramApiException? HtmlFailure { get; set; }
 
     /// <summary>Stands in for an <c>HttpClient</c> timeout, which arrives as a cancellation.</summary>

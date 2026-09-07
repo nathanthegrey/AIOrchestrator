@@ -158,6 +158,24 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
     }
 
+    /// <summary>
+    /// Not metered by the send bucket: it creates no message, and a refresh that queued behind a burst
+    /// of real sends would arrive after Telegram had already cleared the previous one.
+    /// </summary>
+    public async Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["action"] = "typing",
+        };
+
+        if (messageThreadId != null)
+            payload["message_thread_id"] = messageThreadId.Value;
+
+        await Post_Async("sendChatAction", payload, cancellationToken);
+    }
+
     public async Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
