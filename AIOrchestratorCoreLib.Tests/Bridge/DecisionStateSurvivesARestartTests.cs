@@ -437,6 +437,18 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
         return Task.FromResult(Record(html));
     }
 
+    // See the note in FailableTelegram_Fake: agent prose leaves as HTML, so the rendered calls have
+    // to be recorded by the same hands as the plain ones or a probe sees an empty topic.
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+    }
+
+    public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
+    {
+        return Edit_MessageText_Async(messageId, html, cancellationToken);
+    }
+
     public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
         lock (_lock)
