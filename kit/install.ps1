@@ -58,10 +58,60 @@ if ($null -ne $claudeCmd) {
     $installed = $null
     try { $installed = (& claude plugin list --json | ConvertFrom-Json) | Where-Object { $_.id -eq 'aiorch@aiorch-local' } } catch { $installed = $null }
 
-    if ($null -ne $installed -and $installed.version -eq $expectedVersion) {
-        Write-Host "aiorch $($installed.version) is installed and enabled." -ForegroundColor Green
+    # THE CONTENT IS COMPARED, NOT THE NUMBER — the twin of the block in install.sh, and the same
+    # measurement behind it (2026-09-07, CLI 2.1.263): `claude plugin update` compares the version
+    # STRING, so a commit that changes a role protocol without bumping plugin.json leaves the cached
+    # copy untouched and reports "already at the latest version". Only uninstall-then-install refreshes
+    # it. Compared by file hash rather than by commit, so UNCOMMITTED edits are caught too.
+    function Get-KitContentSignature([string] $folder) {
+        if ([string]::IsNullOrWhiteSpace($folder) -or -not (Test-Path -LiteralPath $folder)) { return $null }
+
+        $root = (Resolve-Path -LiteralPath $folder).Path
+
+        # Sorted by RELATIVE path so two folders are comparable, and the relative path is hashed with
+        # the bytes: a file moved to another name is a different kit, and a hash of contents alone
+        # would call that identical.
+        $lines = Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
+            $relative = $_.FullName.Substring($root.Length).TrimStart('\', '/').Replace('\', '/')
+            "$relative $((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+        } | Sort-Object
+
+        return ($lines -join "`n")
+    }
+
+    $checkoutSignature = Get-KitContentSignature $kitFolder
+    $installedSignature = Get-KitContentSignature $installed.installPath
+
+    if ($null -eq $installedSignature -or $installedSignature -ne $checkoutSignature) {
+        $why = if ($null -eq $installedSignature) { 'its install path is missing' } else { 'the installed copy differs from this checkout' }
+        Write-Host "aiorch: $why — REINSTALLING (an update would report success and change nothing)." -ForegroundColor Yellow
+
+        & claude plugin uninstall aiorch *> $null
+        & claude plugin install 'aiorch@aiorch-local' --scope user -y *> $null
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host 'aiorch could NOT be reinstalled — sessions would read the OLD protocols.' -ForegroundColor Yellow
+            Write-Host 'Run by hand: claude plugin uninstall aiorch; claude plugin install aiorch@aiorch-local --scope user -y' -ForegroundColor Yellow
+        } else {
+            Write-Host 'Reinstalled the aiorch plugin from this checkout.' -ForegroundColor Green
+        }
+
+        try { $installed = (& claude plugin list --json | ConvertFrom-Json) | Where-Object { $_.id -eq 'aiorch@aiorch-local' } } catch { $installed = $null }
+        $installedSignature = Get-KitContentSignature $installed.installPath
+    }
+
+    # Re-checked rather than assumed: the reinstall can fail, and "reinstalled" printed over a cache
+    # that did not move is the same lie one turn later.
+    $contentState = if ($installedSignature -eq $checkoutSignature) {
+        'content matches this checkout'
     } else {
-        Write-Host "aiorch reports version '$($installed.version)' but this checkout ships '$expectedVersion'." -ForegroundColor Yellow
+        'CONTENT STILL DIFFERS from this checkout — sessions would read the old protocols'
+    }
+
+    if ($null -ne $installed -and $installed.version -eq $expectedVersion) {
+        Write-Host "aiorch $($installed.version) is installed and enabled — $contentState." -ForegroundColor Green
+    } else {
+        Write-Host "aiorch reports version '$($installed.version)' but this checkout ships '$expectedVersion' ($contentState)." -ForegroundColor Yellow
         Write-Host 'Run: claude plugin update aiorch   (the host refuses to start sessions until they match)' -ForegroundColor Yellow
     }
 } else {

@@ -4,6 +4,8 @@
 # and its settings.json entry — then the optional Telegram configuration, kept unless you type new
 # values. Safe to re-run: the plugin install is idempotent and every copy is content-compared (md5).
 # Run from the repo root:  bash kit/install.sh
+# The plugin cache is compared to this checkout by CONTENT and REINSTALLED when it differs: `claude
+# plugin update` compares the version string only (measured 2026-09-07, CLI 2.1.263).
 #
 # THE ROLE PROTOCOLS ARE NOT COPIED ANY MORE. kit/ is a Claude Code plugin, installed once from a
 # local marketplace pointing at this very checkout, and from then on every session loads it with no
@@ -77,23 +79,84 @@ if command -v claude >/dev/null 2>&1; then
     if ! claude plugin marketplace add "$kit_folder" >/dev/null 2>&1; then
         claude plugin marketplace add "$kit_folder" 2>&1 | tail -2 || true
     fi
+    # One field of the installed record. `first(...)` rather than a pipe into `head`: with pipefail
+    # set, head closing the pipe early is a SIGPIPE that fails the whole assignment. `|| true` on the
+    # outside because an assignment takes the status of its substitution, and an older CLI without
+    # --json, or one not logged in, would otherwise abort the installer silently between installing
+    # the plugin and writing any configuration.
+    plugin_field() {
+        claude plugin list --json 2>/dev/null \
+            | jq -r --arg id 'aiorch@aiorch-local' --arg field "$1" 'first(.[] | select(.id==$id) | .[$field]) // empty' 2>/dev/null \
+            || true
+    }
+
+    # DRIFT FIXED IN PASSING, same family as the defect above: this block used to print "Installed the
+    # aiorch plugin" whenever the command SUCCEEDED — which it does on every re-run — and, in green,
+    # "The aiorch plugin was already installed" when it FAILED. So the one machine where the install
+    # genuinely broke read as the ordinary case. Asked before, reported after.
+    was_installed="$(plugin_field version)"
+
     if claude plugin install aiorch@aiorch-local --scope user -y >/dev/null 2>&1; then
-        ok 'Installed the aiorch plugin (role protocols, hooks, channel helper).'
+        if [ -n "$was_installed" ]; then
+            ok "The aiorch plugin was already installed ($was_installed)."
+        else
+            ok 'Installed the aiorch plugin (role protocols, hooks, channel helper).'
+        fi
     else
-        ok 'The aiorch plugin was already installed.'
+        warn 'claude plugin install FAILED — sessions may have NO role protocols. The content check below says what is actually there.'
     fi
 
-    # `|| true`, because an assignment takes the status of its command substitution and pipefail
-    # gives it the failure of `claude` — an older CLI without --json, or one not logged in, would
-    # abort the installer silently between installing the plugin and writing any configuration.
-    installed_version="$(claude plugin list --json 2>/dev/null \
-        | tr -d ' \n' | sed -n 's/.*"id":"aiorch@aiorch-local","version":"\([^"]*\)".*/\1/p' || true)"
+    installed_version="$(plugin_field version)"
+    installed_path="$(plugin_field installPath)"
     expected_version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;/"version"/q' "$kit_folder/.claude-plugin/plugin.json" || true)"
 
-    if [ -n "$installed_version" ] && [ "$installed_version" = "$expected_version" ]; then
-        ok "aiorch $installed_version is installed and enabled."
+    # THE CONTENT IS COMPARED, NOT THE NUMBER, and this is the 2026-09-07 lesson.
+    #
+    # MEASURED that day on CLI 2.1.263, in a throwaway Claude home: commit a change to the kit WITHOUT
+    # bumping .claude-plugin/plugin.json, then `claude plugin update aiorch`. It answers "aiorch is
+    # already at the latest version (1.0.0)", the cached files still hold the OLD text, and the
+    # recorded gitCommitSha still names the old commit. `claude plugin marketplace update` first
+    # changes nothing. ONLY uninstall-then-install refreshes either. That is precisely what happened on
+    # the VPS: this script said "installed and enabled 1.0.0" and the daemon said "Kit check OK" over a
+    # cache still holding stage 1c.
+    #
+    # The installed cache is a byte-for-byte copy of kit/ (measured), so `diff -rq` is the whole test —
+    # and it catches what a commit comparison cannot: a checkout with UNCOMMITTED edits, where HEAD is
+    # unchanged and the text is not.
+    reinstall_reason=''
+    if [ -z "$installed_path" ]; then
+        reinstall_reason='the CLI reports no install path for it'
+    elif [ ! -d "$installed_path" ]; then
+        reinstall_reason="its recorded install path is gone ($installed_path)"
+    elif ! diff -rq "$installed_path" "$kit_folder" >/dev/null 2>&1; then
+        reinstall_reason='the installed copy differs from this checkout'
+    fi
+
+    if [ -n "$reinstall_reason" ]; then
+        warn "aiorch: $reinstall_reason — REINSTALLING (an update would report success and change nothing)."
+        claude plugin uninstall aiorch >/dev/null 2>&1 || true
+        if claude plugin install aiorch@aiorch-local --scope user -y >/dev/null 2>&1; then
+            installed_version="$(plugin_field version)"
+            installed_path="$(plugin_field installPath)"
+            ok 'Reinstalled the aiorch plugin from this checkout.'
+        else
+            warn 'aiorch could NOT be reinstalled — sessions would read the OLD protocols.'
+            warn 'Run by hand: claude plugin uninstall aiorch && claude plugin install aiorch@aiorch-local --scope user -y'
+        fi
+    fi
+
+    # Re-checked rather than assumed: the reinstall above can fail, and "reinstalled" printed over a
+    # cache that did not move is the same lie one turn later.
+    if [ -n "$installed_path" ] && [ -d "$installed_path" ] && diff -rq "$installed_path" "$kit_folder" >/dev/null 2>&1; then
+        content_state='content matches this checkout'
     else
-        warn "aiorch reports version '${installed_version:-none}' but this checkout ships '$expected_version'."
+        content_state='CONTENT STILL DIFFERS from this checkout — sessions would read the old protocols'
+    fi
+
+    if [ -n "$installed_version" ] && [ "$installed_version" = "$expected_version" ]; then
+        ok "aiorch $installed_version is installed and enabled — $content_state."
+    else
+        warn "aiorch reports version '${installed_version:-none}' but this checkout ships '$expected_version' ($content_state)."
         warn "Run: claude plugin update aiorch   (the host refuses to start sessions until they match)"
     fi
 else
