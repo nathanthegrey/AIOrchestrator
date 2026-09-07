@@ -3149,13 +3149,18 @@ internal sealed class BridgeEngineModel(
                 {
                     // Remembered, not discarded. If the whole orchestration then falls silent, this
                     // was the last thing said and it gets released — see Break_SilentDeadlock_Async.
-                    lock (_ownerStateLock)
+                    // Except the owner's own words quoted back at them: that is not something the
+                    // session said, and replaying it at the turn's end would send it after all.
+                    if (!OwnerPush_Policy.Is_OwnerRestatement(entry.RawText))
                     {
-                        _lastSuppressedEntry[append.Channel.OrchId] = new SuppressedEntry
+                        lock (_ownerStateLock)
                         {
-                            Text = MirrorText_Formatter.Format(append.Channel, entry),
-                            SuppressedUtc = DateTime.UtcNow,
-                        };
+                            _lastSuppressedEntry[append.Channel.OrchId] = new SuppressedEntry
+                            {
+                                Text = MirrorText_Formatter.Format(append.Channel, entry),
+                                SuppressedUtc = DateTime.UtcNow,
+                            };
+                        }
                     }
 
                     continue;
