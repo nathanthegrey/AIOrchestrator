@@ -73,10 +73,12 @@ from its own place. This repo holds no client, no URL, no upstream vocabulary.
   pass, so a slow one costs that pass and not the bridge — but keep it to seconds, not minutes.
 - **`ledgerRowRef`** is `PlanRequest_Writer.Flatten(request.Title)` — the title with whitespace
   collapsed. It is your join key.
-- **Read readiness with every blocker, never a lone "ready" flag.** A row can be flagged ready and still
-  be held by an unmet condition; handed over early it becomes a line nobody can finish.
-- **On close, submit for verification; do not close the row.** "Merged is not verified" holds across the
-  boundary: report the evidence, leave the decision to whoever can make it.
+- **The seam is neutral on what "ready" and "closed" mean.** Each side decides on its own side: the
+  backend decides what makes a row ready to hand over — including any blocker that would make an early
+  handover a line nobody can finish — and the bridge hands over only what the backend lists as ready;
+  the bridge decides what `[x]` means on the ledger and reports it back through the same backend, and
+  what the backend does with that report — close the row, hold it for verification, anything else — is
+  its own business, not this repo's to prescribe.
 - **Only `[x]` is reported.** Started, blocked, blocked-on-owner and not-doing are not, and a row that
   goes `[x]` then back to `[ ]` is never un-reported. `Report_OrchestrationClosed` fires only for an
   orchestration that had at least one request ingested.
