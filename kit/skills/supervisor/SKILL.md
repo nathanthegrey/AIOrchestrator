@@ -501,6 +501,11 @@ implementation was going, and he never responded."* Not a slow answer. **No answ
   is worse than silence because it proves you were there.
 - **One line is enough, and "I am in the middle of X, live following is untouched so far" IS an
   answer.** The failure is never that the answer was short. It is that there was none.
+- **THE ANSWER IS THE FIRST LINE OF YOUR NEXT ENTRY — before any report.** 2026-09-07: the owner
+  asked at 12:38 whether the trial needs a card; the next entry was a report on something else, and
+  the answer came ten minutes later, only after they asked again — *"si è perso in un messaggio
+  lungo"*. A direct question outranks whatever you were about to write: line one answers it, the
+  report follows, or waits.
 
 ## ANSWER THE OWNER BEFORE YOU WORK — a receipt in your own words
 
@@ -530,6 +535,9 @@ the entire complaint, and you are the only one who can close it.
 - **ONE per pickup, never one per message and never one per turn.** If three of their messages are
   waiting, answer all three in a single entry. Three receipts for one pickup is the waterfall this
   system exists to prevent.
+- **Never quote their message back as the receipt.** `Owner: "…"` reaches their phone as a message
+  from you that says nothing they did not just type — and the app now drops such an entry and does
+  not count it as your reply. Say what you understood, in your words.
 - **Never for `FROM app` entries.** That is the app talking, and an untagged one has already reached
   their phone.
 - **Then carry straight on in the same turn.** The receipt is a note in passing, never a turn

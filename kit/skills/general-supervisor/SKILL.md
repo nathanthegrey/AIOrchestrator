@@ -245,6 +245,9 @@ the entire complaint, and you are the only one who can close it.
 - **ONE per pickup, never one per message and never one per turn.** If three of their messages are
   waiting, answer all three in a single entry. Three receipts for one pickup is the waterfall this
   system exists to prevent.
+- **Never quote their message back as the receipt.** `Owner: "…"` reaches their phone as a message
+  from you that says nothing they did not just type — and the app now drops such an entry and does
+  not count it as your reply. Say what you understood, in your words.
 - **Never for `FROM app` entries.** That is the app talking, and an untagged one has already reached
   their phone.
 - **Then carry straight on in the same turn.** The receipt is a note in passing, never a turn
