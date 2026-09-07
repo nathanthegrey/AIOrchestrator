@@ -1,4 +1,6 @@
+using AIOrchestratorCoreLib.Running.ClaudeInvocation;
 using AIOrchestratorCoreLib.Running.PrintTurnRunner;
+using AIOrchestratorCoreLib.Running.SessionSandbox;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Running;
@@ -67,5 +69,57 @@ public class PrintTurnRunnerTests
         {
             Directory.Delete(workDir, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// THE SANDBOX IS CONSULTED AT EVERY START, and the invocation it returns is the one that runs.
+    ///
+    /// <para>
+    /// That is what makes the memory ceiling a live setting rather than a startup one — an operator
+    /// raising <c>runners.sessionMemoryMax</c> on the VPS applies to the next turn — and it is the
+    /// only reason this seam exists at all: a session that eats the machine has to die ALONE, and
+    /// nothing in a role protocol can make that true (CLAUDE.md decision 21).
+    /// </para>
+    /// <para>
+    /// The wrapper here is a recording pass-through rather than a real <c>systemd-run</c>, because
+    /// this machine has no cgroups and the shape of the LINE is asserted where it is built, in
+    /// <c>SessionSandboxTests</c>. What is asserted here is the wiring: the runner asks, and the turn
+    /// still completes through what it was handed.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task EveryTurn_StartsTheInvocationTheSandboxHandsBack()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"aiorch-turn-runner-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        File.WriteAllText(Path.Combine(workDir, "fake-claude-scenario.json"), """{"default":{"result":"done"}}""");
+
+        var sandbox = new RecordingSandbox_Fake();
+        var runner = PrintTurnRunner_Factory.Create(PrintRunnerTestHarness.Fake_Invocation(), sandbox);
+
+        try
+        {
+            await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(30), CancellationToken.None);
+            await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(30), CancellationToken.None);
+
+            Assert.Equal(2, sandbox.Calls);
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+}
+
+/// <summary>Counts how often the process seam asked what to start, and hands back what it was given.</summary>
+internal sealed class RecordingSandbox_Fake : ISessionSandbox
+{
+    public int Calls { get; private set; }
+
+    public IClaudeInvocation Wrap(IClaudeInvocation plain)
+    {
+        Calls++;
+
+        return plain;
     }
 }

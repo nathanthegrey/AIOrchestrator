@@ -9,7 +9,8 @@ namespace AIOrchestratorCoreLib.Running.RunnerConfigs;
 /// "runners": {
 ///   "implementer": { "runner": "print", "resume": "transcript", "permission_mode": null },
 ///   "supervisor":  { "runner": "stream", "resume": "transcript" },
-///   "general":     { "runner": "print", "resume": "fresh" }
+///   "general":     { "runner": "print", "resume": "fresh" },
+///   "sessionMemoryMax": "3G"
 /// },
 /// "printRunner": { "maxConcurrentTurns": 10, "maxConcurrentTurnsPerOrchestration": 3,
 ///                  "turnTimeoutMinutes": 30, "coalesceSeconds": 3, "streamSilenceSeconds": 120 }
@@ -33,6 +34,16 @@ public static class RunnerConfigs_Json
     public const string COALESCE_SECONDS_KEY = "coalesceSeconds";
     public const string STREAM_SILENCE_SECONDS_KEY = "streamSilenceSeconds";
 
+    /// <summary>
+    /// The per-session memory ceiling, and it sits in the ROLES block rather than in
+    /// <see cref="LIMITS_KEY"/> on purpose: it governs how a session is SPAWNED, which is what
+    /// every other key under <c>runners</c> governs, while <c>printRunner</c> holds what the
+    /// dispatcher does with turns. A role can never be called this — the role keys are a closed set
+    /// (<see cref="SessionRole_Names.ALL"/>) and the reader only ever asks for those — so the two
+    /// cannot collide.
+    /// </summary>
+    public const string SESSION_MEMORY_MAX_KEY = "sessionMemoryMax";
+
     public static IRunnerConfigs Parse(JsonObject? configRoot)
     {
         var defaults = RunnerConfigs_Factory.Create_Default();
@@ -53,6 +64,7 @@ public static class RunnerConfigs_Json
         }
 
         var limits = configRoot[LIMITS_KEY] as JsonObject;
+        var sessionMemoryMax = Read_SessionMemoryMax_OrDefault(configRoot[RUNNERS_KEY] as JsonObject, rejections);
 
         return RunnerConfigs_Factory.Create(
             roles,
@@ -61,7 +73,8 @@ public static class RunnerConfigs_Json
             TimeSpan.FromMinutes(Read_PositiveDouble_OrDefault(limits, TURN_TIMEOUT_MINUTES_KEY, defaults.TurnTimeout.TotalMinutes)),
             TimeSpan.FromSeconds(Read_NonNegativeDouble_OrDefault(limits, COALESCE_SECONDS_KEY, defaults.CoalesceWindow.TotalSeconds)),
             TimeSpan.FromSeconds(Read_PositiveDouble_OrDefault(limits, STREAM_SILENCE_SECONDS_KEY, defaults.SilenceLimit.TotalSeconds)),
-            rejections);
+            rejections,
+            sessionMemoryMax);
     }
 
     /// <summary>Sets both blocks on <paramref name="configRoot"/>, replacing whatever was there.</summary>
@@ -81,6 +94,8 @@ public static class RunnerConfigs_Json
                 [SETTINGS_KEY] = roleConfig.Settings,
             };
         }
+
+        runnersNode[SESSION_MEMORY_MAX_KEY] = configs.SessionMemoryMax;
 
         configRoot[RUNNERS_KEY] = runnersNode;
         configRoot[LIMITS_KEY] = new JsonObject
@@ -120,6 +135,41 @@ public static class RunnerConfigs_Json
         }
 
         return RoleRunnerConfig_Factory.Create(runner, resume, permissionMode, bgSettings);
+    }
+
+    /// <summary>
+    /// A ceiling this host cannot read is REFUSED, not silently replaced: an operator who typed
+    /// "3 GB" and got the 3G default would never learn the difference, and an operator who typed
+    /// "300M" meaning three hundred megabytes must not be quietly given three gigabytes. The word
+    /// forms that mean "no ceiling" pass through untouched — turning the cap off is a decision, not
+    /// a typo.
+    /// </summary>
+    static string Read_SessionMemoryMax_OrDefault(JsonObject? runnersNode, List<string> rejections)
+    {
+        if (runnersNode == null)
+            return RunnerConfigs_Factory.DEFAULT_SESSION_MEMORY_MAX;
+
+        var written = Read_String_OrNull(runnersNode, SESSION_MEMORY_MAX_KEY);
+
+        if (written == null)
+            return RunnerConfigs_Factory.DEFAULT_SESSION_MEMORY_MAX;
+
+        if (SessionSandbox.MemorySize_Parser.Means_NoLimit(written))
+            return written.Trim();
+
+        // NORMALISED, not echoed: what is stored here is handed to systemd verbatim at every spawn,
+        // so "3072M" becomes "3G" and anything systemd would refuse never gets that far.
+        var normalised = SessionSandbox.MemorySize_Parser.Normalise_OrNull(written);
+
+        if (normalised != null)
+            return normalised;
+
+        rejections.Add(
+            $"'{RUNNERS_KEY}.{SESSION_MEMORY_MAX_KEY}' is '{written}', which is not a memory size "
+            + $"(expected e.g. '3G', '3072M', or 'none') — refused, sessions are capped at "
+            + $"{RunnerConfigs_Factory.DEFAULT_SESSION_MEMORY_MAX} instead");
+
+        return RunnerConfigs_Factory.DEFAULT_SESSION_MEMORY_MAX;
     }
 
     static string? Read_String_OrNull(JsonObject node, string key)

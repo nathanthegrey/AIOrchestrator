@@ -304,6 +304,16 @@ internal sealed class ByMethodTelegram_Fake : ITelegramApiClient
             return _plainSends.Any(text => text.Contains(fragment, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A snapshot of every HTML send, in the order Telegram received them — what a test about
+    /// SPLITTING needs, where the older ones only ever asked whether a fragment appeared somewhere.
+    /// </summary>
+    public IReadOnlyList<string> Html_Sends()
+    {
+        lock (_lock)
+            return [.. _htmlSends];
+    }
+
     public string Dump_HtmlSends()
     {
         lock (_lock)

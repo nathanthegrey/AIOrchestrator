@@ -35,6 +35,14 @@ public static class KitAssets_Bootstrapper
     public const string REFUSAL_SUBJECT = "kit check FAILED — no session will start";
 
     /// <summary>
+    /// The subject of the entry written when a check that had FAILED passes again. Agent-facing:
+    /// what it clears is a blocker the SUPERVISOR is holding, and per decision 15 an alert the owner
+    /// cannot act on does not go to the phone. Without it the refusal stays the last word on that
+    /// channel and the supervisor keeps reporting a blocker that is gone (VPS, 2026-09-07).
+    /// </summary>
+    public const string RECOVERY_SUBJECT = "kit check OK";
+
+    /// <summary>
     /// <paramref name="kitFolder"/> is the kit shipped beside the host binary
     /// (<c>AppContext.BaseDirectory/kit</c>); <paramref name="claudeHomeFolder"/> is where Claude
     /// Code keeps settings.json and plugins/.
@@ -67,7 +75,7 @@ public static class KitAssets_Bootstrapper
         // spawned against a kit this host had never verified. A verdict is now taken on every path.
         try
         {
-            Verify_Plugin(claudeHomeFolder, paths, log, gate);
+            Verify_Plugin(kitFolder, claudeHomeFolder, paths, log, gate);
         }
         catch (Exception ex)
         {
@@ -75,6 +83,7 @@ public static class KitAssets_Bootstrapper
             log.Log_Error("", refusal, ex);
             gate?.Record(PluginVerdicts.Unreadable, refusal);
             Tell_Owner_Once(paths, log, refusal);
+            KitCheckHistory_Store.Write_LastVerdict(paths, PluginVerdicts.Unreadable);
         }
     }
 
@@ -127,33 +136,110 @@ public static class KitAssets_Bootstrapper
             log.Log_Info("", $"Status line wired into {settingsFile} (previous file backed up); active for newly spawned sessions");
     }
 
-    static void Verify_Plugin(string claudeHomeFolder, ISupervisionPaths paths, IOrchestrationLog log, IPluginGate? gate)
+    static void Verify_Plugin(string kitFolder, string claudeHomeFolder, ISupervisionPaths paths, IOrchestrationLog log, IPluginGate? gate)
     {
         var reading = InstalledPlugin_Reader.Read(claudeHomeFolder, KitPlugin.ID);
         var shadowing = LegacyKit_Remover.Find_ShadowingCommands(claudeHomeFolder);
         var buildCommit = Build.BuildCommit_Reader.Read_RunningBuildCommit_OrNull();
 
-        var verdict = PluginVersion_Verifier.Decide(reading, KitPlugin.EXPECTED_VERSION, shadowing, buildCommit);
-        var refusal = PluginVersion_Verifier.Describe(verdict, reading, KitPlugin.EXPECTED_VERSION, KitPlugin.ID, shadowing, buildCommit);
+        // THE FILES ARE ASKED BEFORE THE COMMIT. Both trees are on this disk, so the question the
+        // check is actually about — would a session read the protocols this host was built with —
+        // can be answered directly instead of through a commit id that moves for reasons that have
+        // nothing to do with kit/ (VPS, 2026-09-07: a stage that touched no kit file refused every
+        // session for a day).
+        var contentMatches = KitContent_Digest.Same_Content(kitFolder, reading.InstallPath);
+
+        var verdict = PluginVersion_Verifier.Decide(reading, KitPlugin.EXPECTED_VERSION, shadowing, buildCommit, contentMatches);
+        var refusal = PluginVersion_Verifier.Describe(verdict, reading, KitPlugin.EXPECTED_VERSION, KitPlugin.ID, shadowing, buildCommit, contentMatches);
 
         gate?.Record(verdict, refusal);
 
+        var previous = KitCheckHistory_Store.Read_LastVerdict_OrNull(paths);
+        KitCheckHistory_Store.Write_LastVerdict(paths, verdict);
+
         if (refusal == null)
         {
-            // THE OK LINE NAMES THE COMMIT, or names what it could not compare. "Kit check OK" over a
-            // cache holding a different commit is the exact sentence that cost the 2026-09-07 evening
-            // on the VPS, and it was true of the only thing it had checked: the number.
+            // THE OK LINE NAMES WHAT WAS COMPARED, or names what it could not compare. "Kit check OK"
+            // over a cache holding a different commit is the exact sentence that cost the 2026-09-07
+            // evening on the VPS, and it was true of the only thing it had checked: the number.
             var content =
-                buildCommit == null ? "content NOT VERIFIED — this build carries no commit stamp"
-                : reading.CommitSha == null ? $"content NOT VERIFIED — the install record has no gitCommitSha (this host is {buildCommit[..7]})"
+                contentMatches == true ? "content verified — the installed files are byte-identical to this build's kit"
+                : buildCommit == null ? "content NOT VERIFIED — this build carries no commit stamp and the installed files could not be compared"
+                : reading.CommitSha == null ? $"content NOT VERIFIED — the install record has no gitCommitSha and the installed files could not be compared (this host is {buildCommit[..7]})"
                 : $"content verified — commit {reading.CommitSha[..Math.Min(7, reading.CommitSha.Length)]}";
 
-            log.Log_Info("", $"Kit check OK — {KitPlugin.ID} {reading.Version} at {reading.InstallPath} · {content}");
+            var line = $"Kit check OK — {KitPlugin.ID} {reading.Version} at {reading.InstallPath} · {content}";
+
+            log.Log_Info("", line);
+
+            // INFO, NOT AN ERROR, and said out loud rather than swallowed: the commits disagreeing
+            // while the files agree is normal (any commit that touches nothing under kit/ produces
+            // it) and is exactly the state that used to stop every session on this host.
+            if (contentMatches == true && buildCommit != null && reading.CommitSha != null
+                && !Build.BuildCommit_Reader.Names_TheSameCommit(reading.CommitSha, buildCommit))
+            {
+                log.Log_Info("", $"The installed kit records commit {Short(reading.CommitSha)} and this host was built from {Short(buildCommit)} — the FILES are identical, so this is not a mismatch. The recorded commit is the marketplace repository's HEAD at install time and moves for changes that never touch kit/.");
+            }
+
+            Tell_Channel_ItRecovered(paths, log, previous, reading, buildCommit, contentMatches);
             return;
         }
 
         log.Log_Error("", refusal, null);
         Tell_Owner_Once(paths, log, refusal);
+    }
+
+    static string Short(string commit)
+    {
+        return commit.Length <= 7 ? commit : commit[..7];
+    }
+
+    /// <summary>
+    /// ONE entry, and only after a check that had failed. The general supervisor reads its channel
+    /// as a LOG, so the refusal it saw at the last boot stays true for it until something newer says
+    /// otherwise — which is how a cleared blocker went on being reported for hours. Agent audience:
+    /// there is nothing here for the owner to do (decision 15).
+    /// </summary>
+    static void Tell_Channel_ItRecovered(
+        ISupervisionPaths paths,
+        IOrchestrationLog log,
+        PluginVerdicts? previous,
+        InstalledPluginReading reading,
+        string? buildCommit,
+        bool? contentMatches)
+    {
+        if (!KitCheckHistory_Store.Is_Failure(previous))
+            return;
+
+        var evidence =
+            contentMatches == true ? "the installed files are byte-identical to this build's kit"
+            : reading.CommitSha != null ? $"commit {Short(reading.CommitSha)}"
+            : buildCommit != null ? $"this host was built from {Short(buildCommit)}"
+            : "the version matches";
+
+        var subject = $"{RECOVERY_SUBJECT} — {evidence}";
+
+        try
+        {
+            if (!File.Exists(paths.GeneralChannelFile))
+                return;
+
+            var appended = ChannelAppender.Append_AppEntry(
+                paths.GeneralChannelFile,
+                AppEntryAudiences.Agent,
+                subject,
+                $"The previous kit check on this host ended '{previous}'. It PASSES now — {KitPlugin.ID} {reading.Version} at {reading.InstallPath}, {evidence}. "
+                    + "Sessions can start. If you were holding this as a blocker, it is cleared; nothing about it needs reporting to the owner.",
+                DateTime.Now);
+
+            log.Log_Info("", appended
+                ? $"Kit check recovered from '{previous}' — said so on the general channel so no supervisor sits on a stale blocker"
+                : $"Kit check recovered from '{previous}' — but the general channel was LOCKED, so nothing was written there and a supervisor may still be holding the old refusal");
+        }
+        catch (Exception ex)
+        {
+            log.Log_Warning("", $"Could not put the kit recovery on the general channel: {ex.Message}");
+        }
     }
 
     /// <summary>

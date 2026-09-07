@@ -3210,7 +3210,12 @@ internal sealed class BridgeEngineModel(
                     speakerPrefix + await _translator.Translate_ToItalian_Async(content, cancellationToken), blocks);
             }
 
-            var chunks = TelegramMessage_Chunker.Chunk(text);
+            // SPLIT, NEVER DROPPED, and numbered when there is more than one piece. This used to be
+            // a bare TelegramMessage_Chunker.Chunk(text), which measures the MARKDOWN while Telegram
+            // counts the HTML this path renders it into — see OwnerMessage_Chunker for the wedge
+            // that produced, and for why an owner-facing message being long is a splitting problem
+            // and never a reason for the owner to receive nothing.
+            var chunks = OwnerMessage_Chunker.Chunk_ForOwner(text);
 
             try
             {
@@ -3222,7 +3227,7 @@ internal sealed class BridgeEngineModel(
                 // presence lines are not something the owner is expected to reply to.
                 if (append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) && chunks.Count > 0)
                 {
-                    Nudge_IfTooVerbose(append.Channel.OrchId, text);
+                    Nudge_IfTooVerbose(append.Channel.OrchId, text, chunks.Count);
 
                     if (Note_SupervisorSpokeToOwner_AndJustWentQuiet(append.Channel.OrchId))
                         await Enter_QuietMode_Async(append.Channel.OrchId, cancellationToken);
@@ -11463,7 +11468,7 @@ internal sealed class BridgeEngineModel(
     /// verbose — every rule in this system that actually held got a feedback loop, not firmer
     /// wording. Rate-limited, because nagging after every message would itself become the noise.
     /// </summary>
-    void Nudge_IfTooVerbose(string orchId, string mirroredText)
+    void Nudge_IfTooVerbose(string orchId, string mirroredText, int deliveredMessages)
     {
         if (!Brevity_Policy.Is_TooLong(mirroredText))
             return;
@@ -11487,7 +11492,7 @@ internal sealed class BridgeEngineModel(
         var nudged = ChannelAppender.Append_AppEntry(
             _paths.Get_OwnerChannelFile(orchId), AppEntryAudiences.Agent,
             "that message was too long for a phone",
-            Brevity_Policy.Build_NudgeBody(mirroredText),
+            Brevity_Policy.Build_NudgeBody(mirroredText, deliveredMessages),
             DateTime.Now);
 
         // The return is consulted for the SENTENCE ONLY, and that does not disturb the deliberate

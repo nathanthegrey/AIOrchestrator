@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Limits;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running.ClaudeInvocation;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.SessionSandbox;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 using AIOrchestratorCoreLib.Running.StreamTurn;
 using AIOrchestratorCoreLib.Running.TurnLog;
@@ -44,6 +45,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
     readonly ITurnExecutor? _fallback;
     readonly IOrchestrationLog _log;
     readonly IOrchestratorConfigProvider _configProvider;
+    readonly ISessionSandbox _sandbox;
 
     readonly Lock _lock = new();
     readonly Dictionary<string, StreamSessionProcess> _processes = [];
@@ -54,13 +56,14 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
 
     public SessionRunners Kind => SessionRunners.Stream;
 
-    public StreamTurnExecutorModel(ISupervisionPaths paths, IClaudeInvocation invocation, ITurnExecutor? fallback, IOrchestrationLog log, IOrchestratorConfigProvider configProvider)
+    public StreamTurnExecutorModel(ISupervisionPaths paths, IClaudeInvocation invocation, ITurnExecutor? fallback, IOrchestrationLog log, IOrchestratorConfigProvider configProvider, ISessionSandbox sandbox)
     {
         _paths = paths;
         _invocation = invocation;
         _fallback = fallback;
         _log = log;
         _configProvider = configProvider;
+        _sandbox = sandbox;
     }
 
     /// <summary>Read per turn, like every other setting: an edit to config.json applies to the next one.</summary>
@@ -207,10 +210,14 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
 
             var arguments = StreamTurnCommand_Builder.Build_Arguments(state, roleConfig, sessionId, resumeTranscript, null);
 
-            _log.Log_Info(state.OrchId, $"Stream session '{state.MemberId}' starting: {Describe_Command(arguments)}");
+            // Resolved HERE, per start, so a ceiling raised in config.json applies to the next
+            // process this session gets rather than to the next restart of the host.
+            var invocation = _sandbox.Wrap(_invocation);
+
+            _log.Log_Info(state.OrchId, $"Stream session '{state.MemberId}' starting: {Describe_Command(invocation, arguments)}");
 
             var process = StreamSessionProcess.Start(
-                _invocation,
+                invocation,
                 arguments,
                 sessionId,
                 state.WorkingDirectory,
@@ -229,9 +236,9 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
     /// run — so the first question ("what was the command?") could only be answered by catching the
     /// process with <c>ps</c> while it lived.
     /// </summary>
-    string Describe_Command(IReadOnlyList<string> arguments)
+    static string Describe_Command(IClaudeInvocation invocation, IReadOnlyList<string> arguments)
     {
-        return string.Join(' ', new[] { _invocation.Executable }.Concat(_invocation.LeadingArguments).Concat(arguments));
+        return string.Join(' ', new[] { invocation.Executable }.Concat(invocation.LeadingArguments).Concat(arguments));
     }
 
     // ----- failures and the ladder -----
@@ -253,7 +260,11 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         var what = outcome.ProcessDied
             ? $"the process died {where} (exit {outcome.Result.ExitCode}){Describe_Stderr(outcome.Stderr)}"
             : outcome.WentSilent
+                // NAMES THE LIMIT AND THE KEY THAT SETS IT. "said nothing for 121 s and was killed"
+                // leaves an operator with no way to know what the threshold was, let alone how to
+                // raise it — and raising it is the only action this line can lead to.
                 ? $"the process said nothing for {outcome.Silence.TotalSeconds:F0} s {where} and was killed"
+                    + $" (the limit is {SilenceLimit.TotalSeconds:F0} s, set by '{RunnerConfigs.RunnerConfigs_Json.LIMITS_KEY}.{RunnerConfigs.RunnerConfigs_Json.STREAM_SILENCE_SECONDS_KEY}' in config.json)"
                 : $"the turn outlived its timeout {where} and was killed";
 
         _log.Log_Warning(state.OrchId, $"Stream turn {requestId}: {what} — the next attempt resumes the same transcript");

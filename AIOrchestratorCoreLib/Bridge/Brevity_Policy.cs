@@ -50,10 +50,25 @@ public static class Brevity_Policy
         return Count_Lines(text) > MAX_LINES || text.Length > MAX_CHARACTERS;
     }
 
-    /// <summary>The feedback itself — it must carry the NUMBERS, or it is just the rule again.</summary>
-    public static string Build_NudgeBody(string text)
+    /// <summary>
+    /// The feedback itself — it must carry the NUMBERS, or it is just the rule again.
+    ///
+    /// <para>
+    /// <paramref name="deliveredMessages"/> is how many Telegram messages the entry actually became.
+    /// It is stated first, and it is not decoration: on 2026-09-07 this note was read — by a
+    /// supervisor and then by the owner it reported to — as the bridge having REFUSED the message,
+    /// and the supervisor stopped re-sending an answer the owner had in fact received. Nothing here
+    /// ever withholds a message; saying so removes the only reading under which it could.
+    /// </para>
+    /// </summary>
+    public static string Build_NudgeBody(string text, int deliveredMessages = 1)
     {
-        return $"That message was {Count_Lines(text)} lines / {text.Length} characters. The cap is {MAX_LINES} lines "
+        var delivery = deliveredMessages > 1
+            ? $"It WAS delivered, split across {deliveredMessages} phone messages — nothing was dropped. "
+            : "It WAS delivered in full — nothing was dropped. ";
+
+        return delivery
+            + $"That message was {Count_Lines(text)} lines / {text.Length} characters. The cap is {MAX_LINES} lines "
             + $"({TARGET_LINES} is the norm) and {MAX_CHARACTERS} characters, because it lands on a PHONE.\n\n"
             + "Cut it the way a busy person would want it: lead with the decision or the question, drop the reasoning "
             + "unless they asked for it, drop anything restating what they already know, and let the detail live in "

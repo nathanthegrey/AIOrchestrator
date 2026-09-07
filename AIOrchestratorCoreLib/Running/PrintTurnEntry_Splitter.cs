@@ -23,7 +23,7 @@ public static class PrintTurnEntry_Splitter
 
     public static (string Subject, string Body) Split(string? resultText)
     {
-        var text = (resultText ?? string.Empty).Replace("\r\n", "\n").Trim();
+        var text = Strip_LeadingNarration((resultText ?? string.Empty).Replace("\r\n", "\n").Trim());
 
         if (text.Length == 0)
             return (EMPTY_SUBJECT, string.Empty);
@@ -40,6 +40,113 @@ public static class PrintTurnEntry_Splitter
             subject = subject[..(MAX_SUBJECT_LENGTH - 1)].TrimEnd() + "…";
 
         return (subject, Neutralise_HeaderLines(text));
+    }
+
+    /// <summary>
+    /// THE SESSION NARRATING THAT IT IS ABOUT TO WRITE THE ENTRY IS NOT THE ENTRY.
+    ///
+    /// <para>
+    /// Measured live on 2026-09-07, general channel entry #52: the final message began
+    /// <c>Now writing my final message (which is the channel entry in print-runner mode):</c>, a
+    /// blank line, and then the message. That first line became the SUBJECT — it is short, it is
+    /// followed by a blank line, so it satisfies the contract exactly — and every reader of that
+    /// channel, the owner included, got a sentence about the mechanism instead of the news.
+    /// </para>
+    /// <para>
+    /// It is ordinary model behaviour rather than a slip: the print prompt tells the session that
+    /// its reply becomes an entry, and announcing what one is about to do is what a session does
+    /// with an instruction like that. So it is handled here rather than by another sentence in the
+    /// role protocol.
+    /// </para>
+    /// <para>
+    /// TWO SHAPES ARE STRIPPED AND NEITHER GUESSES. The first is STRUCTURAL and needs no vocabulary:
+    /// a leading line ending in a colon whose next non-blank line the parser reads as a channel
+    /// HEADER cannot be the subject, because the session has plainly written the header itself and
+    /// what precedes it is preamble. The second is the narration above, recognised by an opener that
+    /// speaks about WRITING THE MESSAGE — kept to phrases actually observed, because a broad "any
+    /// line ending in a colon" would eat a real subject like <c>BLOCKED ON OWNER:</c>.
+    /// </para>
+    /// <para>
+    /// Only leading lines, and only while they keep matching: a colon line in the middle of a body
+    /// is prose and is left exactly where the session put it.
+    /// </para>
+    /// </summary>
+    static string Strip_LeadingNarration(string text)
+    {
+        var remaining = text;
+
+        while (true)
+        {
+            var lines = remaining.Split('\n');
+            var first = lines[0].Trim();
+
+            if (!first.EndsWith(':') || ChannelEntry_Parser.Is_HeaderLine(first))
+                return remaining;
+
+            var rest = string.Join('\n', lines.Skip(1)).Trim();
+
+            // Dropping it would leave nothing: then the narration IS the whole message, and a
+            // sentence about the mechanism still beats "(no message)".
+            if (rest.Length == 0)
+                return remaining;
+
+            if (!Is_HeaderNext(rest) && !Is_WritingNarration(first))
+                return remaining;
+
+            remaining = rest;
+        }
+    }
+
+    /// <summary>The next thing the session wrote is a header of its own, so what came before it was preamble.</summary>
+    static bool Is_HeaderNext(string rest)
+    {
+        foreach (var line in rest.Split('\n'))
+        {
+            if (line.Trim().Length == 0)
+                continue;
+
+            return ChannelEntry_Parser.Is_HeaderLine(line.Trim());
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Openers observed in live final messages. A LIST, deliberately short, and it earns its keep by
+    /// being anchored at the START of the line: "Now writing my final message …:" is narration,
+    /// while a subject that happens to contain the word "writing" is not.
+    /// </summary>
+    static readonly IReadOnlyList<string> WRITING_NARRATION_OPENERS =
+    [
+        "now writing",
+        "now filing",
+        "writing my",
+        "writing the",
+        "filing my",
+        "filing the",
+        "here is my",
+        "here is the",
+        "here's my",
+        "here's the",
+        "let me write",
+        "i'll write",
+        "i will write",
+        "my final message",
+        "final message",
+        "channel entry",
+    ];
+
+    static bool Is_WritingNarration(string line)
+    {
+        var lowered = line.ToLowerInvariant();
+
+        foreach (var opener in WRITING_NARRATION_OPENERS)
+        {
+            if (lowered.StartsWith(opener, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
