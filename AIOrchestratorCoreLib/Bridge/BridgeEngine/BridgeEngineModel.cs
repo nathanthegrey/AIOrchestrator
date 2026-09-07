@@ -8867,6 +8867,15 @@ internal sealed class BridgeEngineModel(
         // button spinning on the owner's phone for the whole of it.
         await Answer_CallbackTap_BestEffort_Async(client, tap.CallbackQueryId, "✓", cancellationToken);
 
+        // A TAP IS THE OWNER SPEAKING - the close-confirmation tap already treats it that way, and
+        // Note_OwnerSpoke_AndWasAway's own doc says so in as many words ("including tapping a
+        // button"). This bar was the one tap path that never said it, which went from harmless to
+        // wrong the moment /pc got a button: the owner would tap "I am at my pc" and stay marked
+        // away until they typed something into Telegram, which is the exact chore /pc exists to
+        // spare them.
+        if (Note_OwnerSpoke_AndWasAway())
+            await Exit_AwayMode_Async(cancellationToken);
+
         // The id encoded in the button is the topic the bar was drawn FOR; the tap's own is the
         // fallback for a button minted before that was carried.
         var threadId = parsed.Value.MessageThreadId != 0 ? parsed.Value.MessageThreadId : tap.MessageThreadId;
@@ -9778,6 +9787,13 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     bool Is_OwnerAtThePc()
     {
+        // GENERAL IS ASKED SEPARATELY, and it is not a detail. It keeps no session.json, so
+        // Load_All cannot see it AT ALL - and it is the session the owner talks to most, which
+        // makes "/pc held only in General" the likeliest way for this to be true. Reading it
+        // through Resolve_Presence is what the rest of the file already does for General.
+        if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID)))
+            return true;
+
         return _store.Load_All().Any(session =>
             session.ClosedUtc == null && OwnerPresence_Policy.Suppresses_SupervisorAttention(session.OwnerPresence));
     }
@@ -10290,20 +10306,36 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Check_AwayMode_Async(CancellationToken cancellationToken)
     {
+        // ASKED OUTSIDE THE LOCK, on purpose: it reads every session.json off disk, and
+        // _ownerStateLock is taken on the inbound path too - holding it across file I/O is how a
+        // tick and an owner's message come to wait on each other.
+        var ownerAtAPc = Is_OwnerAtThePc();
+
         bool shouldEnter;
+        bool shouldLeave;
 
         lock (_ownerStateLock)
         {
             var anyQuiet = _awayTrackers.Values.Any(tracker => tracker.IsQuiet);
 
-            shouldEnter = !_awayActive && AwayMode_Policy.Should_EnterAway(anyQuiet, _lastOwnerMessageUtc, DateTime.UtcNow);
+            shouldEnter = !_awayActive && AwayMode_Policy.Should_EnterAway(anyQuiet, ownerAtAPc, _lastOwnerMessageUtc, DateTime.UtcNow);
+            shouldLeave = AwayMode_Policy.Should_LeaveAway(_awayActive, ownerAtAPc);
 
             if (shouldEnter)
                 _awayActive = true;
+
+            // Cleared HERE rather than through Note_OwnerSpoke_AndWasAway, which would also stamp
+            // the silence clock and zero every quiet tracker. The owner has not spoken - they are
+            // at a keyboard - so away ends and nothing else is claimed on their behalf.
+            if (shouldLeave)
+                _awayActive = false;
         }
 
+        // Mutually exclusive by construction: entering needs away off, leaving needs it on.
         if (shouldEnter)
             await Enter_AwayMode_Async(cancellationToken);
+        else if (shouldLeave)
+            await Exit_AwayMode_Async(cancellationToken);
     }
 
     /// <summary>

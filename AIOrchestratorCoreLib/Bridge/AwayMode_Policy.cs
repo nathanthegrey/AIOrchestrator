@@ -42,13 +42,48 @@ public static class AwayMode_Policy
     /// <summary>
     /// Away needs BOTH: somebody actually waiting on the owner (otherwise silence just means there
     /// was nothing to say), and 15 minutes of silence from them across every topic.
+    ///
+    /// AND IT NEVER APPLIES WHILE THE OWNER IS AT A PC (owner's ruling, 2026-09-07: *"when I'm at
+    /// the pc, which mean when at least one session is in pc mode, automatic away mode should never
+    /// happen"*). `/pc` says they are sitting at a terminal and deliberately not answering Telegram,
+    /// so the silence measured here is that mode WORKING rather than evidence of absence. Their log
+    /// carries the failure it caused: da-vinci-fintech-suite-26 went Terminal at 09:53, away mode
+    /// declared them "unresponsive" app-wide at 10:23:50, and they did not leave that terminal until
+    /// 10:30:56 - so the app parked their questions and told every supervisor they were not reading
+    /// while they sat in front of one of them.
+    ///
+    /// It is asked FIRST rather than added as one more term in the conjunction, because it is of a
+    /// different kind: presence is a FACT the owner stated, while the other two are inferences drawn
+    /// from silence. An inference must not outrank the thing it is a guess about.
     /// </summary>
-    public static bool Should_EnterAway(bool anyOrchestrationQuiet, DateTime lastOwnerMessageUtc, DateTime nowUtc)
+    public static bool Should_EnterAway(bool anyOrchestrationQuiet, bool ownerAtAPc, DateTime lastOwnerMessageUtc, DateTime nowUtc)
     {
+        if (ownerAtAPc)
+            return false;
+
         if (!anyOrchestrationQuiet)
             return false;
 
         return (nowUtc - lastOwnerMessageUtc).TotalMinutes >= AWAY_AFTER_MINUTES;
+    }
+
+    /// <summary>
+    /// The same rule read as an INVARIANT rather than as an entry gate: away mode must not merely
+    /// fail to start while the owner is at a pc, it must not STAND.
+    ///
+    /// The owner asked for the state and not the transition - "away mode should never happen" - and
+    /// the two differ in the case that actually bites: a spell that began while they were out, and
+    /// was still on when they sat down. Guarding only the entry would leave that spell running until
+    /// they next typed into Telegram, which is the one thing /pc exists to stop them having to do.
+    ///
+    /// Leaving away this way is deliberately NOT "the owner spoke": it clears the away flag and
+    /// nothing else. Stamping the silence clock or zeroing the quiet counters here would assert a
+    /// message that never arrived, and would stop any other orchestration from ever going quiet for
+    /// as long as the owner sat at one terminal.
+    /// </summary>
+    public static bool Should_LeaveAway(bool awayActive, bool ownerAtAPc)
+    {
+        return awayActive && ownerAtAPc;
     }
 
     /// <summary>Marks an away topic in the owner's topic LIST, so the state is visible without opening it.</summary>
