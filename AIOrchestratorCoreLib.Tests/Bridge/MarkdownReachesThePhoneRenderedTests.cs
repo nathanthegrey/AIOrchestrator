@@ -269,6 +269,7 @@ internal sealed class ByMethodTelegram_Fake : ITelegramApiClient
     readonly object _lock = new();
     readonly List<string> _htmlSends = [];
     readonly List<string> _plainSends = [];
+    readonly List<(long? ThreadId, string FileName, byte[] Content, string CaptionHtml)> _documents = [];
     long _nextMessageId = 900;
     TelegramApiException? _htmlRefusal;
 
@@ -289,6 +290,7 @@ internal sealed class ByMethodTelegram_Fake : ITelegramApiClient
         {
             _htmlSends.Clear();
             _plainSends.Clear();
+            _documents.Clear();
         }
     }
 
@@ -389,6 +391,31 @@ internal sealed class ByMethodTelegram_Fake : ITelegramApiClient
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// RECORDED WHOLE — name, bytes and caption — because "the entry was also attached" is only
+    /// checkable against what Telegram actually received, and an attachment with the wrong name or a
+    /// truncated body would satisfy a mere counter.
+    /// </summary>
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            _documents.Add((messageThreadId, fileName, content, captionHtml));
+
+        return Task.CompletedTask;
+    }
+
+    public IReadOnlyList<(long? ThreadId, string FileName, byte[] Content, string CaptionHtml)> Documents()
+    {
+        lock (_lock)
+            return [.. _documents];
+    }
+
+    public string Dump_Documents()
+    {
+        lock (_lock)
+            return _documents.Count == 0 ? "(none)" : string.Join(" | ", _documents.Select(document => $"{document.FileName} ({document.Content.Length} bytes)"));
+    }
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
 

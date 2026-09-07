@@ -1,6 +1,7 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
@@ -79,6 +80,13 @@ public interface IOrchestratorConfig
     /// means the shipped defaults, the same shape <see cref="Guardrails"/> has.
     /// </summary>
     IDefaultsSettings Defaults { get; }
+
+    /// <summary>
+    /// The <c>telegram</c> block: how a long owner-facing entry is SHAPED on the phone — folded above
+    /// a length, attached as a file above a message count. Never null; an absent block means the
+    /// shipped defaults, the same rule <see cref="Guardrails"/> and <see cref="Defaults"/> follow.
+    /// </summary>
+    ITelegramProseSettings TelegramProse { get; }
 
     bool Is_TelegramConfigured();
 }

@@ -3220,19 +3220,30 @@ internal sealed class BridgeEngineModel(
             // counts the HTML this path renders it into — see OwnerMessage_Chunker for the wedge
             // that produced, and for why an owner-facing message being long is a splitting problem
             // and never a reason for the owner to receive nothing.
-            var chunks = OwnerMessage_Chunker.Chunk_ForOwner(text);
+            // FOLDED FIRST, THEN CHUNKED, and the order is the whole design: the fold is a
+            // PRESENTATION choice — the opening in the clear, the rest behind one tap — while 4096 is
+            // a hard refusal. See OwnerMessage_Folder, which degrades to the chunker's own output for
+            // every entry it cannot improve on.
+            var prose = _configProvider.Get_Current().TelegramProse;
+            var pieces = OwnerMessage_Folder.Fold_ForOwner(text, prose.FoldLongEntriesAbove);
 
             try
             {
-                foreach (var chunk in chunks)
-                    Remember_TopicMessage(threadId, await Send_MirrorChunk_Async(threadId, chunk, cancellationToken));
+                foreach (var piece in pieces)
+                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, cancellationToken));
+
+                // ALSO, never INSTEAD. Every piece above has already been sent; the file is a
+                // convenience for an entry long enough that reading it in the chat is the work.
+                await Send_EntryDocument_BestEffort_Async(
+                    threadId, pieces.Count, prose.AttachEntriesAbove, entry.Subject, text,
+                    append.Channel.OrchId, cancellationToken);
 
                 // Counts toward away detection: a supervisor message that reached the phone and is
                 // so far unanswered. Only the supervisor's own voice counts — app notices and
                 // presence lines are not something the owner is expected to reply to.
-                if (append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) && chunks.Count > 0)
+                if (append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) && pieces.Count > 0)
                 {
-                    Nudge_IfTooVerbose(append.Channel.OrchId, text, chunks.Count);
+                    Nudge_IfTooVerbose(append.Channel.OrchId, text, pieces.Count);
 
                     if (Note_SupervisorSpokeToOwner_AndJustWentQuiet(append.Channel.OrchId))
                         await Enter_QuietMode_Async(append.Channel.OrchId, cancellationToken);
@@ -3312,12 +3323,64 @@ internal sealed class BridgeEngineModel(
     /// being re-derived per call site.
     /// </para>
     /// </summary>
-    async Task<long?> Send_MirrorChunk_Async(long? threadId, string chunk, CancellationToken cancellationToken)
+    /// <param name="piece">
+    /// Both readings of the same message, from <see cref="OwnerMessage_Folder"/>: the HTML the
+    /// primary send uses, and the Markdown the plain-text fallback re-sends. They are not
+    /// interchangeable once a fold is involved — the HTML carries a collapsed quotation that has no
+    /// Markdown source — which is why the pair travels together instead of being re-derived here.
+    /// </param>
+    async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, CancellationToken cancellationToken)
     {
         var client = _telegramClient
-            ?? throw new Exception("Send_MirrorChunk_Async called without a Telegram client");
+            ?? throw new Exception("Send_MirrorPiece_Async called without a Telegram client");
 
-        return await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, threadId, chunk, cancellationToken);
+        return await TelegramProse_Sender.Send_Rendered_Async(
+            client, _log, GLOBAL_ORCH_ID, threadId, piece.Html, piece.Markdown, cancellationToken);
+    }
+
+    /// <summary>
+    /// The entry itself, attached as <c>&lt;subject-slug&gt;.md</c>, when it took more messages than
+    /// the owner's <c>attachEntriesAbove</c> allows for.
+    ///
+    /// <para>
+    /// BEST EFFORT, LIKE THE ENTRY PHOTO, and for a stronger reason: the messages are already on the
+    /// phone by the time this runs. A failed upload must therefore cost the attachment and nothing
+    /// else — letting it throw would return false from Mirror_Append_Async, leave the append
+    /// unconfirmed, and re-send every chunk of a message the owner has already read.
+    /// </para>
+    /// </summary>
+    async Task Send_EntryDocument_BestEffort_Async(
+        long? threadId,
+        int deliveredMessages,
+        int attachAbove,
+        string? subject,
+        string markdown,
+        string orchId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (_telegramClient == null || !OwnerDocument_Builder.Should_Attach(deliveredMessages, attachAbove))
+                return;
+
+            await _telegramClient.Send_Document_Async(
+                threadId,
+                OwnerDocument_Builder.Build_FileName(subject),
+                OwnerDocument_Builder.Build_Content(markdown),
+                OwnerDocument_Builder.Build_CaptionHtml(markdown),
+                cancellationToken);
+        }
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled; a bare rethrow would escalate a failed upload into a shutdown.
+        // Canonical account in Refresh_TopicStatusLines_Async.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Entry document not attached ({deliveredMessages} messages): {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -3759,7 +3822,8 @@ internal sealed class BridgeEngineModel(
         //  +  1  NEW try/catch wrapping the unprotected call in Announce_SupervisorFree_Async
         //  = 21  filtered now, of 44 total
         //
-        // Send_MirrorChunk_Async is the twelfth of the original twelve and was REVERTED as a regression,
+        // Send_MirrorChunk_Async (renamed Send_MirrorPiece_Async when the fold gave it two readings of
+        // the same message to send) is the twelfth of the original twelve and was REVERTED as a regression,
         // which is why it is 11 and not 12. A durable comment carrying a count owes the reader the sum
         // that produces it; without one, the next person to move a site has no way to tell whether the
         // number was already stale.

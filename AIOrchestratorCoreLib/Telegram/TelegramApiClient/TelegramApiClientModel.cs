@@ -354,26 +354,81 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
 
     public async Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
     {
-        using var form = new MultipartFormDataContent();
-        form.Add(new StringContent(_supergroupChatId.ToString()), "chat_id");
-
-        if (messageThreadId != null)
-            form.Add(new StringContent(messageThreadId.Value.ToString()), "message_thread_id");
+        using var form = Build_MultipartForm(messageThreadId);
 
         var photoBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
         form.Add(new ByteArrayContent(photoBytes), "photo", Path.GetFileName(filePath));
 
-        // METERED LIKE ANY OTHER MESSAGE. sendPhoto builds its own multipart request and therefore
-        // does not pass through Post_Async — which is exactly how a message-creating call ends up
-        // outside the one place the rate limit lives. It creates a message in the group, so it
-        // spends the group's allowance whether or not it shares that code path.
+        await Post_Multipart_Async("sendPhoto", form, $"for '{filePath}'", cancellationToken);
+    }
+
+    /// <summary>
+    /// The whole entry as a file, so a long one is something the owner can scroll and keep rather
+    /// than four chat messages to stitch together. The caption is parsed as HTML for the same reason
+    /// every other owner-facing send is: agents write Markdown, and the choice of parse mode is the
+    /// only thing that decides whether the owner reads it or reads its markers.
+    /// </summary>
+    public async Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken)
+    {
+        using var form = Build_MultipartForm(messageThreadId);
+
+        form.Add(new StringContent(captionHtml), "caption");
+        form.Add(new StringContent("HTML"), "parse_mode");
+        form.Add(new ByteArrayContent(content), "document", fileName);
+
+        await Post_Multipart_Async("sendDocument", form, $"for '{fileName}' ({content.Length} bytes)", cancellationToken);
+    }
+
+    /// <summary>The part every multipart upload shares: which chat, and which topic inside it.</summary>
+    MultipartFormDataContent Build_MultipartForm(long? messageThreadId)
+    {
+        var form = new MultipartFormDataContent
+        {
+            { new StringContent(_supergroupChatId.ToString()), "chat_id" },
+        };
+
+        if (messageThreadId != null)
+            form.Add(new StringContent(messageThreadId.Value.ToString()), "message_thread_id");
+
+        return form;
+    }
+
+    /// <summary>
+    /// The multipart twin of <see cref="Post_Async"/>, and it exists so the two uploads cannot drift
+    /// apart on the two things that matter.
+    ///
+    /// <para>
+    /// METERED LIKE ANY OTHER MESSAGE. A multipart call builds its own request and therefore does not
+    /// pass through <see cref="Post_Async"/> — which is exactly how a message-creating call ends up
+    /// outside the one place the rate limit lives. It creates a message in the group, so it spends the
+    /// group's allowance whether or not it shares that code path.
+    /// </para>
+    /// <para>
+    /// AND IT FAILS AS A <see cref="TelegramApiException"/>, carrying the status. Callers classify a
+    /// failure by status and never by sentence — a 400 is Telegram refusing on the merits, everything
+    /// else is an outcome nobody knows — so an upload that threw a bare Exception would be
+    /// unclassifiable at every site that has to decide whether to retry.
+    /// </para>
+    /// <para>
+    /// It does NOT retry a 429 inline. Post_Async's retry exists for the mirror's 2 s tick; an upload
+    /// is best-effort at every call site here, so the honest move is to hand the failure back rather
+    /// than hold a tick open re-sending a file.
+    /// </para>
+    /// </summary>
+    async Task Post_Multipart_Async(string method, MultipartFormDataContent form, string subject, CancellationToken cancellationToken)
+    {
         await Wait_ForBucket_Async(cancellationToken);
 
-        var response = await _httpClient.PostAsync(Build_MethodUrl("sendPhoto"), form, cancellationToken);
+        var response = await _httpClient.PostAsync(Build_MethodUrl(method), form, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)
-            throw new TelegramApiException((int)response.StatusCode, $"Telegram 'sendPhoto' failed with HTTP {(int)response.StatusCode} for '{filePath}': {body}");
+        {
+            throw new TelegramApiException(
+                (int)response.StatusCode,
+                $"Telegram '{method}' failed with HTTP {(int)response.StatusCode} {subject}: {body}",
+                Read_RetryAfterSeconds_OrNull(body));
+        }
     }
 
     public async Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken)

@@ -580,6 +580,11 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;

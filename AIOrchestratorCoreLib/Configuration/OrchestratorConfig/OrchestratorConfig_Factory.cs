@@ -1,6 +1,7 @@
 using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
+using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
@@ -31,20 +32,21 @@ public static class OrchestratorConfig_Factory
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
 
-        // OPTIONAL, AND ONLY THESE THREE. Every other parameter is required because every caller
+        // OPTIONAL, AND ONLY THESE FOUR. Every other parameter is required because every caller
         // knows its value; these keys are hand-edited in config.json and no window has a field for
         // any of them, so the Settings window builds a config without them — and the loader, which is
         // the only reader that can have them, passes them explicitly. Save() never serialises any of
-        // the three, so a config built without them cannot erase them from disk.
+        // the four, so a config built without them cannot erase them from disk.
         PlanBackendSettings? planBackend = null,
         IGuardrailSettings? guardrails = null,
-        IDefaultsSettings? defaults = null)
+        IDefaultsSettings? defaults = null,
+        ITelegramProseSettings? telegramProse = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken, telegramItalianLayer,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
-            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults);
+            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse);
     }
 
     /// <summary>
@@ -68,7 +70,8 @@ public static class OrchestratorConfig_Factory
         IRunnerConfigs runners,
         PlanBackendSettings? planBackend = null,
         IGuardrailSettings? guardrails = null,
-        IDefaultsSettings? defaults = null)
+        IDefaultsSettings? defaults = null,
+        ITelegramProseSettings? telegramProse = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -95,7 +98,12 @@ public static class OrchestratorConfig_Factory
             // SAME RULE AS THE GUARDRAILS ABOVE, and for the same reason: the block decides what an
             // orchestration started without an explicit shape becomes, so a caller that predates it
             // must get the owner's shipped answer rather than a null nobody downstream can read.
-            defaults ?? DefaultsSettings_Factory.Create_Default());
+            defaults ?? DefaultsSettings_Factory.Create_Default(),
+
+            // AND AGAIN THE SAME RULE. The block decides only the SHAPE of a long entry on the phone,
+            // never whether it is delivered, so every caller that predates it gets the shipped
+            // shaping rather than a null the mirror would have to test for at the send site.
+            telegramProse ?? TelegramProseSettings_Factory.Create_Default());
     }
 
     public static IOrchestratorConfig Create_Empty()
@@ -125,7 +133,8 @@ public static class OrchestratorConfig_Factory
             source.Runners,
             source.PlanBackend,
             source.Guardrails,
-            source.Defaults);
+            source.Defaults,
+            source.TelegramProse);
     }
 
     /// <summary>
@@ -151,6 +160,7 @@ public static class OrchestratorConfig_Factory
             source.Runners,
             source.PlanBackend,
             source.Guardrails,
-            source.Defaults);
+            source.Defaults,
+            source.TelegramProse);
     }
 }

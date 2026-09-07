@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
+using AIOrchestratorCoreLib.Mirroring;
 using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using Xunit;
@@ -122,6 +123,52 @@ public class TelegramProseSenderTests
         Assert.Equal(MARKDOWN, Assert.Single(refusing.PlainEdits));
     }
 
+    /// <summary>
+    /// THE FOLD'S FALLBACK IS THE UNFOLDED TEXT, and this is the rule that keeps the fold honest.
+    ///
+    /// <para>
+    /// A folded message's HTML has no Markdown source — <c>&lt;blockquote expandable&gt;</c> is
+    /// something the bridge assembled, not something an agent typed. So the send carries BOTH
+    /// readings, and a 400 costs the FOLD rather than the message: what goes out is the piece exactly
+    /// as stage 1i sent it, plain and whole. Re-sending the HTML would put the tags on the owner's
+    /// screen, and re-rendering it would earn the same refusal a second time.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task SendRendered_WhenTelegramRefusesTheFold_ResendsTheUNFOLDEDText_NeverTheTags()
+    {
+        var text = "THE SWEEP\n" + string.Join('\n', Enumerable.Range(1, 40).Select(i => $"finding {i} — and what it costs"));
+        var piece = OwnerMessage_Folder.Fold_ForOwner(text)[0];
+
+        Assert.Contains("<blockquote expandable>", piece.Html, StringComparison.Ordinal);
+
+        var client = new ScriptedTelegram_Fake { HtmlFailure = Parse_Refusal() };
+        var log = new CollectingLog_Fake();
+
+        await TelegramProse_Sender.Send_Rendered_Async(
+            client, log, "orch-1", 99, piece.Html, piece.Markdown, CancellationToken.None);
+
+        var sent = Assert.Single(client.PlainSends);
+
+        Assert.Equal(piece.Markdown, sent);
+        Assert.DoesNotContain("blockquote", sent, StringComparison.Ordinal);
+        Assert.Contains("THE SWEEP", sent, StringComparison.Ordinal);
+        Assert.Contains("finding 40", sent, StringComparison.Ordinal);
+        Assert.Equal(1, client.HtmlAttempts);
+    }
+
+    /// <summary>The unfolded path is the same call, and it must still send exactly the Markdown.</summary>
+    [Fact]
+    public async Task SendRendered_IsWhatSendAsyncIsBuiltFrom_SoAShortEntryFallsBackToItsOwnMarkdown()
+    {
+        var client = new ScriptedTelegram_Fake { HtmlFailure = Parse_Refusal() };
+
+        await TelegramProse_Sender.Send_Rendered_Async(
+            client, new CollectingLog_Fake(), "orch-1", 99, RENDERED, MARKDOWN, CancellationToken.None);
+
+        Assert.Equal(MARKDOWN, Assert.Single(client.PlainSends));
+    }
+
     static TelegramApiException Parse_Refusal()
     {
         return new TelegramApiException(
@@ -237,6 +284,8 @@ internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
 

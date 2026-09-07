@@ -103,6 +103,23 @@ public interface ITelegramApiClient
     /// <summary>Uploads a local image file as a photo message (multipart sendPhoto).</summary>
     Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Uploads BYTES as a document (multipart sendDocument) — an owner-facing entry too long to read
+    /// comfortably as chat messages, attached as the Markdown file it already is.
+    ///
+    /// <para>
+    /// IN MEMORY, never from a path, and that is the difference from the photo above: the content is
+    /// an entry the bridge is holding, not a file on disk, and writing it to a temp file to upload it
+    /// would put owner-facing prose on the filesystem for no reason and leave it there on any throw
+    /// between the write and the delete.
+    /// </para>
+    /// <para>
+    /// The caption is HTML — <see cref="TelegramHtml_Renderer"/> renders it, like every other piece of
+    /// agent-written prose — and Telegram caps it at 1024 characters after entity parsing.
+    /// </para>
+    /// </summary>
+    Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken);
+
     /// <summary>Registers the bot's command menu (the chat's ☰ menu button).</summary>
     Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken);
 
