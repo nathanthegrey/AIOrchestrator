@@ -27,13 +27,64 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// send path still carries a plain-text fallback (see <see cref="TelegramProse_Sender"/>) — belt as
 /// well as braces, because a refusal here costs the owner a message.
 /// </para>
+/// <para>
+/// IT HAS TWO MODES AND IS STILL ONE RENDERER. <see cref="Render_ForFoldBody"/> is the same scanner
+/// with the two BLOCK constructs an expandable quotation cannot contain degraded rather than emitted
+/// — see its own summary. A second renderer for the fold would be a second copy of every inline rule,
+/// which is the drift CLAUDE.md decision 12 was written about.
+/// </para>
 /// </summary>
 public static class TelegramHtml_Renderer
 {
     /// <summary>The bullet a <c>- </c> or <c>* </c> marker becomes. Telegram has no list tag.</summary>
     const string BULLET = "• ";
 
+    /// <summary>
+    /// The collapsed-by-default quotation (Bot API 7.4): the phone shows the first few lines with a
+    /// "show more", and the owner expands only what they want to read. The tag is spelled ONCE, here,
+    /// because the folder must never assemble Telegram markup of its own — this file's whole safety
+    /// story is that it emits only tags it opened and closed itself.
+    /// </summary>
+    public const string EXPANDABLE_QUOTE_OPEN = "<blockquote expandable>";
+
+    public const string EXPANDABLE_QUOTE_CLOSE = "</blockquote>";
+
+    /// <summary>What wrapping a body in the fold costs, so a caller can budget for it without guessing.</summary>
+    public static int ExpandableQuoteOverhead => EXPANDABLE_QUOTE_OPEN.Length + EXPANDABLE_QUOTE_CLOSE.Length;
+
     public static string Render(string markdown)
+    {
+        return Render_Core(markdown, insideFold: false);
+    }
+
+    /// <summary>
+    /// THE SAME RENDERER, in the mode an expandable quotation allows — not a second renderer, for the
+    /// reason CLAUDE.md decision 12 states about every formatter in this codebase.
+    ///
+    /// <para>
+    /// Telegram permits INLINE entities inside a <c>&lt;blockquote&gt;</c> (bold, italic, code,
+    /// links) and refuses two BLOCK ones: another blockquote, and <c>&lt;pre&gt;</c>. A fenced block
+    /// therefore degrades to one <c>&lt;code&gt;</c> per line — monospacing survives, the block
+    /// container does not — and a nested quote degrades to plain text. Emitting either would earn a
+    /// 400, and a 400 on this path costs the owner the message.
+    /// </para>
+    /// </summary>
+    public static string Render_ForFoldBody(string markdown)
+    {
+        return Render_Core(markdown, insideFold: true);
+    }
+
+    /// <summary>
+    /// Wraps an ALREADY-RENDERED body in the fold. Takes HTML rather than Markdown so the caller
+    /// cannot accidentally hand it text rendered by <see cref="Render"/> — which would carry the
+    /// <c>&lt;pre&gt;</c> and nested <c>&lt;blockquote&gt;</c> the fold refuses.
+    /// </summary>
+    public static string Wrap_InExpandableQuote(string foldBodyHtml)
+    {
+        return EXPANDABLE_QUOTE_OPEN + foldBodyHtml + EXPANDABLE_QUOTE_CLOSE;
+    }
+
+    static string Render_Core(string markdown, bool insideFold)
     {
         var lines = markdown.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         var html = new StringBuilder();
@@ -49,13 +100,13 @@ public static class TelegramHtml_Renderer
 
             if (Is_Fence(lines[lineIndex]))
             {
-                lineIndex = Append_FencedBlock(html, lines, lineIndex);
+                lineIndex = Append_FencedBlock(html, lines, lineIndex, insideFold);
                 continue;
             }
 
             if (Is_Quote(lines[lineIndex]))
             {
-                lineIndex = Append_Quote(html, lines, lineIndex);
+                lineIndex = Append_Quote(html, lines, lineIndex, insideFold);
                 continue;
             }
 
@@ -88,7 +139,13 @@ public static class TelegramHtml_Renderer
     /// with its opening fence in one chunk and its closing fence in the next. Refusing to render
     /// the half without a partner would drop a drawing's monospacing exactly when it is longest.
     /// </summary>
-    static int Append_FencedBlock(StringBuilder html, string[] lines, int fenceIndex)
+    /// <param name="insideFold">
+    /// Inside an expandable quotation <c>&lt;pre&gt;</c> is not available — Telegram refuses the
+    /// block entity there — so the block becomes one <c>&lt;code&gt;</c> per line. The monospacing an
+    /// ASCII mockup depends on survives; what is lost is the single scroll container, which is a
+    /// smaller loss than the 400 the honest tag would earn.
+    /// </param>
+    static int Append_FencedBlock(StringBuilder html, string[] lines, int fenceIndex, bool insideFold)
     {
         var body = new List<string>();
         var lineIndex = fenceIndex + 1;
@@ -99,19 +156,47 @@ public static class TelegramHtml_Renderer
             lineIndex++;
         }
 
-        html.Append("<pre>").Append(Escape_Text(string.Join('\n', body))).Append("</pre>");
+        if (insideFold)
+            Append_CodeLines(html, body);
+        else
+            html.Append("<pre>").Append(Escape_Text(string.Join('\n', body))).Append("</pre>");
 
         // Past the closing fence when there is one; already past the end when there is not.
         return lineIndex < lines.Length ? lineIndex + 1 : lineIndex;
     }
 
     /// <summary>
+    /// A blank line inside the block gets NO <c>&lt;code&gt;</c> pair of its own: an empty entity is
+    /// a thing Telegram has no reason to accept, and the newline alone already draws the gap.
+    /// </summary>
+    static void Append_CodeLines(StringBuilder html, IReadOnlyList<string> body)
+    {
+        for (var i = 0; i < body.Count; i++)
+        {
+            if (i > 0)
+                html.Append('\n');
+
+            if (body[i].Length == 0)
+                continue;
+
+            html.Append("<code>").Append(Escape_Text(body[i])).Append("</code>");
+        }
+    }
+
+    /// <summary>
     /// Consecutive quote lines become ONE blockquote. Telegram refuses a nested blockquote, and a
     /// per-line one would render a quoted paragraph as a stack of separate quotes.
+    ///
+    /// <para>
+    /// INSIDE THE FOLD there is no blockquote to open at all: the fold IS one, and a second would be
+    /// the nesting Telegram refuses. The <c>&gt;</c> markers are still stripped and the lines still
+    /// render their inline emphasis, so the words arrive — only the indent is gone.
+    /// </para>
     /// </summary>
-    static int Append_Quote(StringBuilder html, string[] lines, int quoteIndex)
+    static int Append_Quote(StringBuilder html, string[] lines, int quoteIndex, bool insideFold)
     {
-        html.Append("<blockquote>");
+        if (!insideFold)
+            html.Append("<blockquote>");
 
         var lineIndex = quoteIndex;
 
@@ -124,7 +209,9 @@ public static class TelegramHtml_Renderer
             lineIndex++;
         }
 
-        html.Append("</blockquote>");
+        if (!insideFold)
+            html.Append("</blockquote>");
+
         return lineIndex;
     }
 

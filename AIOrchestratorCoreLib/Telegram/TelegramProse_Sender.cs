@@ -26,7 +26,7 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// </summary>
 public static class TelegramProse_Sender
 {
-    public static async Task<long?> Send_Async(
+    public static Task<long?> Send_Async(
         ITelegramApiClient client,
         IOrchestrationLog log,
         string orchId,
@@ -34,15 +34,41 @@ public static class TelegramProse_Sender
         string markdown,
         CancellationToken cancellationToken)
     {
+        return Send_Rendered_Async(
+            client, log, orchId, messageThreadId, TelegramHtml_Renderer.Render(markdown), markdown, cancellationToken);
+    }
+
+    /// <summary>
+    /// The same send for a caller that has ALREADY built the HTML and knows what the plain reading of
+    /// it is — <see cref="Mirroring.OwnerMessage_Folder"/>, whose folded HTML is not
+    /// <c>Render(markdown)</c> of anything and could not be reconstructed here.
+    ///
+    /// <para>
+    /// THE FALLBACK IS THE UNFOLDED TEXT, and that is the point of taking two arguments rather than
+    /// one. A refusal must cost the FORMATTING and never the message, and the fold is formatting:
+    /// re-sending a collapsed quotation as literal text would show the owner the tags. What goes out
+    /// instead is the piece as stage 1i sent it, plain, whole, and short enough to be accepted —
+    /// which is the only fallback that has ever been measured against Telegram.
+    /// </para>
+    /// </summary>
+    public static async Task<long?> Send_Rendered_Async(
+        ITelegramApiClient client,
+        IOrchestrationLog log,
+        string orchId,
+        long? messageThreadId,
+        string html,
+        string plainFallback,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            return await client.Send_HtmlMessage_Async(messageThreadId, TelegramHtml_Renderer.Render(markdown), cancellationToken);
+            return await client.Send_HtmlMessage_Async(messageThreadId, html, cancellationToken);
         }
         catch (TelegramApiException ex) when (Is_ParseRefusal(ex))
         {
-            log.Log_Warning(orchId, Describe_Refusal("sendMessage", markdown, ex));
+            log.Log_Warning(orchId, Describe_Refusal("sendMessage", plainFallback, ex));
 
-            return await client.Send_Message_Async(messageThreadId, markdown, cancellationToken);
+            return await client.Send_Message_Async(messageThreadId, plainFallback, cancellationToken);
         }
     }
 
