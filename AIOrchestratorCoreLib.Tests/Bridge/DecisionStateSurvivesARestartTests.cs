@@ -189,10 +189,11 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         // (a nudge already sent, a crash-loop count already reached), and — asserted above, in the
         // only window where it is outstanding — the owner's own wait.
         //
-        // COUNTED, not spot-checked, so a partial save cannot pass. Six buttons for two questions:
-        // two options each, plus the "ask back" button the app adds to every question.
+        // COUNTED, not spot-checked, so a partial save cannot pass. Eight buttons for two questions:
+        // two options each, plus the two the app adds to every question — "ask back", which spends
+        // the group, and "let's talk", which deliberately does not.
         Assert.Equal(2, snapshotBeforeTheCrash.OpenQuestions.Count);
-        Assert.Equal(6, snapshotBeforeTheCrash.PendingButtons.Count);
+        Assert.Equal(8, snapshotBeforeTheCrash.PendingButtons.Count);
         Assert.Equal(NUDGED_ABOUT, Assert.Contains(NUDGED_MEMBER_KEY, snapshotBeforeTheCrash.NudgedAboutEntry));
         Assert.Equal(2, Assert.Contains(RESPAWN_SLOT_KEY, snapshotBeforeTheCrash.ConsecutiveRespawns));
 
@@ -268,7 +269,11 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         File.AppendAllText(
             channelFile,
             $"\n## [{index}] FROM supervisor — {stamp} — a question\n"
-            + $"QUESTION: {question}\nOPTION: {firstOption}\nOPTION: {secondOption}\n");
+            // RECOMMEND/RISK/ROW are what OwnerQuestion_Contract requires of every question the app
+            // will forward; `RISK: low` keeps the high-risk classification coming from the patterns,
+            // which is what these tests are about.
+            + $"QUESTION: {question}\nOPTION: {firstOption}\nOPTION: {secondOption}\n"
+            + "RECOMMEND: whichever you prefer — this fixture takes no view.\nRISK: low\nROW: none\n");
     }
 
     static string Build_OwnerMessageJson(string text)
@@ -418,6 +423,12 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
     {
         lock (_lock)
             return _sentTexts.Count(text => text.Contains(fragment, StringComparison.Ordinal));
+    }
+
+    public string? Find_SentContaining(string fragment)
+    {
+        lock (_lock)
+            return _sentTexts.LastOrDefault(text => text.Contains(fragment, StringComparison.Ordinal));
     }
 
     public string? Find_EditedContaining(string fragment)

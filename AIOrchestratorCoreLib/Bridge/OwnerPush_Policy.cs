@@ -242,6 +242,31 @@ public static class OwnerPush_Policy
     /// than the label: the button is one tap, the instruction behind it has to be unambiguous, and
     /// it must end by re-asking so the decision is not left dangling.
     /// </summary>
+    /// <summary>
+    /// The way OUT of a question that is not answerable as asked, and the one button that does not
+    /// consume the question.
+    ///
+    /// <para>
+    /// "Explain the options" is a re-ask: it spends the buttons and the supervisor asks again. That
+    /// is right when the wording was unclear, and wrong when the owner simply wants to discuss the
+    /// decision — measured on one topic on 2026-09-07, where the owner answered a question with a
+    /// question five times ("what are these methods? are they new?", "which part are you talking
+    /// about?") and each time the exchange had to be rebuilt around a question that was no longer
+    /// on the phone. Here the question stays put, with its buttons, until they tap one.
+    /// </para>
+    /// </summary>
+    public const string TALK_LABEL = "💬 Let's talk";
+
+    /// <summary>
+    /// What the SUPERVISOR receives on that tap. It says explicitly not to re-ask, because the
+    /// question it would re-ask is still open — a second copy of a live question is exactly the
+    /// waterfall this policy exists to prevent.
+    /// </summary>
+    public const string TALK_REQUEST =
+        "The owner wants to talk this decision through before choosing. Reply in prose, briefly, and "
+        + "do NOT ask it again: the question is still on their phone with its buttons live, and it "
+        + "closes when they tap one.";
+
     public const string MORE_DETAIL_REQUEST =
         "Explain this decision before I choose: what each option actually means in practice, what "
         + "differs between them, what it costs to get wrong, and which one you recommend and why. "

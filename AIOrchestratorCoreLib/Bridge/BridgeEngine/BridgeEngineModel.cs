@@ -3174,7 +3174,11 @@ internal sealed class BridgeEngineModel(
                 answersTheOwnersWait = true;
             }
 
-            var text = MirrorText_Formatter.Format(append.Channel, entry);
+            // THE SPEAKER PREFIX IS HELD APART FROM THE AGENT'S WORDS for the whole of this block.
+            // It is app chrome glued to the first line, and every marker below is anchored at column
+            // 0 — so a question whose first line was `QUESTION:` was invisible to the extractor and
+            // survived only because a derived question stood behind it. Composed back at the end.
+            var (speaker, text) = MirrorText_Formatter.Format_Parts(append.Channel, entry);
 
             // Special lines in the entry become REAL Telegram artifacts, never raw text:
             // IMAGE: <path> lines upload as photos; OPTION: <label> lines render as inline
@@ -3184,8 +3188,13 @@ internal sealed class BridgeEngineModel(
             // ATTACH: <path> lines upload as DOCUMENTS — an HTML mockup, a CSV, a report — under
             // EntryAttachment_Policy's containment, which IMAGE: never had (see the policy's header).
             var attachmentPaths = Extract_MarkerLines(ref text, "ATTACH");
-            var optionLabels = Extract_MarkerLines(ref text, "OPTION");
-            var questionLines = Extract_MarkerLines(ref text, "QUESTION");
+            // The five lines a question owes the owner. Extracted here, judged by
+            // OwnerQuestion_Contract, and forwarded ONLY complete — see Refuse_Question below.
+            var optionLabels = Extract_MarkerLines(ref text, OwnerQuestion_Contract.OPTION_MARKER);
+            var questionLines = Extract_MarkerLines(ref text, OwnerQuestion_Contract.QUESTION_MARKER);
+            var recommendLines = Extract_MarkerLines(ref text, OwnerQuestion_Contract.RECOMMEND_MARKER);
+            var riskLines = Extract_MarkerLines(ref text, OwnerQuestion_Contract.RISK_MARKER);
+            var rowLines = Extract_MarkerLines(ref text, OwnerQuestion_Contract.ROW_MARKER);
 
             // What happens if the owner never answers. Both optional, both agent-written and
             // therefore untrusted — QuestionDirectives_Parser drops anything it cannot read rather
@@ -3194,23 +3203,36 @@ internal sealed class BridgeEngineModel(
             var defaultValues = Extract_MarkerLines(ref text, QuestionDirectives_Parser.DEFAULT_MARKER);
             var directives = QuestionDirectives_Parser.Parse(deadlineValues, defaultValues, optionLabels.Count);
 
-            // Built from the ENGLISH text, before the Italian layer rewrites it: an explicit
-            // QUESTION: line and a derived one then get translated the same way, together.
-            var questionPrompt = optionLabels.Count > 0 ? QuestionPrompt_Builder.Build(questionLines, text) : null;
+            // COMPLETE OR NOT AT ALL. The body still reaches the owner — a formatting fault must
+            // never cost them a message — but an incomplete question grows no buttons, and the
+            // agent is told every missing line at once so a refusal is one round trip and not four.
+            // Built from the ENGLISH markers, before the Italian layer rewrites the body below.
+            OwnerQuestion? question = null;
+            var draft = new OwnerQuestionDraft(questionLines, optionLabels, recommendLines, riskLines, rowLines);
+
+            if (OwnerQuestion_Contract.Is_Attempted(draft))
+            {
+                var faults = OwnerQuestion_Contract.Check(draft);
+
+                if (faults.Count == 0)
+                    question = OwnerQuestion_Contract.Build(draft);
+                else
+                    Refuse_Question(append.Channel, faults);
+            }
 
             // Italian layer (live config): the owner reads Italian on the phone; sessions and
-            // channels stay English. The speaker prefix ("🟢 Com: ") is split off DETERMINISTICALLY
-            // and reattached — a live translation once mangled it into garbage. Presence lines
-            // (implementer spokes' "online") are canned app strings and stay English entirely.
+            // channels stay English. The speaker prefix never reaches the translator — a live
+            // translation once mangled it into garbage — and it does not need splitting off here
+            // any more, because it was never joined: `Format_Parts` above kept it apart. Presence
+            // lines (implementer spokes' "online") are canned app strings and stay English.
             if (_configProvider.Get_Current().TelegramItalianLayer && append.Channel.IsOwnerChannel)
             {
                 // Fenced blocks (ASCII mockups, snippets) are lifted out first: translating a
                 // drawing corrupts the very thing being shown.
                 var (withoutBlocks, blocks) = MonospaceBlocks_Formatter.Extract_Blocks(text);
-                var (speakerPrefix, content) = Split_SpeakerPrefix(withoutBlocks);
 
                 text = MonospaceBlocks_Formatter.Restore_Blocks(
-                    speakerPrefix + await _translator.Translate_ToItalian_Async(content, cancellationToken), blocks);
+                    await _translator.Translate_ToItalian_Async(withoutBlocks, cancellationToken), blocks);
             }
 
             // SPLIT, NEVER DROPPED, and numbered when there is more than one piece. This used to be
@@ -3222,6 +3244,9 @@ internal sealed class BridgeEngineModel(
             // PRESENTATION choice — the opening in the clear, the rest behind one tap — while 4096 is
             // a hard refusal. See OwnerMessage_Folder, which degrades to the chunker's own output for
             // every entry it cannot improve on.
+            // COMPOSED BACK HERE, and nowhere earlier: everything above reads the agent's own words.
+            text = speaker + text;
+
             var prose = _configProvider.Get_Current().TelegramProse;
             var pieces = OwnerMessage_Folder.Fold_ForOwner(text, prose.FoldLongEntriesAbove);
 
@@ -3251,10 +3276,10 @@ internal sealed class BridgeEngineModel(
                 // The buttons NEVER ride on the body. Agents write long, thorough messages, and
                 // options hanging off the bottom of one arrive on a phone as a wall of text with
                 // taps underneath and no visible question. They get their own short message.
-                if (questionPrompt != null)
+                if (question != null)
                 {
                     await Send_QuestionWithButtons_Async(
-                        threadId, questionPrompt, optionLabels, append.Channel,
+                        threadId, question, append.Channel,
                         directives.Deadline, directives.DefaultOptionIndex, cancellationToken);
                 }
 
@@ -3386,23 +3411,6 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// "🔴 Sup: body" → ("🔴 Sup: ", "body") — the prefix must NEVER pass through the translator.
-    /// The bound covers the longest prefix ("🟡 Gen-Sup: " is already 12 UTF-16 units, its emoji
-    /// being a surrogate pair) with room to spare; the LAZY quantifier still stops at the first
-    /// ": ", which is always the formatter's own prefix.
-    /// </summary>
-    static (string Prefix, string Content) Split_SpeakerPrefix(string text)
-    {
-        var match = System.Text.RegularExpressions.Regex.Match(
-            text, @"^(.{1,18}?: )(.*)$", System.Text.RegularExpressions.RegexOptions.Singleline);
-
-        if (!match.Success)
-            return (string.Empty, text);
-
-        return (match.Groups[1].Value, match.Groups[2].Value);
-    }
-
-    /// <summary>
     /// A topic's OWN mode wins over the app-wide setting — "silence just this one while I work in
     /// its terminal" must survive someone flipping the global DND, and vice versa. Only when the
     /// topic is Normal does the app-wide setting apply.
@@ -3454,13 +3462,15 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_QuestionWithButtons_Async(
         long? threadId,
-        string questionPrompt,
-        IReadOnlyList<string> optionLabels,
+        OwnerQuestion question,
         Channels.DiscoveredChannel.IDiscoveredChannel channel,
         TimeSpan? deadline,
         int? defaultOptionIndex,
         CancellationToken cancellationToken)
     {
+        var questionPrompt = QuestionPrompt_Builder.Build(question.Question);
+        var optionLabels = question.Options;
+
         var client = _telegramClient
             ?? throw new Exception("Send_QuestionWithButtons_Async called without a Telegram client");
 
@@ -3512,6 +3522,18 @@ internal sealed class BridgeEngineModel(
         var layout = Telegram.OptionButtons_Layout.Build(optionLabels);
         var promptWithOptions = layout.OptionListText == null ? prompt : $"{prompt}\n\n{layout.OptionListText}";
 
+        // THE RECOMMENDATION RIDES WITH THE QUESTION, not in the body above it. The body is what
+        // the owner scrolls past on a lock screen; this message is what they answer from, and a
+        // question they cannot answer without scrolling back is the one they defer. The row code is
+        // beside it for the same reason — asked for three times in one afternoon (2026-09-07),
+        // because "272, 267" and "the trial one" were the same conversation an hour apart.
+        var recommendation = _configProvider.Get_Current().TelegramItalianLayer && channel.IsOwnerChannel
+            ? await _translator.Translate_ToItalian_Async(question.Recommendation, cancellationToken)
+            : question.Recommendation;
+
+        var promptWithGuidance = $"{promptWithOptions}\n\n💡 {recommendation}"
+            + (question.RowCode == null ? string.Empty : $"\n📎 {question.RowCode}");
+
         // CLASSIFIED FROM THE ENGLISH, before the Italian layer rewrote the prompt above — the
         // patterns are English words an agent writes, and matching a translation of them would make
         // the guard depend on which language the owner happens to read in.
@@ -3526,9 +3548,14 @@ internal sealed class BridgeEngineModel(
         // A false positive costs one typed code. A false negative costs the operation this whole
         // gate exists for, so the surface being matched is deliberately the widest one the owner
         // actually reads.
-        var isHighRisk = HighRisk_Classifier.Is_HighRisk(
+        // DECLARED OR DETECTED, never declared INSTEAD of detected: `RISK: low` on a question whose
+        // own option says "push to main" does not unlock it. A declaration can only ever ADD a lock,
+        // which is what makes it safe to let the asker write one.
+        var matchedPattern = HighRisk_Classifier.Find_MatchedPattern_OrNull(
             Compose_RiskSurface(questionPrompt, optionLabels),
             guardrails.HighRiskPatterns);
+
+        var isHighRisk = question.DeclaredHighRisk || matchedPattern != null;
 
         // A HIGH-RISK QUESTION LOSES ITS DEFAULT HERE, at the point of asking, rather than being
         // trusted not to have one. The agent may well have written DEFAULT: 1 on a push question in
@@ -3538,7 +3565,7 @@ internal sealed class BridgeEngineModel(
         var askedUtc = _clock.UtcNow;
         var deadlineUtc = deadline == null ? (DateTime?)null : askedUtc + deadline.Value;
 
-        var promptWithTerms = Compose_QuestionTerms(promptWithOptions, optionLabels, isHighRisk, deadlineUtc, effectiveDefaultIndex);
+        var promptWithTerms = Compose_QuestionTerms(promptWithGuidance, optionLabels, isHighRisk, deadlineUtc, effectiveDefaultIndex);
 
         var buttons = Register_Buttons(threadId, optionLabels, layout.ButtonLabels, promptWithTerms, isHighRisk, out var buttonGroupId);
 
@@ -3572,10 +3599,11 @@ internal sealed class BridgeEngineModel(
 
             if (isHighRisk)
             {
-                var matched = HighRisk_Classifier.Find_MatchedPattern_OrNull(
-                    Compose_RiskSurface(questionPrompt, optionLabels),
-                    guardrails.HighRiskPatterns);
-                _log.Log_Info(channel.OrchId, $"Question classified HIGH RISK (matched '{matched}') — a tap will require the read-back code");
+                _log.Log_Info(
+                    channel.OrchId,
+                    matchedPattern != null
+                        ? $"Question classified HIGH RISK (matched '{matchedPattern}') — a tap will require the read-back code"
+                        : "Question classified HIGH RISK (declared by the asker, no pattern matched) — a tap will require the read-back code");
             }
 
             // It asked; now it stops. The hook refuses every tool until the owner answers — unless
@@ -3739,6 +3767,31 @@ internal sealed class BridgeEngineModel(
 
             _buttonOrder.Enqueue(detailData);
             buttons.Add((detailData, OwnerPush_Policy.MORE_DETAIL_LABEL));
+
+            // AND A WAY TO TALK WITHOUT CHOOSING. "Explain the options" is a re-ask — it spends the
+            // buttons and the supervisor asks again, which is right when the wording was unclear and
+            // wrong when the owner simply wants to discuss the decision. This one keeps the question
+            // and its keyboard exactly where they are; only a real option closes it.
+            var talkData = CallbackToken.Build(nonce, optionTexts.Count + 1);
+
+            _buttonOptions[talkData] = new PendingButtonRecord
+            {
+                Data = talkData,
+                ThreadId = threadId,
+                OptionText = OwnerPush_Policy.TALK_REQUEST,
+                QuestionText = questionText,
+                GroupId = _buttonGroupSequence,
+                ExpiresUtc = expiresUtc,
+
+                // ASKING TO TALK TAKES NO DECISION, so it is never behind a code — for the same
+                // reason "explain the options" is not: the safe way out of a dangerous question must
+                // not be the hardest button to press.
+                IsHighRisk = false,
+                KeepsGroupOpen = true,
+            };
+
+            _buttonOrder.Enqueue(talkData);
+            buttons.Add((talkData, OwnerPush_Policy.TALK_LABEL));
 
             while (_buttonOrder.Count > BUTTON_REGISTRY_CAP)
                 _buttonOptions.Remove(_buttonOrder.Dequeue());
@@ -8972,7 +9025,12 @@ internal sealed class BridgeEngineModel(
             // sibling button) resolves to "no longer open" instead of double-firing a decision.
             // A LAPSED group is consumed too: leaving it registered means every later tap pays
             // another expiry check on a decision that can never be taken again.
-            if (registered != null && outcome != TapOutcomes.Unknown && outcome != TapOutcomes.NotOurs)
+            //
+            // EXCEPT THE ONE BUTTON THAT ANSWERS NOTHING. "Let's talk" asks the supervisor to
+            // explain and leaves the decision untaken, so consuming the group would take the
+            // question off the phone in order to discuss it — and the owner would then be answering
+            // a question they can no longer see.
+            if (registered != null && !registered.KeepsGroupOpen && outcome != TapOutcomes.Unknown && outcome != TapOutcomes.NotOurs)
             {
                 List<string> groupKeys = [.. _buttonOptions.Where(pair => pair.Value.GroupId == registered.GroupId).Select(pair => pair.Key)];
 
@@ -9034,6 +9092,27 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // A TAP THAT ANSWERS NOTHING LEAVES THE MESSAGE ALONE. Editing it would drop the keyboard —
+        // the very thing this button exists to preserve — and stamping "✅ <the whole request>" over
+        // the question would record a choice nobody made. The question is only MARKED as under
+        // discussion, which is what stops a typed reply from binding to it while they talk.
+        if (registered.KeepsGroupOpen)
+        {
+            if (tap.MessageId != null)
+            {
+                lock (_ownerStateLock)
+                {
+                    if (_openQuestions.TryGetValue(tap.MessageId.Value, out var open))
+                        _openQuestions[tap.MessageId.Value] = open with { InDiscussion = true };
+                }
+
+                Persist_EngineState();
+            }
+
+            await Route_TapAsOwnerMessage_Async(tap, registered, cancellationToken);
+            return;
+        }
+
         // Rewrite the question message to RECORD the choice ("❓ … / ✅ deep"). Telegram's tap
         // acknowledgement is a transient toast and the keyboard vanishes, so without this the chat
         // keeps no trace of what was picked — the owner scrolls back and cannot tell what they
@@ -9069,11 +9148,6 @@ internal sealed class BridgeEngineModel(
             }
         }
 
-        // A tap IS an owner message: the chosen option text goes through the normal pipeline
-        // (aggregation, translation, delivery receipts) into the topic the buttons live in.
-        var syntheticMessage = TelegramOwnerMessage_Factory.Create(
-            tap.UpdateId, tap.MessageId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
-
         // SAVED BEFORE THE ANSWER IS ROUTED, and the reason is a TRADE rather than a safety net —
         // the comment that used to sit here ("routing is what can fail") named the wrong half.
         //
@@ -9087,6 +9161,28 @@ internal sealed class BridgeEngineModel(
         // knowing what it costs; the thing that would remove the trade altogether is a durable
         // outbox, which is a bigger change than this stage.
         Persist_EngineState();
+
+        await Route_TapAsOwnerMessage_Async(tap, registered, cancellationToken);
+    }
+
+    /// <summary>
+    /// A tap IS an owner message: the tapped text goes through the normal pipeline (aggregation,
+    /// translation, delivery receipts) into the topic the buttons live in.
+    ///
+    /// <para>
+    /// ONE ROUTE FOR BOTH KINDS OF TAP — the answer that closes a question, and the "let's talk"
+    /// that deliberately does not. What differs between them is everything ABOVE this point
+    /// (consuming the group, editing the message, closing the question); what a session receives is
+    /// the same shape either way, and writing it twice would be two places for that to drift.
+    /// </para>
+    /// </summary>
+    async Task Route_TapAsOwnerMessage_Async(
+        ITelegramCallbackTap tap,
+        PendingButtonRecord registered,
+        CancellationToken cancellationToken)
+    {
+        var syntheticMessage = TelegramOwnerMessage_Factory.Create(
+            tap.UpdateId, tap.MessageId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
 
         await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
     }
@@ -10237,6 +10333,35 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
+    /// A question that will not be forwarded, said to the AGENT in full.
+    ///
+    /// <para>
+    /// NOT DEDUPED, unlike <see cref="Coach_OnContractFaults"/>: a repeated formatting fault is
+    /// worth saying once, but every refused question is a decision the owner never saw, and the
+    /// session is standing there waiting for an answer that cannot come. Audience Agent, so it
+    /// never reaches the phone — an alert the owner cannot act on is noise (owner, 2026-08-10).
+    /// </para>
+    /// </summary>
+    void Refuse_Question(IDiscoveredChannel channel, IReadOnlyList<QuestionFaults> faults)
+    {
+        _log.Log_Warning(channel.OrchId, $"question NOT forwarded — {string.Join(", ", faults)}");
+
+        List<string> lines = [];
+
+        foreach (var fault in faults)
+            lines.Add($"- {OwnerQuestion_Contract.Describe(fault)}");
+
+        ChannelAppender.Append_AppEntry(
+            channel.FilePath,
+            AppEntryAudiences.Agent,
+            "your question was NOT sent to the owner — it is incomplete",
+            "The body reached them; the question and its buttons did not, so nobody is going to answer it. "
+            + "Ask again with every line present:\n"
+            + string.Join("\n", lines),
+            DateTime.Now);
+    }
+
+    /// <summary>
     /// Whether this member's session is driven by the bridge rather than by a spawned shell — the
     /// same question <c>SessionWatchdogModel.Is_PrintRun</c> asks, deliberately phrased the same way
     /// so the two cannot drift apart.
@@ -10325,7 +10450,12 @@ internal sealed class BridgeEngineModel(
         {
             foreach (var pair in _openQuestions)
             {
-                if (pair.Value.OrchId == orchId)
+                // A question under discussion is NOT closed by a typed reply — the same rule the
+                // count above reads, applied where the removal actually happens. Stated twice
+                // deliberately: the count decides IF anything binds, this decides WHAT is taken, and
+                // a decider that agrees with a remover only by coincidence is the defect this
+                // whole path already carries a scar from.
+                if (pair.Value.OrchId == orchId && !pair.Value.InDiscussion)
                     answered.Add((pair.Key, pair.Value.ButtonGroupId, pair.Value.Text));
             }
 
@@ -10381,8 +10511,12 @@ internal sealed class BridgeEngineModel(
     {
         int openCount;
 
+        // BINDABLE, not merely open. A question the owner asked to TALK about is still on their
+        // phone with its buttons live, and while they are discussing it their words are
+        // conversation, not a vote — so it neither absorbs a reply nor makes a second question
+        // "ambiguous". It closes when they tap, and only then.
         lock (_ownerStateLock)
-            openCount = _openQuestions.Values.Count(question => question.OrchId == orchId);
+            openCount = _openQuestions.Values.Count(question => question.OrchId == orchId && !question.InDiscussion);
 
         var binding = AnswerBinding_Decider.Decide(openCount, answerText);
 

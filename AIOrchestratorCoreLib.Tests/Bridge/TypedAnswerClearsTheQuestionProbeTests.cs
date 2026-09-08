@@ -45,7 +45,8 @@ public class TypedAnswerClearsTheQuestionProbeTests : IDisposable
 
     /// <summary>Carries the markers, so the mirror turns it into a button message.</summary>
     const string QUESTION_BODY =
-        "QUESTION: What starts the N-year clock?\nOPTION: Reserve idle\nOPTION: Per-deposit\nOPTION: Pick later";
+        "QUESTION: What starts the N-year clock?\nOPTION: Reserve idle\nOPTION: Per-deposit\nOPTION: Pick later\n"
+        + "RECOMMEND: Reserve idle — it is the one the ledger already assumes.\nRISK: low\nROW: none";
 
     /// <summary>
     /// The detailed reply the owner said they needed to write. Deliberately free of any question mark

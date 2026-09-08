@@ -94,9 +94,13 @@ public class OwnerMessageContractTests
     [Theory]
     [InlineData("OPTION: Merge\nOPTION: Hold")]
     [InlineData("Ready when you are.\nOPTION: Go\nOPTION: Wait")]
-    public void ButtonsWithNoQuestion_IsAFault(string body)
+    public void ButtonsWithNoQuestion_IsNoLongerThisChecksBusiness(string body)
     {
-        Assert_Faults(body, OwnerMessageFaults.OptionsWithoutAQuestion);
+        // It moved to OwnerQuestion_Contract, which does not coach it after the fact — it REFUSES
+        // to forward the question. Two homes for one rule told the agent twice, and the telling
+        // here had become untrue: it said "a tap answers something that was never asked", of
+        // buttons the app no longer sends. See OwnerQuestionContractTests.
+        Assert_Clean(body);
     }
 
     /// <summary>Markers that belong to the question are not prose and must not trip the check.</summary>
@@ -181,7 +185,6 @@ public class OwnerMessageContractTests
     [Theory]
     [InlineData(OwnerMessageFaults.TwoQuestions)]
     [InlineData(OwnerMessageFaults.ProseAfterTheQuestion)]
-    [InlineData(OwnerMessageFaults.OptionsWithoutAQuestion)]
     [InlineData(OwnerMessageFaults.OpensWithAReceipt)]
     [InlineData(OwnerMessageFaults.CarriesCode)]
     [InlineData(OwnerMessageFaults.TooLong)]
