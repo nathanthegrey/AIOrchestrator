@@ -11,70 +11,34 @@ namespace AIOrchestratorCoreLib.Formatting;
 /// ride on the body any more: the body is sent as ordinary messages, and the buttons go on their
 /// OWN short message carrying just the question.
 ///
-/// The question comes from an explicit `QUESTION:` line when the agent wrote one (the role commands
-/// require it). When it did not, one is derived from the body's last question sentence, and if even
-/// that fails there is a canned prompt — the owner must never see naked buttons.
+/// The question comes from the `QUESTION:` line, and from nowhere else: `OwnerQuestion_Contract`
+/// refuses to forward a question that has none, so by the time this runs there is always one.
+///
+/// <para>
+/// THE DERIVATION IS RETIRED, AND ITS ABSENCE IS THE POINT. Until 2026-09-07 a missing
+/// `QUESTION:` line was papered over — the last sentence of the body ending in '?' was mined for
+/// one, and failing that the owner got a canned "Your call:" over a set of buttons. Both were
+/// rescues of a malformed question, and a rescue is why nobody ever fixed the shape: the owner
+/// spent an afternoon answering questions with questions ("which part are you talking about?"),
+/// which is what a derived question reads like. A question is now complete or it is not sent.
+/// </para>
 /// </summary>
 public static class QuestionPrompt_Builder
 {
-    /// <summary>Beyond this a "question" is really a paragraph, and showing it defeats the purpose.</summary>
-    public const int MAX_DERIVED_LENGTH = 200;
-
-    /// <summary>Canned, so it stays English like every other app string (owner directive).</summary>
-    public const string FALLBACK_PROMPT = "Your call:";
-
     public const string PREFIX = "❓ ";
 
-    public static string Build(IReadOnlyList<string> questionLines, string bodyText)
-    {
-        var explicitQuestion = string.Join(" ", questionLines.Where(line => !string.IsNullOrWhiteSpace(line))).Trim();
-
-        if (explicitQuestion.Length > 0)
-            return $"{PREFIX}{explicitQuestion}";
-
-        return $"{PREFIX}{Derive_OrNull(bodyText) ?? FALLBACK_PROMPT}";
-    }
-
     /// <summary>
-    /// The last sentence of the body that ends in '?'. Anything longer than MAX_DERIVED_LENGTH is
-    /// rejected rather than truncated — half a question is worse than the canned prompt.
+    /// The glyph and the question, and nothing else to decide. It throws on an empty question
+    /// rather than substituting one: the only caller is the send path, which is reached only
+    /// through <c>OwnerQuestion_Contract.Build</c>, and that cannot produce an empty question — so
+    /// an empty one here is a broken invariant, not an input to be tolerated.
     /// </summary>
-    public static string? Derive_OrNull(string bodyText)
+    public static string Build(string question)
     {
-        if (string.IsNullOrWhiteSpace(bodyText))
-            return null;
+        if (string.IsNullOrWhiteSpace(question))
+            throw new ArgumentException("a question reached the prompt builder empty — the contract should have refused it", nameof(question));
 
-        // Fenced blocks (mockups, snippets) are not prose and must never be mined for a question.
-        var (withoutBlocks, _) = MonospaceBlocks_Formatter.Extract_Blocks(bodyText);
-
-        var lastMark = withoutBlocks.LastIndexOf('?');
-
-        if (lastMark < 0)
-            return null;
-
-        var start = 0;
-
-        for (var i = lastMark - 1; i >= 0; i--)
-        {
-            var character = withoutBlocks[i];
-
-            if (character == '.' || character == '!' || character == '?' || character == '\n')
-            {
-                start = i + 1;
-                break;
-            }
-        }
-
-        var sentence = withoutBlocks[start..(lastMark + 1)].Trim();
-
-        // A speaker prefix ("🔴 Sup: ") landing at the front of the first sentence is chrome.
-        sentence = Regex.Replace(sentence, @"^[^\s]{1,3}\s*[A-Za-z-]{2,8}:\s*", "");
-        sentence = sentence.Trim();
-
-        if (sentence.Length == 0 || sentence.Length > MAX_DERIVED_LENGTH)
-            return null;
-
-        return sentence;
+        return $"{PREFIX}{question.Trim()}";
     }
 
     /// <summary>

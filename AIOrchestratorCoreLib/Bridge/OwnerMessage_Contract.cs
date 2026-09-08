@@ -9,9 +9,6 @@ public enum OwnerMessageFaults
     /// <summary>Prose below the question. A question is the last thing in an entry or it is a moving target.</summary>
     ProseAfterTheQuestion,
 
-    /// <summary>`OPTION:` lines with no `QUESTION:` above them — buttons under nothing.</summary>
-    OptionsWithoutAQuestion,
-
     /// <summary>Line one says "I read you" instead of saying the thing.</summary>
     OpensWithAReceipt,
 
@@ -57,7 +54,7 @@ public static class OwnerMessage_Contract
     const string OPTION_MARKER = "OPTION:";
 
     /// <summary>Markers that legitimately follow a question — they are part of it, not prose.</summary>
-    static readonly string[] QUESTION_COMPANIONS = [OPTION_MARKER, "DEADLINE:", "DEFAULT:", "IMAGE:"];
+    static readonly string[] QUESTION_COMPANIONS = [OPTION_MARKER, "DEADLINE:", "DEFAULT:", "IMAGE:", "ATTACH:"];
 
     /// <summary>
     /// How a reply that is only an acknowledgement opens. Deliberately anchored to the START of the
@@ -98,8 +95,11 @@ public static class OwnerMessage_Contract
         if (questionIndexes.Count > 1)
             faults.Add(OwnerMessageFaults.TwoQuestions);
 
-        if (optionIndexes.Count > 0 && questionIndexes.Count == 0)
-            faults.Add(OwnerMessageFaults.OptionsWithoutAQuestion);
+        // `OPTION:` lines with no `QUESTION:` USED TO BE A FAULT HERE and is not any more: it is
+        // one of the five things OwnerQuestion_Contract requires, and that one REFUSES to forward
+        // the question rather than coaching after the fact. Two homes for one rule meant the agent
+        // was told twice, and the older telling was by then untrue — it said "a tap answers
+        // something that was never asked", of buttons the app no longer sends.
 
         if (questionIndexes.Count > 0 && Has_ProseAfter(lines, questionIndexes[^1]))
             faults.Add(OwnerMessageFaults.ProseAfterTheQuestion);
@@ -127,9 +127,6 @@ public static class OwnerMessage_Contract
             OwnerMessageFaults.ProseAfterTheQuestion =>
                 "There is prose BELOW your QUESTION: line. The question must be the last thing in the entry — "
                 + "anything after it arrives under a lock screen the owner has already stopped reading.",
-            OwnerMessageFaults.OptionsWithoutAQuestion =>
-                "OPTION: lines with no QUESTION: above them. Buttons under nothing: the app cannot register the "
-                + "decision, so a tap answers something that was never asked.",
             OwnerMessageFaults.OpensWithAReceipt =>
                 "Your first line is a receipt, not the answer. The owner reads line one and often stops — put the "
                 + "decision, the result or the answer there, and what you are about to do on line two.",
@@ -180,7 +177,7 @@ public static class OwnerMessage_Contract
                 continue;
 
             // A MARKER LINE IS NOT PROSE and cannot be a receipt, so it is not the line under test.
-            if (trimmed.StartsWith("IMAGE:", StringComparison.Ordinal))
+            if (trimmed.StartsWith("IMAGE:", StringComparison.Ordinal) || trimmed.StartsWith("ATTACH:", StringComparison.Ordinal))
                 continue;
 
             var lowered = trimmed.ToLowerInvariant();
@@ -204,8 +201,8 @@ public static class OwnerMessage_Contract
         {
             var line = rawLine.Trim();
 
-            // IMAGE: carries a path BY DESIGN — it is how a screenshot reaches the phone.
-            if (line.StartsWith("IMAGE:", StringComparison.Ordinal))
+            // IMAGE: and ATTACH: carry a path BY DESIGN — it is how a screenshot or a file reaches the phone.
+            if (line.StartsWith("IMAGE:", StringComparison.Ordinal) || line.StartsWith("ATTACH:", StringComparison.Ordinal))
                 continue;
 
             if (Has_DeepPath(line) || Has_StackFrame(line) || Has_CodeIdentifier(line))

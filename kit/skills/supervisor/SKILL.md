@@ -383,20 +383,35 @@ doesn't disturb me anymore unless it has another question. A brief every 30 minu
 work is going is fine, but not the waterfall of messages I get now."* So write progress entries
 freely — they are the record — but do not expect them to be read as they land, and never split one
 thought across several of them hoping to be noticed.
-- **EVERY set of `OPTION:` lines MUST be preceded by a `QUESTION:` line — one short, self-contained
-  question (≤2 lines, ideally one).** The app sends your message body first and then puts the
-  buttons on their OWN message carrying only that question, so the owner sees exactly what is being
-  asked without re-reading the paragraph above it. Write it so it stands alone:
+- **A question to the owner is FIVE lines, and the app REFUSES to send one that is missing any of
+  them.** Each at the start of its own line, beside the body they belong to:
 
   ```
   QUESTION: Merge branch wf-perf into master now, or hold for your IDE review?
   OPTION: Merge it
   OPTION: Hold
+  RECOMMEND: Hold — you asked to read every merge to master first.
+  RISK: high
+  ROW: FIN-D-277a
   ```
 
-  Without a `QUESTION:` line the app falls back to your last question sentence, and if there is
-  none the owner gets a bare "Your call:" — which is exactly the "buttons with no visible question"
-  problem you are avoiding.
+  `QUESTION:` — one short, self-contained question (≤2 lines, ideally one). The app sends your body
+  first and puts the buttons on their OWN message carrying only this, so it has to stand alone.
+  `OPTION:` — at least two, spelled out; one option is not a choice. `RECOMMEND:` — what you would
+  do and why, one line; it is printed with the question, because a recommendation the owner has to
+  scroll back for is a decision deferred. `RISK:` — `high` or `low`; high means a tap is not enough
+  and they type back a 4-digit code. `ROW:` — the plan row this decision belongs to, or the word
+  `none`, written out.
+
+  **Missing a line? The body still reaches them, the question does not, and you get one entry in
+  this channel naming every line you left out.** Nobody will answer a question that was never sent,
+  so re-ask with all five. There is no fallback and no derived question any more: the app used to
+  mine your last sentence ending in "?" and, failing that, show a bare "Your call:" over the
+  buttons — both were rescues of a malformed question, and the rescue is why nobody fixed the shape.
+
+  **`RISK: low` does not unlock anything.** The app ALSO locks any question whose text or options
+  name a push, a deploy, a release, production or a destructive command. Your declaration can only
+  ever ADD a lock.
 - **A question that can wait for ever usually does. Bound it: `DEADLINE:` and `DEFAULT:`.** Two
   optional lines, written beside `QUESTION:`/`OPTION:` and read by the app the same way:
 
@@ -423,13 +438,19 @@ thought across several of them hoping to be noticed.
   **Only give a `DEFAULT:` to a question whose unattended answer you would defend.** It spends the
   owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
   anything that costs money.
-- **The app adds an "❔ Explain the options" button to EVERY question — you do not write it.** If the
-  owner taps it you receive a request for what each option means in practice, what differs, what it
-  costs to get wrong, and your recommendation. Answer it SHORT and then **ask the question again**
-  (fresh `QUESTION:` + `OPTION:` lines — the old buttons are spent). Treat it as useful signal: a
-  tap there means your question was not answerable as written, so make the re-ask clearer rather
-  than longer. The body above can be as long and thorough as the decision deserves;
-  the question underneath must be short enough to answer from a lock screen.
+- **The app adds TWO buttons to every question — you write neither, and they behave differently.**
+
+  "❔ Explain the options" is a RE-ASK: it spends the buttons, so you answer SHORT and then **ask the
+  question again** with fresh `QUESTION:`/`OPTION:` lines. Treat a tap there as signal that your
+  question was not answerable as written — make the re-ask clearer, not longer.
+
+  "💬 Let's talk" does NOT spend anything: the question stays on their phone with its buttons live,
+  and it is marked as under discussion, so nothing they type while you talk will be filed as their
+  answer. Reply in prose, briefly, and **do not ask it again** — a second copy of a live question is
+  the waterfall this whole protocol exists to prevent. It closes when they tap an option.
+
+  The body above can be as long and thorough as the decision deserves; the question underneath must
+  be short enough to answer from a lock screen.
 - **TERMINAL MODE (the owner is in your terminal) — none of the above applies.** This is a rule about
   ANY session in Terminal presence, not about supervisors: whichever role is talking to the owner in
   an orchestration, this is what changes when they sit down at it. The owner toggles it with `/pc` —
@@ -476,6 +497,10 @@ thought across several of them hoping to be noticed.
 - **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
   the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
   real photo in the topic and strips the line from the text.
+- **Send the owner a FILE with `ATTACH: <full path>`** — an HTML mockup, a CSV, a report. One line
+  per file, column 0, like `IMAGE:`. The file must sit under this orchestration's repository or its
+  supervision folder and be under 50 MB; anything else is refused and you are told why in this
+  channel — the owner never sees the refusal, so re-attach from the right place.
 - **Images:** owner messages may carry an `IMAGE: <path>` line (screenshots of bugs, etc. — the
   bridge downloads them next to your channel). Read the file to inspect it; pass the path on to an
   implementer's brief when the image is part of its task.

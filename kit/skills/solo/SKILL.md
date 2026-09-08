@@ -153,8 +153,16 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
 - **Everything you write lands on a PHONE. THREE lines is the norm, FIVE the hard ceiling, 600
   characters.** The app measures it and tells you when you go over. Lead with the result or the
   question; drop your reasoning unless asked.
-- Discrete choice? End the entry with a `QUESTION:` line and 2–4 `OPTION:` lines — they become
-  tappable buttons. Pictures: `IMAGE: <full path>`.
+- Discrete choice? A question is FIVE lines and the app REFUSES to send one missing any of them:
+  `QUESTION:` (one short, self-contained question), 2–4 `OPTION:` lines (they become tappable
+  buttons), `RECOMMEND:` (what you would do and why, one line — printed with the question),
+  `RISK:` (`high` or `low`; high means they type back a 4-digit code, and `low` unlocks nothing —
+  the app also locks anything naming a push, a deploy, a release, production or a destructive
+  command), and `ROW:` (the plan row, or the word `none`). Miss one and the body still reaches them
+  while the question does not, with an entry here naming every line you left out.
+  The app adds two buttons of its own: "❔ Explain the options" spends the buttons, so you answer
+  short and ask again; "💬 Let's talk" does not — the question stays live, nothing they type while
+  you talk is filed as their answer, and you reply in prose without re-asking. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` (under the repo or the supervision folder, ≤ 50 MB; a refusal is written here, never texted).
 - **A question that can wait for ever usually does. Bound it: `DEADLINE:` and `DEFAULT:`.** Two
   optional lines, written beside `QUESTION:`/`OPTION:` and read by the app the same way:
 
@@ -162,6 +170,9 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   QUESTION: Merge branch wf-perf into master now, or hold for your IDE review?
   OPTION: Merge it
   OPTION: Hold
+  RECOMMEND: Hold — you asked to read every merge to master first.
+  RISK: high
+  ROW: none
   DEADLINE: 2h
   DEFAULT: 2
   ```

@@ -105,6 +105,7 @@ public static class EngineState_Serializer
                 ["questionText"] = button.QuestionText,
                 ["expiresUtc"] = Write_Instant(button.ExpiresUtc),
                 ["isHighRisk"] = button.IsHighRisk,
+                ["keepsGroupOpen"] = button.KeepsGroupOpen,
             });
         }
 
@@ -123,6 +124,7 @@ public static class EngineState_Serializer
                 ["defaultOptionIndex"] = question.DefaultOptionIndex,
                 ["isHighRisk"] = question.IsHighRisk,
                 ["reminderSent"] = question.ReminderSent,
+                ["inDiscussion"] = question.InDiscussion,
             });
         }
 
@@ -224,6 +226,10 @@ public static class EngineState_Serializer
             QuestionText = questionText,
             ExpiresUtc = expiresUtc.Value,
             IsHighRisk = Read_Bool_OrNull(entry["isHighRisk"]) ?? false,
+
+            // ABSENT READS AS FALSE, which is the honest default for a state file written before
+            // this field existed: every button in it was an answer, and an answer consumes.
+            KeepsGroupOpen = Read_Bool_OrNull(entry["keepsGroupOpen"]) ?? false,
         };
     }
 
@@ -254,6 +260,7 @@ public static class EngineState_Serializer
             DefaultOptionIndex = isHighRisk ? null : Read_Int_OrNull(entry["defaultOptionIndex"]),
             IsHighRisk = isHighRisk,
             ReminderSent = Read_Bool_OrNull(entry["reminderSent"]) ?? false,
+            InDiscussion = Read_Bool_OrNull(entry["inDiscussion"]) ?? false,
         };
     }
 

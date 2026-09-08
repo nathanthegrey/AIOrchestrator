@@ -43,6 +43,13 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     const string TIMED_FIRST_OPTION = "A short summary";
     const string TIMED_SECOND_OPTION = "The full breakdown";
 
+    /// <summary>
+    /// The three lines <see cref="OwnerQuestion_Contract"/> requires of every question the app will
+    /// forward. <c>RISK: low</c> on purpose: these tests are about the PATTERN classifier, so the
+    /// lock they assert has to come from the words, never from the asker's own declaration.
+    /// </summary>
+    const string CONTRACT_LINES = "\nRECOMMEND: hold, unless you have a reason not to.\nRISK: low\nROW: none";
+
     readonly string _tempRoot;
     readonly string _tempRepo;
     readonly ISupervisionPaths _paths;
@@ -108,7 +115,7 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task ATapOnAPushQuestion_DeliversNothing_UntilTheCodeShownInTheMessageIsTypedBack()
     {
-        var session = await Start_WithQuestion_Async($"QUESTION: {RISKY_QUESTION}\nOPTION: {RISKY_OPTION}\nOPTION: {SAFE_OPTION}", RISKY_OPTION);
+        var session = await Start_WithQuestion_Async($"QUESTION: {RISKY_QUESTION}\nOPTION: {RISKY_OPTION}\nOPTION: {SAFE_OPTION}{CONTRACT_LINES}", RISKY_OPTION);
 
         var button = _telegram.Find_ButtonFor(RISKY_OPTION)
             ?? throw new Exception("the risky option never reached the phone");
@@ -174,7 +181,7 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     public async Task AQuestionWithADeadline_TakesItsDefault_AndSaysSoWhereTheOwnerWillReadItBack()
     {
         var session = await Start_WithQuestion_Async(
-            $"QUESTION: {TIMED_QUESTION}\nOPTION: {TIMED_FIRST_OPTION}\nOPTION: {TIMED_SECOND_OPTION}\nDEADLINE: 60m\nDEFAULT: 2",
+            $"QUESTION: {TIMED_QUESTION}\nOPTION: {TIMED_FIRST_OPTION}\nOPTION: {TIMED_SECOND_OPTION}\nDEADLINE: 60m\nDEFAULT: 2{CONTRACT_LINES}",
             TIMED_SECOND_OPTION);
 
         // The terms are IN the message, because a deadline the owner cannot see is a decision taken
@@ -225,7 +232,7 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     public async Task AHighRiskQuestionThatLapses_IsDenied_EvenThoughItsAgentDeclaredADefault()
     {
         var session = await Start_WithQuestion_Async(
-            $"QUESTION: {RISKY_QUESTION}\nOPTION: {RISKY_OPTION}\nOPTION: {SAFE_OPTION}\nDEADLINE: 30m\nDEFAULT: 1",
+            $"QUESTION: {RISKY_QUESTION}\nOPTION: {RISKY_OPTION}\nOPTION: {SAFE_OPTION}\nDEADLINE: 30m\nDEFAULT: 1{CONTRACT_LINES}",
             RISKY_OPTION);
 
         // The message says DENIED rather than naming an option, so the owner is never told a default
@@ -323,7 +330,7 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
     public async Task ATapThatIsNeverConfirmed_StillLetsTheQuestionLapse_InsteadOfBlockingForever()
     {
         var session = await Start_WithQuestion_Async(
-            $"QUESTION: {RISKY_QUESTION}\nOPTION: {RISKY_OPTION}\nOPTION: {SAFE_OPTION}\nDEADLINE: 30m",
+            $"QUESTION: {RISKY_QUESTION}\nOPTION: {RISKY_OPTION}\nOPTION: {SAFE_OPTION}\nDEADLINE: 30m{CONTRACT_LINES}",
             RISKY_OPTION);
 
         var button = _telegram.Find_ButtonFor(RISKY_OPTION)
@@ -371,7 +378,7 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
             // SHORT ENOUGH TO STAY ON THE BUTTON. Past ~28 characters OptionButtons_Layout moves the
             // full text into the message body and numbers the buttons, so a longer label would make
             // this test fail on the layout rule rather than on the rule it is about.
-            "QUESTION: How should I proceed?\nOPTION: Push to main\nOPTION: Hold",
+            "QUESTION: How should I proceed?\nOPTION: Push to main\nOPTION: Hold" + CONTRACT_LINES,
             "Push to main");
 
         var button = _telegram.Find_ButtonFor("Push to main")
@@ -386,6 +393,38 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
             await Run_Until_Async(() => _telegram.Has_Edited_Containing("You are about to"), 20_000),
             "THE DEFECT: the question line said nothing dangerous, so one tap delivered the push."
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+    }
+
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ANarrativeThatMERELYMENTIONSADeploy_DoesNotLockAProductQuestion()
+    {
+        // Measured on one topic, 2026-09-07: four pure product questions arrived under 🔐 because
+        // the prose around them said "the deployed engine crashes on these keys" and "a deploy
+        // check already blocks this from shipping". Nothing was being deployed. The surface is now
+        // the question and its options; the body it came from is not read.
+        await Start_WithQuestion_Async(
+            "The engine added 27 allocation methods on 2026-08-26 and the deployed engine rejects them;\n"
+            + "a deploy check already blocks this from shipping by accident.\n"
+            + "QUESTION: Which plan gets the tail-risk methods?\nOPTION: Advanced\nOPTION: Ultimate" + CONTRACT_LINES,
+            "Advanced");
+
+        var button = _telegram.Find_ButtonFor("Advanced")
+            ?? throw new Exception("the option never reached the phone");
+
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(button, questionMessageId));
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Edited_Containing("Advanced"), 20_000),
+            $"the tap never resolved.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.False(
+            _telegram.Has_Edited_Containing("You are about to"),
+            "THE DEFECT: a pricing question was locked behind a 4-digit code because its NARRATIVE "
+            + $"mentioned a deploy.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
     }
 
     /// <summary>

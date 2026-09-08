@@ -182,7 +182,11 @@ public class DecisionStateReachesTheDiskTests : IDisposable
         File.AppendAllText(
             _paths.Get_OwnerChannelFile(orchId),
             $"\n## [{index}] FROM supervisor — {stamp} — a question\n"
-            + $"QUESTION: {question}\nOPTION: {firstOption}\nOPTION: {secondOption}\n");
+            // RECOMMEND/RISK/ROW are what OwnerQuestion_Contract requires of every question the app
+            // will forward; `RISK: low` keeps the high-risk classification coming from the patterns,
+            // which is what these tests are about.
+            + $"QUESTION: {question}\nOPTION: {firstOption}\nOPTION: {secondOption}\n"
+            + "RECOMMEND: whichever you prefer — this fixture takes no view.\nRISK: low\nROW: none\n");
     }
 
     static string Build_OwnerMessageJson(string text)

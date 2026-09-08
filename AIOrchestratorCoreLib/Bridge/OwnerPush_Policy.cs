@@ -23,6 +23,12 @@ public static class OwnerPush_Policy
     /// <summary>Work has stopped and only the owner can restart it.</summary>
     public const string BLOCKED_MARKER = "BLOCKED ON OWNER";
 
+    /// <summary>A picture for the owner, uploaded as a photo. See <see cref="Carries_FileForTheOwner"/>.</summary>
+    public const string IMAGE_MARKER = "IMAGE:";
+
+    /// <summary>A file for the owner, uploaded as a document. See <see cref="Carries_FileForTheOwner"/>.</summary>
+    public const string ATTACH_MARKER = "ATTACH:";
+
     /// <summary>
     /// The one-line greeting a session writes as it boots — "supervisor online — …", "solo online
     /// — …". A FOURTH thing the phone gets, and the newest, because the owner cannot use this system
@@ -89,7 +95,51 @@ public static class OwnerPush_Policy
 
         return Carries_Question(rawEntryText)
             || Asks_InProse(rawEntryText)
+            || Carries_FileForTheOwner(rawEntryText)
             || rawEntryText.Contains(BLOCKED_MARKER, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A FIFTH thing the phone gets: an entry carrying a file for the owner — a screenshot
+    /// (<c>IMAGE:</c>) or a document (<c>ATTACH:</c>).
+    ///
+    /// <para>
+    /// A FILE IS A DELIVERY, NOT NARRATION. The mockups, the CSV, the failing output: the owner has
+    /// to LOOK at it, which is the whole reason it was produced, and an upload the phone never
+    /// announces is an upload nobody opens. It also cannot become the waterfall this policy exists
+    /// to prevent — a session writes a file for the owner rarely, and never on a loop.
+    /// </para>
+    /// <para>
+    /// IT WAS ALREADY BROKEN FOR <c>IMAGE:</c>, silently, and that is why this is a fix rather than
+    /// an addition: a screenshot sent as ordinary narration met the four rules above, matched none
+    /// of them, and was suppressed with its photo. It only ever arrived when the owner happened to
+    /// be waiting for a reply — which is how nobody noticed. <c>ATTACH:</c> (2026-09-07) would have
+    /// inherited exactly that, so both markers are named here.
+    /// </para>
+    /// <para>
+    /// MATCHED AT THE START OF A LINE, like the engine's own extractor, and not with
+    /// <see cref="string.Contains(string, StringComparison)"/> the way <see cref="Carries_Question"/>
+    /// is: only a column-0 marker line actually produces an upload, so a prose mention of "ATTACH:"
+    /// must not push an entry that delivers nothing.
+    /// </para>
+    /// </summary>
+    public static bool Carries_FileForTheOwner(string rawEntryText)
+    {
+        if (string.IsNullOrEmpty(rawEntryText))
+            return false;
+
+        foreach (var rawLine in rawEntryText.Split('\n'))
+        {
+            var line = rawLine.TrimEnd();
+
+            foreach (var marker in new[] { IMAGE_MARKER, ATTACH_MARKER })
+            {
+                if (line.StartsWith(marker, StringComparison.Ordinal) && line.Length > marker.Length && line[marker.Length..].Trim().Length > 0)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -192,6 +242,31 @@ public static class OwnerPush_Policy
     /// than the label: the button is one tap, the instruction behind it has to be unambiguous, and
     /// it must end by re-asking so the decision is not left dangling.
     /// </summary>
+    /// <summary>
+    /// The way OUT of a question that is not answerable as asked, and the one button that does not
+    /// consume the question.
+    ///
+    /// <para>
+    /// "Explain the options" is a re-ask: it spends the buttons and the supervisor asks again. That
+    /// is right when the wording was unclear, and wrong when the owner simply wants to discuss the
+    /// decision — measured on one topic on 2026-09-07, where the owner answered a question with a
+    /// question five times ("what are these methods? are they new?", "which part are you talking
+    /// about?") and each time the exchange had to be rebuilt around a question that was no longer
+    /// on the phone. Here the question stays put, with its buttons, until they tap one.
+    /// </para>
+    /// </summary>
+    public const string TALK_LABEL = "💬 Let's talk";
+
+    /// <summary>
+    /// What the SUPERVISOR receives on that tap. It says explicitly not to re-ask, because the
+    /// question it would re-ask is still open — a second copy of a live question is exactly the
+    /// waterfall this policy exists to prevent.
+    /// </summary>
+    public const string TALK_REQUEST =
+        "The owner wants to talk this decision through before choosing. Reply in prose, briefly, and "
+        + "do NOT ask it again: the question is still on their phone with its buttons live, and it "
+        + "closes when they tap one.";
+
     public const string MORE_DETAIL_REQUEST =
         "Explain this decision before I choose: what each option actually means in practice, what "
         + "differs between them, what it costs to get wrong, and which one you recommend and why. "

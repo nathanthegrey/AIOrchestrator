@@ -37,6 +37,13 @@ public sealed record PendingButtonRecord
 
     /// <summary>A tap on this option starts the second gesture instead of answering.</summary>
     public bool IsHighRisk { get; init; }
+
+    /// <summary>
+    /// A tap on this option does NOT consume the group: the question stays on the phone with its
+    /// buttons live. It is how "let's talk about it first" can be a button at all — every other
+    /// tap is an answer, and an answer is single-use.
+    /// </summary>
+    public bool KeepsGroupOpen { get; init; }
 }
 
 /// <summary>
@@ -67,6 +74,13 @@ public sealed record OpenQuestionRecord
 
     /// <summary>Set once the half-window reminder edit has been applied, so it happens once.</summary>
     public bool ReminderSent { get; init; }
+
+    /// <summary>
+    /// The owner asked to talk this decision through before choosing. The question stays OPEN and
+    /// tappable; what changes is that a typed reply no longer binds to it — they are discussing it,
+    /// so their words are conversation, not a vote, and only a tap closes it.
+    /// </summary>
+    public bool InDiscussion { get; init; }
 }
 
 /// <summary>
