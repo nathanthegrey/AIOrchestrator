@@ -3284,7 +3284,7 @@ internal sealed class BridgeEngineModel(
                 }
 
                 foreach (var photoPath in photoPaths)
-                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel.OrchId, cancellationToken);
+                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel, cancellationToken);
 
                 foreach (var attachmentPath in attachmentPaths)
                     await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, cancellationToken);
@@ -3800,18 +3800,15 @@ internal sealed class BridgeEngineModel(
         return buttons;
     }
 
-    async Task Send_EntryPhoto_BestEffort_Async(long? threadId, string photoPath, string orchId, CancellationToken cancellationToken)
+    async Task Send_EntryPhoto_BestEffort_Async(long? threadId, string photoPath, IDiscoveredChannel channel, CancellationToken cancellationToken)
     {
         try
         {
             if (_telegramClient == null)
                 return;
 
-            if (!File.Exists(photoPath))
-            {
-                _log.Log_Warning(orchId, $"Entry photo not sent — file missing: {photoPath}");
+            if (!Approve_OwnerFile(channel, photoPath, asPicture: true))
                 return;
-            }
 
             await _telegramClient.Send_Photo_Async(threadId, photoPath, cancellationToken);
         }
@@ -3825,9 +3822,67 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Warning(orchId, $"Entry photo send failed for '{photoPath}': {ex.Message}");
+            _log.Log_Warning(channel.OrchId, $"Entry photo send failed for '{photoPath}': {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Whether a file an agent named may be sent, and the refusal WRITTEN DOWN when it may not.
+    ///
+    /// <para>
+    /// SHARED BY BOTH MARKERS, and that is the fix rather than a tidy-up. `IMAGE:` checked only that
+    /// the file existed and then handed an HTML mockup to `sendPhoto`; Telegram answered `400
+    /// IMAGE_PROCESS_FAILED`, the catch below logged a warning, and NOBODY was told — not the owner,
+    /// not the agent. Measured 2026-09-08 04:02: four mockups the owner had asked for, all four
+    /// dropped, and the supervisor telling him in good faith that it had sent them and they had
+    /// gone nowhere. A silent drop is the worst shape a failure can take here, because the session
+    /// then argues with the owner from a false premise.
+    /// </para>
+    /// <para>
+    /// THE ROOTS ARE THREE, and the third is where the files actually are: an agent writing
+    /// something FOR the owner puts it in `~/mockups/`, which is neither the repository nor the
+    /// channel folder. A containment that forbids the one place the workflow uses is a containment
+    /// nobody can obey — while `~/.ssh` stays as far outside it as it ever was.
+    /// </para>
+    /// </summary>
+    bool Approve_OwnerFile(IDiscoveredChannel channel, string path, bool asPicture)
+    {
+        var session = _store.Get_Session_OrNull(channel.OrchId);
+        List<string> allowedRoots = [];
+
+        if (!string.IsNullOrWhiteSpace(session?.RepoPath))
+            allowedRoots.Add(session.RepoPath);
+
+        var channelFolder = Path.GetDirectoryName(channel.FilePath);
+
+        if (!string.IsNullOrWhiteSpace(channelFolder))
+            allowedRoots.Add(channelFolder);
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        if (!string.IsNullOrWhiteSpace(home))
+            allowedRoots.Add(Path.Combine(home, OWNER_FILES_FOLDER));
+
+        var exists = File.Exists(path);
+        var length = exists ? new FileInfo(path).Length : 0L;
+        var verdict = EntryAttachment_Policy.Decide(path, allowedRoots, exists, length, asPicture);
+
+        if (verdict == AttachmentVerdicts.Send)
+            return true;
+
+        var reason = EntryAttachment_Policy.Describe(verdict, path, allowedRoots, asPicture);
+        _log.Log_Warning(channel.OrchId, reason);
+
+        // NOT DEDUPED, unlike contract coaching: every refused file is a file the owner did not get,
+        // and the agent must know each time. Audience Agent — never the phone.
+        ChannelAppender.Append_AppEntry(
+            channel.FilePath, AppEntryAudiences.Agent, "a file you sent the owner was NOT delivered", reason, DateTime.Now);
+
+        return false;
+    }
+
+    /// <summary>Where an agent puts something it made FOR the owner, under their home.</summary>
+    const string OWNER_FILES_FOLDER = "mockups";
 
     /// <summary>
     /// One <c>ATTACH:</c> line → one <c>sendDocument</c>, or one refusal the AGENT reads. Best effort
@@ -3844,32 +3899,8 @@ internal sealed class BridgeEngineModel(
             if (_telegramClient == null)
                 return;
 
-            var session = _store.Get_Session_OrNull(channel.OrchId);
-            List<string> allowedRoots = [];
-
-            if (!string.IsNullOrWhiteSpace(session?.RepoPath))
-                allowedRoots.Add(session.RepoPath);
-
-            var channelFolder = Path.GetDirectoryName(channel.FilePath);
-
-            if (!string.IsNullOrWhiteSpace(channelFolder))
-                allowedRoots.Add(channelFolder);
-
-            var exists = File.Exists(attachmentPath);
-            var length = exists ? new FileInfo(attachmentPath).Length : 0L;
-            var verdict = EntryAttachment_Policy.Decide(attachmentPath, allowedRoots, exists, length);
-
-            if (verdict != AttachmentVerdicts.Send)
-            {
-                var reason = EntryAttachment_Policy.Describe(verdict, attachmentPath, allowedRoots);
-                _log.Log_Warning(channel.OrchId, reason);
-
-                // NOT DEDUPED, unlike contract coaching: every refused file is a file the owner did
-                // not get, and the agent must know each time. Audience Agent — never the phone.
-                ChannelAppender.Append_AppEntry(
-                    channel.FilePath, AppEntryAudiences.Agent, "a file you attached was not sent", reason, DateTime.Now);
+            if (!Approve_OwnerFile(channel, attachmentPath, asPicture: false))
                 return;
-            }
 
             var bytes = await File.ReadAllBytesAsync(attachmentPath, cancellationToken);
             var fileName = Path.GetFileName(attachmentPath);

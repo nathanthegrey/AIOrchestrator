@@ -138,6 +138,64 @@ public class AttachmentsReachThePhoneTests : IDisposable
         Assert.Empty(_telegram.Documents());
     }
 
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AnHtmlFileSentAsAPicture_IsRefusedToTheAgent_NamingTheMarkerThatWouldHaveWorked()
+    {
+        // THE NIGHT THIS WAS WRITTEN FOR. Four HTML mockups the owner had asked for went out as
+        // IMAGE: lines; Telegram answered 400 IMAGE_PROCESS_FAILED to each; the only trace was a log
+        // line, so the supervisor told the owner in good faith that it had sent them.
+        var engine = Build_Engine();
+        var orchId = await Start_WithChannelAlreadySeen_Async(engine);
+        var mockup = Path.Combine(_tempRepo, "mockups", "plan-card.html");
+        Directory.CreateDirectory(Path.GetDirectoryName(mockup)!);
+        File.WriteAllText(mockup, "<title>Plan card</title>");
+
+        Append_SupervisorEntry(orchId, 1, "mockups", $"The mockups are ready.\nIMAGE: {mockup}");
+
+        Assert.True(
+            await Run_Until_Async(engine, () => Channel_Text(orchId).Contains("IMAGE refused", StringComparison.Ordinal), 20_000),
+            $"the agent was never told.{Environment.NewLine}{_log.Dump()}");
+
+        var channel = Channel_Text(orchId);
+        Assert.Contains($"ATTACH: {mockup}", channel, StringComparison.Ordinal);
+        Assert.Contains("IMAGE_PROCESS_FAILED", channel, StringComparison.Ordinal);
+
+        // Nothing was handed to Telegram to reject, and the owner never saw the refusal.
+        Assert.Empty(_telegram.Documents());
+        Assert.DoesNotContain(_telegram.Html_Sends(), html => html.Contains("IMAGE refused", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AFileUnderTheOwnersMockupsFolder_IsSent_BecauseThatIsWhereAgentsPutThem()
+    {
+        var engine = Build_Engine();
+        var orchId = await Start_WithChannelAlreadySeen_Async(engine);
+
+        // The real workflow writes owner-facing artefacts to ~/mockups/<row>/ — neither the
+        // repository nor the channel folder, and refused by the first version of this policy.
+        var mockups = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "mockups");
+        Directory.CreateDirectory(mockups);
+        var file = Path.Combine(mockups, $"aiorch-test-{Guid.NewGuid():N}.html");
+        File.WriteAllText(file, "<title>from the owner's mockups folder</title>");
+
+        try
+        {
+            Append_SupervisorEntry(orchId, 1, "mockups", $"Ready.\nATTACH: {file}");
+
+            Assert.True(
+                await Run_Until_Async(engine, () => _telegram.Documents().Count > 0, 20_000),
+                $"the file under ~/mockups was refused.{Environment.NewLine}{Channel_Text(orchId)}{Environment.NewLine}{_log.Dump()}");
+
+            Assert.Equal(Path.GetFileName(file), Assert.Single(_telegram.Documents()).FileName);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
     string Channel_Text(string orchId)
     {
         return File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));

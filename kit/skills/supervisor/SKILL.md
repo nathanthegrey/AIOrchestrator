@@ -498,9 +498,15 @@ thought across several of them hoping to be noticed.
   the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
   real photo in the topic and strips the line from the text.
 - **Send the owner a FILE with `ATTACH: <full path>`** — an HTML mockup, a CSV, a report. One line
-  per file, column 0, like `IMAGE:`. The file must sit under this orchestration's repository or its
-  supervision folder and be under 50 MB; anything else is refused and you are told why in this
-  channel — the owner never sees the refusal, so re-attach from the right place.
+  per file, column 0, like `IMAGE:`. **`IMAGE:` is for pictures only** (`.png`, `.jpg`, `.webp`,
+  `.gif`, `.bmp`): an HTML file sent that way is refused, because Telegram answers a photo upload of
+  one with `400 IMAGE_PROCESS_FAILED` — which is what silently swallowed four mockups on
+  2026-09-08 while the supervisor told the owner it had sent them.
+- **Both markers read from three places, and nowhere else**: this orchestration's repository, your
+  own channel folder, and `~/mockups/` — which is where you put something you MADE for the owner.
+  Caps: 10 MB for a picture, 50 MB for a file. Anything refused is written into this channel with
+  the reason and the fix; the owner never sees it, so read your own channel and send it again
+  properly rather than telling them it could not be done.
 - **Images:** owner messages may carry an `IMAGE: <path>` line (screenshots of bugs, etc. — the
   bridge downloads them next to your channel). Read the file to inspect it; pass the path on to an
   implementer's brief when the image is part of its task.
