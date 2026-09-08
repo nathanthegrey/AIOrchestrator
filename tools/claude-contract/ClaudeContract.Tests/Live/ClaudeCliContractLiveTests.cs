@@ -233,6 +233,41 @@ public class ClaudeCliContractLiveTests(ITestOutputHelper output)
         _output.WriteLine($"cleanup: stop → {stopped.Stdout.Trim()} {stopped.Stderr.Trim()} | rm → {removed.Stdout.Trim()} {removed.Stderr.Trim()}");
     }
 
+    /// <summary>
+    /// What the fresh-mode PrintRunner relies on and the 2026-09-05 study never measured: a slash
+    /// command as the POSITIONAL prompt and an instruction on STDIN in the same invocation. Two
+    /// questions, one run: does the command still expand, and does the stdin text reach the model?
+    /// The evidence is saved whatever the answer — a "no" here changes the fresh-turn design, it does
+    /// not get argued away.
+    /// </summary>
+    [LiveFact]
+    public void Print_SlashCommandPositional_PlusStdinInstruction_BothReachTheModel()
+    {
+        var probe = new ProbeWorkspace("live-positional-plus-stdin");
+        var sessionId = Guid.NewGuid().ToString();
+
+        try
+        {
+            var run = Claude(
+                ["-p", "--model", MODEL, "--output-format", "json", "--dangerously-skip-permissions", "--name", "aiorch-contract-ps", "--session-id", sessionId,
+                 "/probe-hello positional-arg-1"],
+                probe.ProbeFolder,
+                stdin: "Additional instruction arriving on stdin, part of the same message: after the slash command's own steps, also use the Bash tool to run exactly: echo STDIN_OK > stdin-out.txt   Then reply DONE.",
+                PRINT_TIMEOUT);
+
+            probe.Save_Evidence("positional-plus-stdin.txt", run.Describe());
+            _output.WriteLine(run.Describe());
+
+            Assert.True(run.ExitCode == 0, run.Describe());
+            Assert.Equal("SLASH_ROLE_OK positional-arg-1", probe.Read_ProbeFile_OrEmpty("slash-out.txt"));
+            Assert.Equal("STDIN_OK", probe.Read_ProbeFile_OrEmpty("stdin-out.txt"));
+        }
+        finally
+        {
+            probe.Delete_TranscriptFolder_BestEffort();
+        }
+    }
+
     static JsonObject Parse_ResultJson(string stdout)
     {
         var line = stdout.Split('\n').LastOrDefault(candidate => candidate.TrimStart().StartsWith('{'))
