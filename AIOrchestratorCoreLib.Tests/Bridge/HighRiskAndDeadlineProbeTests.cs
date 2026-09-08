@@ -388,6 +388,38 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
             + $"{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
     }
 
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ANarrativeThatMERELYMENTIONSADeploy_DoesNotLockAProductQuestion()
+    {
+        // Measured on one topic, 2026-09-07: four pure product questions arrived under 🔐 because
+        // the prose around them said "the deployed engine crashes on these keys" and "a deploy
+        // check already blocks this from shipping". Nothing was being deployed. The surface is now
+        // the question and its options; the body it came from is not read.
+        await Start_WithQuestion_Async(
+            "The engine added 27 allocation methods on 2026-08-26 and the deployed engine rejects them;\n"
+            + "a deploy check already blocks this from shipping by accident.\n"
+            + "QUESTION: Which plan gets the tail-risk methods?\nOPTION: Advanced\nOPTION: Ultimate",
+            "Advanced");
+
+        var button = _telegram.Find_ButtonFor("Advanced")
+            ?? throw new Exception("the option never reached the phone");
+
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(button, questionMessageId));
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Edited_Containing("Advanced"), 20_000),
+            $"the tap never resolved.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+
+        Assert.False(
+            _telegram.Has_Edited_Containing("You are about to"),
+            "THE DEFECT: a pricing question was locked behind a 4-digit code because its NARRATIVE "
+            + $"mentioned a deploy.{Environment.NewLine}Engine log:{Environment.NewLine}{_log.Dump()}");
+    }
+
     /// <summary>
     /// Starts an orchestration, gets the engine past its first pass over the channel, then appends
     /// the question. THE ORDER IS LOad-BEARING: the tailer baselines a channel it has never seen at

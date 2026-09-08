@@ -115,4 +115,31 @@ public class HighRiskClassifierTests
         Assert.Contains(pattern, GuardrailSettings_Factory.DEFAULT_HIGH_RISK_PATTERNS);
         Assert.True(HighRisk_Classifier.Is_HighRisk(realisticQuestion, GuardrailSettings_Factory.DEFAULT_HIGH_RISK_PATTERNS));
     }
+
+    [Theory]
+    // The four that locked a pure product question on 2026-09-07, and their honest twins.
+    [InlineData("Ready to push the release branch to main?", "push", true)]
+    [InlineData("I pushed it already — merge now?", "push", false)]
+    [InlineData("The deployed engine rejects these keys; which tier gets them?", "deploy", false)]
+    [InlineData("Deploy to production tonight?", "deploy", true)]
+    [InlineData("Publishing was last week; which plan gets the row?", "publish", false)]
+    // Punctuation-edged patterns keep working: their own edges are not letters, so nothing
+    // adjacent to them can be "the same word".
+    [InlineData("Shall I run rm -rf on the build folder?", "rm -rf", true)]
+    [InlineData("Use --force on the push?", "--force", true)]
+    [InlineData("Warm the cache first?", "rm ", false)]
+    public void APatternMatchesWholeWords_NotSubstrings(string surface, string pattern, bool expected)
+    {
+        Assert.Equal(expected, HighRisk_Classifier.Is_HighRisk(surface, [pattern]));
+        Assert.Equal(expected ? pattern : null, HighRisk_Classifier.Find_MatchedPattern_OrNull(surface, [pattern]));
+    }
+
+    [Fact]
+    public void APatternIsStillALiteral_NeverARegexTheOwnerWrote()
+    {
+        // A config entry full of metacharacters matches itself and nothing else — it cannot become
+        // a pattern that matches everything, and it cannot throw at parse time.
+        Assert.True(HighRisk_Classifier.Is_HighRisk("run c++ .* now?", ["c++ .*"]));
+        Assert.False(HighRisk_Classifier.Is_HighRisk("run anything at all?", ["c++ .*"]));
+    }
 }

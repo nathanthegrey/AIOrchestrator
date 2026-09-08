@@ -3255,7 +3255,7 @@ internal sealed class BridgeEngineModel(
                 {
                     await Send_QuestionWithButtons_Async(
                         threadId, questionPrompt, optionLabels, append.Channel,
-                        directives.Deadline, directives.DefaultOptionIndex, entry.Body, cancellationToken);
+                        directives.Deadline, directives.DefaultOptionIndex, cancellationToken);
                 }
 
                 foreach (var photoPath in photoPaths)
@@ -3459,7 +3459,6 @@ internal sealed class BridgeEngineModel(
         Channels.DiscoveredChannel.IDiscoveredChannel channel,
         TimeSpan? deadline,
         int? defaultOptionIndex,
-        string riskSurfaceBody,
         CancellationToken cancellationToken)
     {
         var client = _telegramClient
@@ -3528,7 +3527,7 @@ internal sealed class BridgeEngineModel(
         // gate exists for, so the surface being matched is deliberately the widest one the owner
         // actually reads.
         var isHighRisk = HighRisk_Classifier.Is_HighRisk(
-            Compose_RiskSurface(questionPrompt, optionLabels, riskSurfaceBody),
+            Compose_RiskSurface(questionPrompt, optionLabels),
             guardrails.HighRiskPatterns);
 
         // A HIGH-RISK QUESTION LOSES ITS DEFAULT HERE, at the point of asking, rather than being
@@ -3574,7 +3573,7 @@ internal sealed class BridgeEngineModel(
             if (isHighRisk)
             {
                 var matched = HighRisk_Classifier.Find_MatchedPattern_OrNull(
-                    Compose_RiskSurface(questionPrompt, optionLabels, riskSurfaceBody),
+                    Compose_RiskSurface(questionPrompt, optionLabels),
                     guardrails.HighRiskPatterns);
                 _log.Log_Info(channel.OrchId, $"Question classified HIGH RISK (matched '{matched}') — a tap will require the read-back code");
             }
@@ -3598,13 +3597,25 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// Everything a high-risk pattern may be found in: the question, every option label, and the
-    /// entry body the question came from. ONE composition, used by both the decision and the log
-    /// line that explains it — two would be two places for the surface to drift.
+    /// Everything a high-risk pattern may be found in: the question and every option label — what
+    /// the owner is actually deciding. ONE composition, used by both the decision and the log line
+    /// that explains it, because two would be two places for the surface to drift.
+    ///
+    /// <para>
+    /// THE ENTRY BODY WAS IN HERE AND IS NOT ANY MORE. It was added so that
+    /// `QUESTION: How should I proceed?` / `OPTION: Push the release branch to main` could not
+    /// classify as safe — but that danger is in the OPTION, which is still read. What the body
+    /// added was the narrative around the question, and on 2026-09-07 it locked four pure product
+    /// questions in one afternoon because the prose said "the deployed engine crashes on these
+    /// keys" and "a deploy check already blocks this from shipping". Nothing was being deployed.
+    /// A false positive is not free: it is a 4-digit code in front of a decision that needed none,
+    /// and a lock that fires on what the agent happened to mention is one the owner learns to type
+    /// through — which costs exactly the operation this gate exists for.
+    /// </para>
     /// </summary>
-    static string Compose_RiskSurface(string questionPrompt, IReadOnlyList<string> optionLabels, string body)
+    static string Compose_RiskSurface(string questionPrompt, IReadOnlyList<string> optionLabels)
     {
-        return $"{questionPrompt}\n{string.Join('\n', optionLabels)}\n{body}";
+        return $"{questionPrompt}\n{string.Join('\n', optionLabels)}";
     }
 
     /// <summary>
