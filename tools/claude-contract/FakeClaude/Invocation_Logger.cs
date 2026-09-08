@@ -75,17 +75,17 @@ public static class Invocation_Logger
     /// process's MESSAGES be counted independently of the process starts that carry them — without
     /// it, a restart under the fallback ladder would shift every later turn's scenario entry by one.
     /// </summary>
-    public static (int Overall, int ForName) Append(string logPath, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind = KIND_INVOCATION)
+    public static (int Overall, int ForName) Append(string logPath, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind = KIND_INVOCATION, string? stdin = null)
     {
         // SHARED, AND CONCURRENTLY. The dispatcher allows ten turns at once and they share one
         // working directory, so two fakes write this file at the same moment — and
         // File.AppendAllText opens it FileShare.Read, which makes the second one die with an
         // IOException the suite would read as a turn error. Read and append under one exclusive
         // handle, retried, so the counters below are computed from what is really there.
-        return Append_Serialised(logPath, rawArgs, args, prompt, workingDirectory, lineKind);
+        return Append_Serialised(logPath, rawArgs, args, prompt, workingDirectory, lineKind, stdin);
     }
 
-    static (int Overall, int ForName) Append_Serialised(string logPath, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind)
+    static (int Overall, int ForName) Append_Serialised(string logPath, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind, string? stdin)
     {
         var folder = Path.GetDirectoryName(logPath);
 
@@ -97,7 +97,7 @@ public static class Invocation_Logger
             try
             {
                 using var stream = new FileStream(logPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-                return Append_ToOpenLog(stream, rawArgs, args, prompt, workingDirectory, lineKind);
+                return Append_ToOpenLog(stream, rawArgs, args, prompt, workingDirectory, lineKind, stdin);
             }
             catch (IOException) when (attempt < 200)
             {
@@ -106,7 +106,7 @@ public static class Invocation_Logger
         }
     }
 
-    static (int Overall, int ForName) Append_ToOpenLog(FileStream stream, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind)
+    static (int Overall, int ForName) Append_ToOpenLog(FileStream stream, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind, string? stdin)
     {
         using var reader = new StreamReader(stream, leaveOpen: true);
         var existing = reader.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -149,6 +149,7 @@ public static class Invocation_Logger
             ["name"] = args.Name,
             ["args"] = arguments,
             ["prompt"] = prompt,
+            ["stdin"] = stdin,
             ["prompt_source"] = args.PositionalPrompt != null ? "argument" : "stdin",
             [LINE_KIND_KEY] = lineKind,
             ["cwd"] = workingDirectory,

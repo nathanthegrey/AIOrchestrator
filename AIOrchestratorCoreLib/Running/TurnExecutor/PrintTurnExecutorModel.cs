@@ -37,7 +37,18 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         CancellationToken cancellationToken)
     {
         var arguments = PrintTurnCommand_Builder.Build_Arguments(state, roleConfig, sessionId, resumeTranscript, null);
-        var prompt = resumeTranscript ? PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources) : null;
+        // A resumed turn has always taken its entries on stdin. A FRESH turn (ResumeModes.Fresh) used
+        // to take nothing — the role command alone — and spent most of its calls reading channel files
+        // to rediscover what the bridge had just decided was pending (measured 2026-09-08: 7.8 of 9.2
+        // calls per general-supervisor turn). It now gets the same entries, with a preamble that says
+        // what it is. The FIRST turn of a transcript-mode session stays positional-only: its boot
+        // sequence (read the channel, greet once) is right for a session that will live on.
+        var fresh = roleConfig.Resume == ResumeModes.Fresh;
+        var prompt = resumeTranscript
+            ? PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources)
+            : fresh && pending.Count > 0
+                ? PrintTurnPrompt_Builder.Build_FreshSession(requestId, SessionRole_Names.Build_RoleCommand(state.Role, state.OrchId, state.MemberId), pending, sources, greetsOnBoot: state.Role == SessionRoles.General)
+                : null;
 
         var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
 

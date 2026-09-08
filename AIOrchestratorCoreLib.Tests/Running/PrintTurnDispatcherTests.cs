@@ -336,38 +336,141 @@ public class PrintTurnDispatcherTests
 
         Assert.NotEqual(invocations[0]["session_id"]!.GetValue<string>(), invocations[1]["session_id"]!.GetValue<string>());
 
+        // A fresh turn is TOLD what is pending (2026-09-08) instead of re-reading the channel to find
+        // out; the general keeps its per-launch greeting, which is an owner directive.
+        foreach (var invocation in invocations)
+        {
+            var stdin = invocation["stdin"]!.GetValue<string>();
+            Assert.Contains(PrintTurnPrompt_Builder.FRESH_SESSION_PREAMBLE, stdin);
+            Assert.DoesNotContain(PrintTurnPrompt_Builder.FRESH_SESSION_NO_GREETING, stdin);
+            Assert.DoesNotContain(PrintTurnPrompt_Builder.ALREADY_EXECUTED_PREFIX, stdin);
+        }
+        Assert.Contains("status?", invocations[0]["stdin"]!.GetValue<string>());
+        Assert.Contains("and now?", invocations[1]["stdin"]!.GetValue<string>());
+        Assert.DoesNotContain("status?", invocations[1]["stdin"]!.GetValue<string>());
+
         // The general's entries are signed 'supervisor' — the word its channel has always carried.
         var entries = ChannelEntry_Parser.Parse_All(File.ReadAllText(harness.Paths.GeneralChannelFile));
         Assert.Equal(2, entries.Count(entry => entry.Author == ChannelAuthors.Supervisor && entry.Subject == "general supervisor online"));
     }
 
     [Fact]
-    public async Task StopAsync_KillsAnInFlightTurn_AndLeavesTheEntryPending()
+    public async Task FreshMode_HandsAMemberItsPendingEntriesOnStdin_AndTellsItNotToGreet()
     {
+        using var harness = new PrintRunnerTestHarness("implementer", resumeForMembers: "fresh");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
+        harness.Write_Scenario("""{"default":{"result":"ack\n\ndone"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Append_Supervisor(harness, orchId, memberId, "BRIEF — split the barrel", "two commits");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
+        Append_Supervisor(harness, orchId, memberId, "second brief", "more");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 2, PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        var invocations = harness.Read_Invocations();
+        Assert.Equal(2, invocations.Count);
+
+        foreach (var invocation in invocations)
+        {
+            var args = PrintRunnerTestHarness.Args(invocation);
+            Assert.Contains("--session-id", args);
+            Assert.DoesNotContain("--resume", args);
+            Assert.StartsWith("/", args[^1]);
+
+            var stdin = invocation["stdin"]!.GetValue<string>();
+            Assert.Contains(PrintTurnPrompt_Builder.FRESH_SESSION_PREAMBLE, stdin);
+            Assert.Contains(PrintTurnPrompt_Builder.FRESH_SESSION_NO_GREETING, stdin);
+            Assert.Contains("If your role command `", stdin);
+            Assert.DoesNotContain(PrintTurnPrompt_Builder.ALREADY_EXECUTED_PREFIX, stdin);
+        }
+
+        Assert.NotEqual(invocations[0]["session_id"]!.GetValue<string>(), invocations[1]["session_id"]!.GetValue<string>());
+        Assert.Contains("BRIEF — split the barrel", invocations[0]["stdin"]!.GetValue<string>());
+        Assert.Contains("second brief", invocations[1]["stdin"]!.GetValue<string>());
+        Assert.DoesNotContain("BRIEF — split the barrel", invocations[1]["stdin"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task TranscriptMode_FirstTurn_StaysPositionalOnly()
+    {
+        // The first turn of a session that will live on keeps its boot sequence (read the channel,
+        // greet once): the stdin entries are a fresh-mode contract, not a change to transcript mode.
         using var harness = new PrintRunnerTestHarness("implementer");
         var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
-        harness.Write_Scenario("""{"default":{"delay_ms":20000}}""");
+        harness.Write_Scenario("""{"default":{"result":"imp-1 online\n\nready"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Append_Supervisor(harness, orchId, memberId, "hello", "a");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        var invocation = Assert.Single(harness.Read_Invocations());
+        Assert.StartsWith("/", invocation["prompt"]!.GetValue<string>());
+        var stdin = invocation["stdin"]?.GetValue<string>() ?? string.Empty;
+        Assert.Equal(string.Empty, stdin);
+    }
+
+    [Fact]
+    public async Task StopAsync_DrainsAnInFlightTurn_ThenStops()
+    {
+        // Measured 2026-09-06→08: 17 turns (112 M tokens) died within four minutes of a `Daemon
+        // stopping` line, because Stop cancelled the running turns in the same instant it stopped
+        // admitting new ones. A running turn now ends on its own; nothing is left to redo.
+        using var harness = new PrintRunnerTestHarness("implementer");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
+        harness.Write_Scenario("""{"default":{"delay_ms":3000,"result":"slow one\n\nfinished"}}""");
         var dispatcher = harness.Create_Dispatcher();
 
         Append_Supervisor(harness, orchId, memberId, "slow", "a");
-        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => dispatcher.InFlightCount == 1, PrintRunnerTestHarness.GENEROUS));
+        // RUNNING, not merely admitted: the fake logs its invocation before it sleeps, so one logged
+        // invocation means the process is alive inside its delay. An entry in the in-flight table alone
+        // could still be waiting for its slot — and a drain refuses those on purpose.
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_Invocations().Count == 1, PrintRunnerTestHarness.GENEROUS));
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await dispatcher.Stop_Async();
         stopwatch.Stop();
 
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"stop took {stopwatch.Elapsed}");
+        Assert.True(stopwatch.Elapsed >= TimeSpan.FromSeconds(2), $"stop did not wait for the turn: {stopwatch.Elapsed}");
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(40), $"stop took {stopwatch.Elapsed}");
         Assert.Equal(0, dispatcher.InFlightCount);
-        var state = harness.Read_State(SessionRoles.Implementer, orchId, memberId);
-        Assert.Empty(state.ExecutedTurns);
-        Assert.Empty(Assert.Single(state.Cursors).Delivered);
 
-        // A SHUTDOWN IS NOT A TIMEOUT. Closing the app while a turn runs cancels the same linked
-        // token the per-turn timeout uses; read as one, three ordinary restarts spent all three
-        // attempts and stalled a session that had done nothing wrong — with a `turn_ended … timeout`
-        // in the member's channel each time, describing a failure that never happened.
+        var state = harness.Read_State(SessionRoles.Implementer, orchId, memberId);
+        Assert.Single(state.ExecutedTurns);
         Assert.Equal(0, state.FailedAttempts);
         var entries = ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId));
+        Assert.Contains(entries, entry => entry.Subject == "slow one");
+        Assert.Contains(entries, entry => entry.Subject.Contains(PrintTurn_Words.TURN_ENDED_SUBJECT) && !entry.Subject.Contains("timeout"));
+    }
+
+    [Fact]
+    public async Task StopAsync_AdmitsNoQueuedTurnWhileDraining_AndLeavesItPending()
+    {
+        // One slot per orchestration: the second member's turn is queued behind the first. The drain
+        // lets the running one finish and refuses the queued one — its entries stay pending for the
+        // next start, with no attempt spent and no `turn_ended` written about a turn that never ran.
+        using var harness = new PrintRunnerTestHarness("implementer", maxPerOrchestration: 1);
+        var (orchId, first) = harness.Register_Member(MemberKinds.Implementer);
+        var (_, second) = harness.Register_Member(MemberKinds.Implementer);
+        harness.Write_Scenario("""{"default":{"delay_ms":3000,"result":"done\n\nok"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Append_Supervisor(harness, orchId, first, "slow", "a");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_Invocations().Count == 1, PrintRunnerTestHarness.GENEROUS));
+        Append_Supervisor(harness, orchId, second, "queued", "b");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => dispatcher.InFlightCount == 2, PrintRunnerTestHarness.GENEROUS));
+
+        await dispatcher.Stop_Async();
+
+        Assert.Single(harness.Read_Invocations());
+        Assert.Single(harness.Read_State(SessionRoles.Implementer, orchId, first).ExecutedTurns);
+
+        var queued = harness.Read_State(SessionRoles.Implementer, orchId, second);
+        Assert.Empty(queued.ExecutedTurns);
+        Assert.Equal(0, queued.FailedAttempts);
+        Assert.Empty(Assert.Single(queued.Cursors).Delivered);
+        var entries = ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, second));
         Assert.DoesNotContain(entries, entry => entry.Subject.Contains(PrintTurn_Words.TURN_ENDED_SUBJECT));
         Assert.DoesNotContain(entries, entry => entry.Subject.Contains(PrintTurn_Words.TURN_STALLED_SUBJECT));
     }

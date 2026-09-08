@@ -26,6 +26,62 @@ public static class PrintTurnPrompt_Builder
     /// <summary>Opens the block of entries that came from one channel. The session answers with <see cref="TurnReply_Splitter.TO_MARKER"/>.</summary>
     public const string SOURCE_LABEL_PREFIX = "--- from ";
 
+    /// <summary>
+    /// Opens the stdin prompt of a FRESH turn — a session that has just run its role command and
+    /// holds no transcript (<see cref="ResumeModes.Fresh"/>). Measured 2026-09-08 on the one role
+    /// that already ran fresh, the general supervisor: 9.2 model calls per turn, 7.8 of them reading
+    /// channel files to find out what the bridge already knew was pending — each call paying the
+    /// whole boot again. The entries travel with the prompt instead, exactly as a resumed turn gets
+    /// them; the channel stays the history to consult for a fact, not the to-do list to rediscover.
+    /// </summary>
+    public const string FRESH_SESSION_PREAMBLE =
+        "You are a FRESH session on an existing channel: your role command has just run and you hold no memory of earlier turns. " +
+        "The entries below are your pending traffic — the bridge tracked them, so do not re-derive them from the channel; read the channel only for a fact you need from the history.";
+
+    /// <summary>
+    /// A member's boot sequence files an "<c>imp-1 online</c>" entry, and the bridge mirrors that
+    /// subject to the owner's phone. Correct once per session in transcript mode; in fresh mode
+    /// every turn is a session, and the phone would read "online" at every turn all morning.
+    /// The general supervisor is the exception: its greeting per launch is an owner directive
+    /// (2026-08-25, "I can't know when I can start writing on telegram"), so it keeps it.
+    /// </summary>
+    public const string FRESH_SESSION_NO_GREETING =
+        "Do not file the online greeting your boot sequence describes — this channel already carries your earlier entries, and a greeting per turn is noise on the owner's phone.";
+
+    /// <summary>
+    /// HOW THE ROLE COMMAND AND THIS PROMPT MEET IS NOT MEASURED. The fresh turn passes the role command
+    /// as the positional prompt and this text on stdin — a combination the 2026-09-05 study never ran,
+    /// and the live test written for it (<c>Print_SlashCommandPositional_PlusStdinInstruction_BothReachTheModel</c>)
+    /// hit the account's weekly limit on 2026-09-08 before it could answer. Three outcomes are possible
+    /// and this line makes all three safe: stdin ignored → today's behaviour (role command only);
+    /// both delivered → the intended one; stdin prepended so the slash command is no longer first and
+    /// does not expand → the session reads this and runs its role command itself, via the Skill tool.
+    /// </summary>
+    public const string FRESH_SESSION_ROLE_FALLBACK = "If your role command {0} has not run at the start of this message, invoke it now with the Skill tool before acting on anything below.";
+
+    public static string Build_FreshSession(string requestId, string roleCommand, IReadOnlyList<PendingEntry> pending, IReadOnlyList<ITurnSource> sources, bool greetsOnBoot)
+    {
+        if (pending.Count == 0)
+            throw new ArgumentException("A fresh-session prompt carries pending entries; a turn nobody triggered is the boot turn, which takes no stdin prompt", nameof(pending));
+
+        var prompt = new StringBuilder();
+        prompt.Append("[bridge turn ").Append(requestId).Append("]\n");
+        prompt.Append(FRESH_SESSION_PREAMBLE);
+        prompt.Append(' ').Append(string.Format(FRESH_SESSION_ROLE_FALLBACK, $"`{roleCommand}`"));
+        if (!greetsOnBoot)
+            prompt.Append(' ').Append(FRESH_SESSION_NO_GREETING);
+        prompt.Append("\n\n");
+
+        var multiSource = sources.Count > 1;
+        if (multiSource)
+            Append_MultiSourceTraffic(prompt, pending);
+        else
+            Append_SingleSourceTraffic(prompt, pending);
+
+        prompt.Append(multiSource ? Describe_MultiSourceContract(sources) : SINGLE_SOURCE_CONTRACT);
+        return prompt.ToString();
+    }
+
     public static string Build_FollowUp(string requestId, IReadOnlyList<PendingEntry> pending, IReadOnlyList<int> alreadyExecutedTurns, IReadOnlyList<ITurnSource> sources)
     {
         var prompt = new StringBuilder();

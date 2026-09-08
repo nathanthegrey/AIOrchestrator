@@ -57,7 +57,11 @@ if (parsed.Unknown.Count > 0)
 if (parsed.InputFormat == StreamJson_Responder.INPUT_FORMAT)
     return StreamJson_Responder.Run(parsed, rawArgs, Directory.GetCurrentDirectory());
 
-var prompt = parsed.PositionalPrompt ?? Read_StdinPrompt();
+// THE REAL CLI'S RULE FOR "BOTH" IS NOT MEASURED (live test pending, weekly limit 2026-09-08). The
+// fake keeps its old rule — the positional prompt wins — and RECORDS what arrived on stdin beside
+// it, so a test can pin what the bridge sent without the fake pretending to know what the model saw.
+var stdinText = Read_StdinPrompt();
+var prompt = parsed.PositionalPrompt ?? stdinText;
 
 if (string.IsNullOrWhiteSpace(prompt))
 {
@@ -93,7 +97,7 @@ if (parsed.SessionId != null && Invocation_Logger.Has_ClaimedSessionId(logPath, 
 // keeps its place because it reads the log for its own answer and would otherwise find itself.
 var unknownResume = parsed.Resume != null && !Invocation_Logger.Has_ClaimedSessionId(logPath, parsed.Resume);
 
-var (overall, forName) = Invocation_Logger.Append(logPath, rawArgs, parsed, prompt, workingDirectory);
+var (overall, forName) = Invocation_Logger.Append(logPath, rawArgs, parsed, prompt, workingDirectory, stdin: parsed.PositionalPrompt == null ? null : stdinText);
 
 if (unknownResume)
 {

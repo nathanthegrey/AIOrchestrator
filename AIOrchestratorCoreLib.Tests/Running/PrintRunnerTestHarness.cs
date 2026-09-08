@@ -37,9 +37,10 @@ public sealed class PrintRunnerTestHarness : IDisposable
     readonly int _maxConcurrent;
     readonly int _maxPerOrchestration;
     readonly string _resumeForGeneral;
+    readonly string _resumeForMembers;
     readonly double _streamSilenceSeconds;
 
-    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120)
+    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript")
     {
         TempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-print-runner-{Guid.NewGuid():N}");
         RepoPath = Path.Combine(TempRoot, "repo");
@@ -53,6 +54,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
         _maxConcurrent = maxConcurrent;
         _maxPerOrchestration = maxPerOrchestration;
         _resumeForGeneral = resumeForGeneral;
+        _resumeForMembers = resumeForMembers;
         _streamSilenceSeconds = streamSilenceSeconds;
 
         Directory.CreateDirectory(Paths.Root);
@@ -82,7 +84,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
             runners[role] = new JsonObject
             {
                 ["runner"] = parts.Length > 1 ? parts[1].Trim() : "print",
-                ["resume"] = role == "general" ? _resumeForGeneral : "transcript",
+                ["resume"] = role == "general" ? _resumeForGeneral : _resumeForMembers,
             };
         }
 
