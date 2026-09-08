@@ -74,4 +74,76 @@ public class EntryAttachmentPolicyTests
 
         Assert.Contains(Repo, EntryAttachment_Policy.Describe(AttachmentVerdicts.OutsideAllowedRoots, "/x/y.html", Roots), StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData(".png")]
+    [InlineData(".jpg")]
+    [InlineData(".JPEG")]
+    [InlineData(".webp")]
+    [InlineData(".gif")]
+    public void APictureIsSentAsAPicture(string extension)
+    {
+        var verdict = EntryAttachment_Policy.Decide(Path.Combine(Repo, "shot" + extension), Roots, exists: true, lengthBytes: 500_000, asPicture: true);
+        Assert.Equal(AttachmentVerdicts.Send, verdict);
+    }
+
+    [Theory]
+    [InlineData(".html")]
+    [InlineData(".csv")]
+    [InlineData(".md")]
+    [InlineData("")]
+    public void ANonPictureUnderIMAGE_IsRefused_RatherThanHandedToTelegramToReject(string extension)
+    {
+        // Measured 2026-09-08: four HTML mockups went out as IMAGE:, Telegram answered
+        // `400 IMAGE_PROCESS_FAILED` to each, and the only trace was a log line nobody reads.
+        var verdict = EntryAttachment_Policy.Decide(Path.Combine(Repo, "mockup" + extension), Roots, exists: true, lengthBytes: 30_000, asPicture: true);
+        Assert.Equal(AttachmentVerdicts.NotAPicture, verdict);
+
+        // The same file is perfectly sendable as a document — which is what the refusal must say.
+        Assert.Equal(
+            AttachmentVerdicts.Send,
+            EntryAttachment_Policy.Decide(Path.Combine(Repo, "mockup" + extension), Roots, exists: true, lengthBytes: 30_000, asPicture: false));
+    }
+
+    [Fact]
+    public void TheRefusalForANonPicture_NamesTheOtherMarker_BecauseThatIsTheFix()
+    {
+        var text = EntryAttachment_Policy.Describe(AttachmentVerdicts.NotAPicture, "/x/mockup.html", Roots, asPicture: true);
+
+        Assert.Contains("ATTACH: /x/mockup.html", text, StringComparison.Ordinal);
+        Assert.Contains("IMAGE_PROCESS_FAILED", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void APictureHasTelegramsSmallerCap_AndTheRefusalPointsAtTheOtherMarker()
+    {
+        Assert.Equal(
+            AttachmentVerdicts.TooLarge,
+            EntryAttachment_Policy.Decide(Path.Combine(Repo, "huge.png"), Roots, exists: true, lengthBytes: EntryAttachment_Policy.MAX_PICTURE_BYTES + 1, asPicture: true));
+
+        // The same size is fine as a document, and the refusal says so rather than leaving the agent
+        // to guess that the two markers have different ceilings.
+        Assert.Equal(
+            AttachmentVerdicts.Send,
+            EntryAttachment_Policy.Decide(Path.Combine(Repo, "huge.png"), Roots, exists: true, lengthBytes: EntryAttachment_Policy.MAX_PICTURE_BYTES + 1, asPicture: false));
+
+        Assert.Contains(
+            "ATTACH",
+            EntryAttachment_Policy.Describe(AttachmentVerdicts.TooLarge, "/x/huge.png", Roots, asPicture: true),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryRefusal_NamesTheMarkerItIsAbout()
+    {
+        foreach (var verdict in new[] { AttachmentVerdicts.MissingFile, AttachmentVerdicts.OutsideAllowedRoots, AttachmentVerdicts.TooLarge, AttachmentVerdicts.NotAPicture })
+        {
+            Assert.Contains("IMAGE", EntryAttachment_Policy.Describe(verdict, "/x/y.png", Roots, asPicture: true), StringComparison.Ordinal);
+        }
+
+        foreach (var verdict in new[] { AttachmentVerdicts.MissingFile, AttachmentVerdicts.OutsideAllowedRoots, AttachmentVerdicts.TooLarge })
+        {
+            Assert.Contains("ATTACH", EntryAttachment_Policy.Describe(verdict, "/x/y.html", Roots, asPicture: false), StringComparison.Ordinal);
+        }
+    }
 }

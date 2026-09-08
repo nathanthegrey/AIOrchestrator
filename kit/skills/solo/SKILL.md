@@ -162,7 +162,7 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   while the question does not, with an entry here naming every line you left out.
   The app adds two buttons of its own: "❔ Explain the options" spends the buttons, so you answer
   short and ask again; "💬 Let's talk" does not — the question stays live, nothing they type while
-  you talk is filed as their answer, and you reply in prose without re-asking. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` (under the repo or the supervision folder, ≤ 50 MB; a refusal is written here, never texted).
+  you talk is filed as their answer, and you reply in prose without re-asking. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` — `IMAGE:` is pictures only, an HTML file sent that way is refused. Both read from the repo, your channel folder or `~/mockups/`; 10 MB a picture, 50 MB a file; a refusal is written here with its fix, never texted.
 - **A question that can wait for ever usually does. Bound it: `DEADLINE:` and `DEFAULT:`.** Two
   optional lines, written beside `QUESTION:`/`OPTION:` and read by the app the same way:
 
