@@ -27,10 +27,15 @@ public class AwayModePolicyTests
         Assert.Equal(expected, AwayMode_Policy.Should_GoQuiet(unanswered));
     }
 
+    /// <summary>AT_THE_PC / AT_THE_PHONE name the ownerAtAPc argument at every call below.</summary>
+    const bool AT_THE_PC = true;
+
+    const bool AT_THE_PHONE = false;
+
     [Fact]
     public void Away_NeedsBothSomeoneWaitingAndFifteenMinutesOfSilence()
     {
-        Assert.True(AwayMode_Policy.Should_EnterAway(true, T0, T0.AddMinutes(AwayMode_Policy.AWAY_AFTER_MINUTES)));
+        Assert.True(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(AwayMode_Policy.AWAY_AFTER_MINUTES)));
     }
 
     /// <summary>
@@ -40,7 +45,7 @@ public class AwayModePolicyTests
     [Fact]
     public void Silence_WithNoOrchestrationWaiting_IsNotAway()
     {
-        Assert.False(AwayMode_Policy.Should_EnterAway(false, T0, T0.AddHours(6)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(false, AT_THE_PHONE, T0, T0.AddHours(6)));
     }
 
     /// <summary>
@@ -51,8 +56,8 @@ public class AwayModePolicyTests
     public void ABurstOfQuestions_GoesQuietButDoesNotGoAway()
     {
         Assert.True(AwayMode_Policy.Should_GoQuiet(3));
-        Assert.False(AwayMode_Policy.Should_EnterAway(true, T0, T0.AddMinutes(1)));
-        Assert.False(AwayMode_Policy.Should_EnterAway(true, T0, T0.AddMinutes(14)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(1)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, T0, T0.AddMinutes(14)));
     }
 
     /// <summary>
@@ -64,7 +69,71 @@ public class AwayModePolicyTests
     {
         var chattedRecently = T0.AddMinutes(14);
 
-        Assert.False(AwayMode_Policy.Should_EnterAway(true, chattedRecently, T0.AddMinutes(20)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PHONE, chattedRecently, T0.AddMinutes(20)));
+    }
+
+    // -----------------------------------------------------------------------------------
+    // At the pc — owner's ruling, 2026-09-07
+    // -----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// THE OWNER'S REPORT, 2026-09-07: *"if I'm at the pc, and use the pc command to tell the
+    /// session I'm working from there and obviously not answering from telegram anymore, at some
+    /// point it goes in automatic away mode... when I'm at the pc... automatic away mode should
+    /// never happen"*.
+    ///
+    /// Their log had it exactly: da-vinci-fintech-suite-26 went Terminal at 09:53, away mode fired
+    /// app-wide at 10:23:50 calling them unresponsive, and they left that terminal at 10:30:56.
+    ///
+    /// The inputs here are the ones that USED to be sufficient — someone waiting, and silence well
+    /// past the threshold — so this fails against the old two-argument rule for the right reason.
+    /// </summary>
+    [Fact]
+    public void AtThePc_NeverGoesAway_HoweverLongTheTelegramSilence()
+    {
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PC, T0, T0.AddMinutes(AwayMode_Policy.AWAY_AFTER_MINUTES)));
+        Assert.False(AwayMode_Policy.Should_EnterAway(true, AT_THE_PC, T0, T0.AddHours(9)));
+    }
+
+    /// <summary>
+    /// Presence is a FACT the owner stated; "nobody is waiting" and "they have been silent" are
+    /// inferences about the same thing. The fact has to win, so being at the pc is checked before
+    /// either — and this pins that it is not merely one more term that a strong enough silence
+    /// could outvote.
+    /// </summary>
+    [Fact]
+    public void AtThePc_OutranksEveryOtherInput()
+    {
+        foreach (var anyQuiet in new[] { true, false })
+        {
+            foreach (var minutes in new[] { 0, 14, 15, 600 })
+                Assert.False(AwayMode_Policy.Should_EnterAway(anyQuiet, AT_THE_PC, T0, T0.AddMinutes(minutes)));
+        }
+    }
+
+    /// <summary>
+    /// The state, not just the transition. A spell that began while the owner was out and was still
+    /// running when they sat down must END — guarding only the entry would leave it standing until
+    /// they next typed into Telegram, which is the chore /pc exists to spare them.
+    /// </summary>
+    [Fact]
+    public void AwayThatWasAlreadyOn_EndsWhenTheOwnerReachesAPc()
+    {
+        Assert.True(AwayMode_Policy.Should_LeaveAway(awayActive: true, ownerAtAPc: AT_THE_PC));
+    }
+
+    /// <summary>
+    /// And it says nothing about the other direction: away that is off stays off, and an owner on
+    /// their phone is not a reason to end a spell — only their speaking is, which is a different
+    /// path entirely (Note_OwnerSpoke_AndWasAway).
+    /// </summary>
+    [Theory]
+    [InlineData(false, AT_THE_PC)]
+    [InlineData(true, AT_THE_PHONE)]
+    [InlineData(false, AT_THE_PHONE)]
+    public void LeavingAway_IsOnlyForAnActiveSpellAndAnOwnerAtAPc(bool awayActive, bool ownerAtAPc)
+    {
+        Assert.False(AwayMode_Policy.Should_LeaveAway(awayActive, ownerAtAPc));
     }
 
     [Fact]

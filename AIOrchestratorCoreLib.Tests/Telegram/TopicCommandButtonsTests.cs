@@ -8,7 +8,7 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// The owner wants the commands they reach for constantly to be permanent tappable furniture in
 /// every topic — an inline keyboard on the status line AND a bar above the input box.
 ///
-/// The same four commands rendered twice and parsed once is three places to drift, and every drift
+/// The same commands rendered twice and parsed once is three places to drift, and every drift
 /// is silent on the owner's side: a button that renders and does nothing, or a bar offering a verb
 /// the lexer no longer knows. These tests pin the three to one array.
 /// </summary>
@@ -20,14 +20,19 @@ public class TopicCommandButtonsTests
     /// <summary>A label wider than this stops being readable on a phone and starts wrapping.</summary>
     const int MAX_LABEL_LENGTH = 20;
 
+    /// <summary>What the reply keyboard chunks by - mirrors TopicCommandButtons' own column count.</summary>
+    const int REPLY_KEYBOARD_COLUMNS = 2;
+
     /// <summary>
-    /// /refresh joined on the owner's call, 2026-08-25: *"It happens so often that the question mark
-    /// gets stuck that this command should be one of the main command buttons always present."*
+    /// /pc and /close REPLACED /refresh on the owner's call, 2026-09-07: *"Let's remove the /refresh
+    /// button from the pulse message, an place the /close and /pc command as buttons instead."*
+    /// /refresh remains a typed command and keeps its entry in Telegram's "/" menu; only the
+    /// standing button went.
     /// </summary>
     [Fact]
     public void TheCommands_AreTheOnesTheOwnerAskedFor_InDisplayOrder()
     {
-        Assert.Equal(new[] { "screen", "show", "merge", "test", "refresh" }, TopicCommandButtons.Commands);
+        Assert.Equal(new[] { "screen", "show", "merge", "test", "pc", "close" }, TopicCommandButtons.Commands);
     }
 
     [Fact]
