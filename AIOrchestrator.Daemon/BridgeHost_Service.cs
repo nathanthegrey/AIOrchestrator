@@ -36,7 +36,8 @@ sealed class BridgeHost_Service(
     /// cancel. The engine's last act is to drain queued Telegram announcements; past this bound
     /// the sessions are killed anyway, because a hung drain must not hold up a service stop.
     /// </summary>
-    static readonly TimeSpan ENGINE_STOP_GRACE = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan ENGINE_STOP_MARGIN = TimeSpan.FromMinutes(2);
+    static readonly TimeSpan ENGINE_STOP_GRACE_FALLBACK = TimeSpan.FromMinutes(33);
 
     readonly IHostOptions _options = options;
     readonly IHostApplicationLifetime _lifetime = lifetime;
@@ -165,6 +166,18 @@ sealed class BridgeHost_Service(
         }
     }
 
+    static TimeSpan Compute_EngineStopGrace(IOrchestratorServices services)
+    {
+        try
+        {
+            return services.ConfigProvider.Get_Current().Runners.TurnTimeout + ENGINE_STOP_MARGIN;
+        }
+        catch
+        {
+            return ENGINE_STOP_GRACE_FALLBACK;
+        }
+    }
+
     static async Task Wait_ForEngineOrStop_Async(Task engineTask, CancellationToken stoppingToken)
     {
         var stopRequested = new TaskCompletionSource();
@@ -180,9 +193,16 @@ sealed class BridgeHost_Service(
     /// </summary>
     async Task Await_EngineStop_Async(Task engineTask, IOrchestratorServices services)
     {
+        // THE ENGINE'S LAST ACT IS THE DISPATCHER'S DRAIN — in-flight turns run to their end, up to the
+        // turn timeout plus a minute (PrintTurnDispatcherModel.Stop_Async). A grace shorter than that
+        // would kill exactly the work the drain exists to keep: measured 2026-09-06→08, 17 turns and
+        // 112 M tokens died within four minutes of a `Daemon stopping` line. The init system's own stop
+        // timeout has to agree (deploy/systemd: TimeoutStopSec) or it SIGKILLs first.
+        var grace = Compute_EngineStopGrace(services);
+
         try
         {
-            await engineTask.WaitAsync(ENGINE_STOP_GRACE);
+            await engineTask.WaitAsync(grace);
         }
         catch (OperationCanceledException)
         {
@@ -190,7 +210,7 @@ sealed class BridgeHost_Service(
         }
         catch (TimeoutException)
         {
-            services.Log.Log_Warning("", $"Bridge engine did not stop within {ENGINE_STOP_GRACE.TotalSeconds:0} s — proceeding with session termination");
+            services.Log.Log_Warning("", $"Bridge engine did not stop within {grace.TotalSeconds:0} s — proceeding with session termination");
         }
         catch (Exception exception)
         {

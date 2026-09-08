@@ -63,7 +63,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     const string MISADDRESSED_SUBJECT = PrintTurn_Words.MISADDRESSED_SUBJECT;
     const int ENTRY_APPEND_ATTEMPTS = 3;
     const int ENTRY_APPEND_RETRY_MILLISECONDS = 300;
-    static readonly TimeSpan STOP_GRACE = TimeSpan.FromSeconds(15);
+    /// <summary>
+    /// How long cancelled turns get to observe their cancellation and unwind, AFTER the drain. Not
+    /// the drain itself: that is <see cref="Get_DrainGrace"/>, the configured turn timeout plus a
+    /// minute, because a turn that is still legitimately running is worth exactly what it was worth
+    /// before somebody asked the app to stop.
+    /// </summary>
+    static readonly TimeSpan CANCEL_GRACE = TimeSpan.FromSeconds(15);
+    static readonly TimeSpan DRAIN_MARGIN = TimeSpan.FromMinutes(1);
+    static readonly TimeSpan DRAIN_GRACE_FALLBACK = TimeSpan.FromMinutes(31);
 
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
@@ -74,6 +82,16 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     readonly Lock _lock = new();
     readonly CancellationTokenSource _shutdown = new();
+
+    /// <summary>
+    /// "No new turns" — the first half of stopping. Measured 2026-09-06→08 on the VPS: 21 daemon
+    /// starts in 44 hours (deploys), and 17 in-flight turns, 112 M tokens, ended within four minutes
+    /// of a `Daemon stopping` line — killed mid-work, their entries re-run from scratch at the next
+    /// start. The turns ran under <see cref="_shutdown"/> alone, so Stop_Async cancelled them in the
+    /// same instant it stopped admitting new ones. The two are now two signals: this one closes the
+    /// door, <see cref="_shutdown"/> is pulled only when the drain grace has run out.
+    /// </summary>
+    readonly CancellationTokenSource _draining = new();
     readonly Dictionary<string, Task> _inFlight = [];
     readonly Dictionary<string, SessionTracker> _trackers = [];
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
@@ -162,7 +180,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     public void Tick(DateTime nowLocal)
     {
-        if (_shutdown.IsCancellationRequested)
+        if (_draining.IsCancellationRequested || _shutdown.IsCancellationRequested)
             return;
 
         var configs = _configProvider.Get_Current().Runners;
@@ -202,17 +220,42 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     public async Task Stop_Async()
     {
+        // DRAIN FIRST, CANCEL SECOND. Closing the door stops Tick and aborts turns still queued for
+        // a slot; the ones already running keep their token and finish on their own — entry appended,
+        // cursors advanced, nothing to redo at the next start. Only when the grace is spent are they
+        // cancelled, and then they get CANCEL_GRACE to unwind like before.
+        _draining.Cancel();
+
+        var running = Snapshot_InFlight();
+
+        if (running.Length > 0)
+        {
+            var grace = Get_DrainGrace();
+            _log.Log_Info(string.Empty, $"Stopping — draining {running.Length} in-flight turn(s) before the sessions are killed (up to {grace.TotalMinutes:0} min; the turn timeout plus a minute)");
+
+            try
+            {
+                await Task.WhenAll(running).WaitAsync(grace);
+                _log.Log_Info(string.Empty, "Drain complete — every in-flight turn ended on its own; nothing is left to redo at the next start");
+            }
+            catch (TimeoutException)
+            {
+                _log.Log_Warning(string.Empty, $"Drain grace of {grace.TotalMinutes:0} min elapsed with {InFlightCount} turn(s) still running — cancelling them; their entries stay pending for the next start");
+            }
+            catch
+            {
+                // A turn's own failure is recorded by Execute_Turn_Async; the drain only waits.
+            }
+        }
+
         _shutdown.Cancel();
 
-        Task[] pending;
-
-        lock (_lock)
-            pending = [.. _inFlight.Values];
+        var cancelled = Snapshot_InFlight();
 
         try
         {
-            if (pending.Length > 0)
-                await Task.WhenAll(pending).WaitAsync(STOP_GRACE);
+            if (cancelled.Length > 0)
+                await Task.WhenAll(cancelled).WaitAsync(CANCEL_GRACE);
         }
         catch
         {
@@ -233,6 +276,26 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             {
                 _log.Log_Error(string.Empty, $"The {SessionRunner_Names.Get_Word(executor.Kind)} executor did not stop cleanly", ex);
             }
+        }
+    }
+
+    Task[] Snapshot_InFlight()
+    {
+        lock (_lock)
+            return [.. _inFlight.Values];
+    }
+
+    /// <summary>The configured turn timeout plus a minute — read at stop time, so a config edit made while the app ran counts.</summary>
+    TimeSpan Get_DrainGrace()
+    {
+        try
+        {
+            return _configProvider.Get_Current().Runners.TurnTimeout + DRAIN_MARGIN;
+        }
+        catch
+        {
+            // An unreadable config at shutdown is not a reason to kill work faster than the default would.
+            return DRAIN_GRACE_FALLBACK;
         }
     }
 
@@ -546,19 +609,25 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     async Task Execute_Turn_Async(string key, string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, IReadOnlyList<ITurnSource> sources, SessionTracker tracker, IRunnerConfigs configs)
     {
+        // TWO TOKENS. A turn WAITING for a slot is admitted under both signals — a drain aborts it,
+        // its entries stay pending. A turn RUNNING holds only the shutdown token, so a drain lets it
+        // finish and only the exhausted grace cancels it.
         var cancellationToken = _shutdown.Token;
+        using var admission = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token, _draining.Token);
         var orchestrationSlots = Get_OrchestrationSlots(state.OrchId);
 
         try
         {
-            await _globalSlots.WaitAsync(cancellationToken);
+            await _globalSlots.WaitAsync(admission.Token);
 
             try
             {
-                await orchestrationSlots.WaitAsync(cancellationToken);
+                await orchestrationSlots.WaitAsync(admission.Token);
 
                 try
                 {
+                    // A slot won in the same instant the door closed is not a mandate to start.
+                    admission.Token.ThrowIfCancellationRequested();
                     await Run_Turn_Async(stateFile, state, pending, sources, tracker, configs, cancellationToken);
                 }
                 finally
@@ -573,7 +642,8 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
         catch (OperationCanceledException)
         {
-            // Shutdown: the cursors were not advanced, so the same entries are pending at the next start.
+            // Shutdown, or a drain that closed the door before this turn got a slot: the cursors were
+            // not advanced, so the same entries are pending at the next start.
         }
         catch (Exception ex)
         {

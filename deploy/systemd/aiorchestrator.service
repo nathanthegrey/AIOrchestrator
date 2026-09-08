@@ -44,7 +44,11 @@ RestartSec=5
 # is what makes the documented order true on Linux; anything still alive after TimeoutStopSec is
 # SIGKILLed cgroup-wide, so nothing can survive the stop either way.
 KillMode=mixed
-TimeoutStopSec=30
+# The daemon DRAINS in-flight turns before it exits — up to the configured turn timeout (30 min by
+# default) plus a minute — so a deploy stops killing work mid-turn. systemd must not SIGKILL it
+# first: this is that drain plus the engine's own margin. Measured 2026-09-06→08: 17 turns died
+# within four minutes of a stop under the old 30 s.
+TimeoutStopSec=2100
 
 # The bot token lives in $HOME/.claude/supervision/secrets.json, read by the bridge alone — never
 # in this unit, never in the journal.
