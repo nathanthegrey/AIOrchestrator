@@ -3180,6 +3180,10 @@ internal sealed class BridgeEngineModel(
             // IMAGE: <path> lines upload as photos; OPTION: <label> lines render as inline
             // decision buttons the owner can tap instead of typing.
             var photoPaths = Extract_MarkerLines(ref text, "IMAGE");
+
+            // ATTACH: <path> lines upload as DOCUMENTS — an HTML mockup, a CSV, a report — under
+            // EntryAttachment_Policy's containment, which IMAGE: never had (see the policy's header).
+            var attachmentPaths = Extract_MarkerLines(ref text, "ATTACH");
             var optionLabels = Extract_MarkerLines(ref text, "OPTION");
             var questionLines = Extract_MarkerLines(ref text, "QUESTION");
 
@@ -3256,6 +3260,9 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var photoPath in photoPaths)
                     await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel.OrchId, cancellationToken);
+
+                foreach (var attachmentPath in attachmentPaths)
+                    await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, cancellationToken);
 
                 // ONLY NOW is the owner's wait consumed: everything this entry had to say is on the
                 // phone, so what follows is narration again. Anything that threw above skipped this
@@ -3755,6 +3762,67 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Warning(orchId, $"Entry photo send failed for '{photoPath}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// One <c>ATTACH:</c> line → one <c>sendDocument</c>, or one refusal the AGENT reads. Best effort
+    /// like the photo: the body is already on the phone, so a failed upload costs the attachment and
+    /// nothing else. The policy is <see cref="EntryAttachment_Policy"/>; this is only its point of
+    /// effect — the roots it may attach from are the orchestration's repository and its own
+    /// supervision folder, resolved here because only the engine knows both.
+    /// </summary>
+    async Task Send_EntryAttachment_BestEffort_Async(
+        long? threadId, string attachmentPath, IDiscoveredChannel channel, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (_telegramClient == null)
+                return;
+
+            var session = _store.Get_Session_OrNull(channel.OrchId);
+            List<string> allowedRoots = [];
+
+            if (!string.IsNullOrWhiteSpace(session?.RepoPath))
+                allowedRoots.Add(session.RepoPath);
+
+            var channelFolder = Path.GetDirectoryName(channel.FilePath);
+
+            if (!string.IsNullOrWhiteSpace(channelFolder))
+                allowedRoots.Add(channelFolder);
+
+            var exists = File.Exists(attachmentPath);
+            var length = exists ? new FileInfo(attachmentPath).Length : 0L;
+            var verdict = EntryAttachment_Policy.Decide(attachmentPath, allowedRoots, exists, length);
+
+            if (verdict != AttachmentVerdicts.Send)
+            {
+                var reason = EntryAttachment_Policy.Describe(verdict, attachmentPath, allowedRoots);
+                _log.Log_Warning(channel.OrchId, reason);
+
+                // NOT DEDUPED, unlike contract coaching: every refused file is a file the owner did
+                // not get, and the agent must know each time. Audience Agent — never the phone.
+                ChannelAppender.Append_AppEntry(
+                    channel.FilePath, AppEntryAudiences.Agent, "a file you attached was not sent", reason, DateTime.Now);
+                return;
+            }
+
+            var bytes = await File.ReadAllBytesAsync(attachmentPath, cancellationToken);
+            var fileName = Path.GetFileName(attachmentPath);
+            var captionHtml = $"📎 {System.Net.WebUtility.HtmlEncode(fileName)}";
+
+            await _telegramClient.Send_Document_Async(threadId, fileName, bytes, captionHtml, cancellationToken);
+        }
+        // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
+        // with the token NOT cancelled. Canonical account in Refresh_TopicStatusLines_Async.
+        // Cost HERE: a BEST-EFFORT attachment — the body it belongs to is already on the phone.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(channel.OrchId, $"Entry attachment send failed for '{attachmentPath}': {ex.Message}");
         }
     }
 

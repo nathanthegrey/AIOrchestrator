@@ -59,6 +59,7 @@ public class OwnerMessageContractTests
     public void AnImageLine_IsNotCode()
     {
         Assert_Clean("The comparison table now shows the cap.\nIMAGE: /Users/nvene/Desktop/pricing/comparison-table.png");
+        Assert_Clean("The plan-card mockup is ready.\nATTACH: /Users/nvene/repo/mockups/plan-card.html");
     }
 
     /// <summary>Member ids are how the owner refers to the crew. They must never be flagged.</summary>

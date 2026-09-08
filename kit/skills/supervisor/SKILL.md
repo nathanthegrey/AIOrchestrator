@@ -476,6 +476,10 @@ thought across several of them hoping to be noticed.
 - **Send the owner PICTURES when a picture says it better:** add `IMAGE: <full path>` lines to
   the entry body (screenshots of a built UI, charts, failing output). The app uploads each as a
   real photo in the topic and strips the line from the text.
+- **Send the owner a FILE with `ATTACH: <full path>`** — an HTML mockup, a CSV, a report. One line
+  per file, column 0, like `IMAGE:`. The file must sit under this orchestration's repository or its
+  supervision folder and be under 50 MB; anything else is refused and you are told why in this
+  channel — the owner never sees the refusal, so re-attach from the right place.
 - **Images:** owner messages may carry an `IMAGE: <path>` line (screenshots of bugs, etc. — the
   bridge downloads them next to your channel). Read the file to inspect it; pass the path on to an
   implementer's brief when the image is part of its task.

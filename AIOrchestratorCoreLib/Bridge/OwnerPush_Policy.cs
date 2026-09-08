@@ -23,6 +23,12 @@ public static class OwnerPush_Policy
     /// <summary>Work has stopped and only the owner can restart it.</summary>
     public const string BLOCKED_MARKER = "BLOCKED ON OWNER";
 
+    /// <summary>A picture for the owner, uploaded as a photo. See <see cref="Carries_FileForTheOwner"/>.</summary>
+    public const string IMAGE_MARKER = "IMAGE:";
+
+    /// <summary>A file for the owner, uploaded as a document. See <see cref="Carries_FileForTheOwner"/>.</summary>
+    public const string ATTACH_MARKER = "ATTACH:";
+
     /// <summary>
     /// The one-line greeting a session writes as it boots — "supervisor online — …", "solo online
     /// — …". A FOURTH thing the phone gets, and the newest, because the owner cannot use this system
@@ -89,7 +95,51 @@ public static class OwnerPush_Policy
 
         return Carries_Question(rawEntryText)
             || Asks_InProse(rawEntryText)
+            || Carries_FileForTheOwner(rawEntryText)
             || rawEntryText.Contains(BLOCKED_MARKER, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A FIFTH thing the phone gets: an entry carrying a file for the owner — a screenshot
+    /// (<c>IMAGE:</c>) or a document (<c>ATTACH:</c>).
+    ///
+    /// <para>
+    /// A FILE IS A DELIVERY, NOT NARRATION. The mockups, the CSV, the failing output: the owner has
+    /// to LOOK at it, which is the whole reason it was produced, and an upload the phone never
+    /// announces is an upload nobody opens. It also cannot become the waterfall this policy exists
+    /// to prevent — a session writes a file for the owner rarely, and never on a loop.
+    /// </para>
+    /// <para>
+    /// IT WAS ALREADY BROKEN FOR <c>IMAGE:</c>, silently, and that is why this is a fix rather than
+    /// an addition: a screenshot sent as ordinary narration met the four rules above, matched none
+    /// of them, and was suppressed with its photo. It only ever arrived when the owner happened to
+    /// be waiting for a reply — which is how nobody noticed. <c>ATTACH:</c> (2026-09-07) would have
+    /// inherited exactly that, so both markers are named here.
+    /// </para>
+    /// <para>
+    /// MATCHED AT THE START OF A LINE, like the engine's own extractor, and not with
+    /// <see cref="string.Contains(string, StringComparison)"/> the way <see cref="Carries_Question"/>
+    /// is: only a column-0 marker line actually produces an upload, so a prose mention of "ATTACH:"
+    /// must not push an entry that delivers nothing.
+    /// </para>
+    /// </summary>
+    public static bool Carries_FileForTheOwner(string rawEntryText)
+    {
+        if (string.IsNullOrEmpty(rawEntryText))
+            return false;
+
+        foreach (var rawLine in rawEntryText.Split('\n'))
+        {
+            var line = rawLine.TrimEnd();
+
+            foreach (var marker in new[] { IMAGE_MARKER, ATTACH_MARKER })
+            {
+                if (line.StartsWith(marker, StringComparison.Ordinal) && line.Length > marker.Length && line[marker.Length..].Trim().Length > 0)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

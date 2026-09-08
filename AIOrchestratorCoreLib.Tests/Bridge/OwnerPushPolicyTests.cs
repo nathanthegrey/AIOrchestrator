@@ -239,4 +239,30 @@ public class OnlineGreetingPushTests
         Assert.False(OwnerPush_Policy.Is_OnlineGreeting("   "));
         Assert.False(OwnerPush_Policy.Should_Push("## [12] FROM supervisor — d — s\nimp-1 is still pricing.", false));
     }
+
+    [Fact]
+    public void AnEntryCarryingAFile_IsPushed_BecauseAFileIsADeliveryAndNotNarration()
+    {
+        // Pure narration by every other rule: no question mark, no marker, no BLOCKED.
+        Assert.True(OwnerPush_Policy.Should_Push(
+            "The plan-card mockup is ready.\nATTACH: /repo/mockups/plan-card.html\nOpen it in a browser.",
+            ownerIsWaitingForAReply: false));
+
+        // The same hole IMAGE: had, silently, until 2026-09-07.
+        Assert.True(OwnerPush_Policy.Should_Push(
+            "The comparison table now shows the cap.\nIMAGE: /repo/shots/table.png",
+            ownerIsWaitingForAReply: false));
+    }
+
+    [Fact]
+    public void AProseMentionOfTheMarkers_DoesNotPush_BecauseItDeliversNoFile()
+    {
+        // Only a column-0 marker line produces an upload — the engine's extractor is anchored.
+        Assert.False(OwnerPush_Policy.Should_Push(
+            "I will ATTACH: the report once the build is green, and add an IMAGE: of the chart.",
+            ownerIsWaitingForAReply: false));
+
+        Assert.False(OwnerPush_Policy.Carries_FileForTheOwner("ATTACH:"));
+        Assert.False(OwnerPush_Policy.Carries_FileForTheOwner("ATTACH:   "));
+    }
 }

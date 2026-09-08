@@ -154,7 +154,7 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   characters.** The app measures it and tells you when you go over. Lead with the result or the
   question; drop your reasoning unless asked.
 - Discrete choice? End the entry with a `QUESTION:` line and 2–4 `OPTION:` lines — they become
-  tappable buttons. Pictures: `IMAGE: <full path>`.
+  tappable buttons. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` (under the repo or the supervision folder, ≤ 50 MB; a refusal is written here, never texted).
 - **A question that can wait for ever usually does. Bound it: `DEADLINE:` and `DEFAULT:`.** Two
   optional lines, written beside `QUESTION:`/`OPTION:` and read by the app the same way:
 
