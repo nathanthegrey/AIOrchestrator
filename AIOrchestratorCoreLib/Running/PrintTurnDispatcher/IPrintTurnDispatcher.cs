@@ -30,6 +30,27 @@ public interface IPrintTurnDispatcher
     /// </summary>
     bool Is_TurnInFlight(string orchId, string memberId);
 
+    /// <summary>
+    /// THE /resume OVERRIDE. Drops <see cref="PrintSessionState.IPrintSessionState.RetryNotBeforeUtc"/>
+    /// on every registered session that has one, so the very next tick tries the turn again instead of
+    /// waiting out the appointment.
+    ///
+    /// <para>
+    /// Found reviewing this branch, 2026-09-09: <c>/resume</c>'s own help text is "Wake EVERY session —
+    /// use when the usage limit resets", but it wakes a session by appending fresh channel traffic, and
+    /// <c>Consider_Session</c> refuses to start a turn before <c>RetryNotBeforeUtc</c> regardless of what
+    /// is pending — so a deferred session stayed asleep through it. It also matters when the appointment
+    /// itself is wrong: <see cref="Running.LimitReset_Parser"/> falls back to UTC when the zone the CLI
+    /// named is unknown on this machine, which can put the retry up to a couple of hours LATER than the
+    /// real reset, and until now nothing could say "go anyway".
+    /// </para>
+    /// <para>
+    /// A session with no deferral is untouched — no rewrite, no log line. Reporting a clear that did not
+    /// happen would be the same lie <c>/resume</c> exists to end, in the other direction.
+    /// </para>
+    /// </summary>
+    void Clear_LimitDeferrals();
+
     /// <summary>Cancels every in-flight turn (process trees killed) and waits for them to settle.</summary>
     Task Stop_Async();
 }

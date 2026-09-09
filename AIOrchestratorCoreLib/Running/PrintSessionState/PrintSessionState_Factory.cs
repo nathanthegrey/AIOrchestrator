@@ -17,7 +17,8 @@ public static class PrintSessionState_Factory
         IReadOnlyList<ITurnCursor> cursors,
         int nextTurnNumber,
         int failedAttempts,
-        IReadOnlyList<IExecutedTurn> executedTurns)
+        IReadOnlyList<IExecutedTurn> executedTurns,
+        DateTime? retryNotBeforeUtc = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
             throw new ArgumentException($"Session id must be non-empty ('{orchId}/{memberId}')");
@@ -32,7 +33,14 @@ public static class PrintSessionState_Factory
         if (cursors.Select(cursor => cursor.SourceKey).Distinct(StringComparer.OrdinalIgnoreCase).Count() != cursors.Count)
             throw new ArgumentException($"Two cursors share a source key ('{orchId}/{memberId}') — a source is delivered under exactly one cursor or it is delivered twice");
 
-        return new PrintSessionStateModel(sessionId, sessionStarted, role, orchId, memberId, workingDirectory, model, channelFilePath, cursors, nextTurnNumber, failedAttempts, executedTurns);
+        // A NAKED DateTime IS THE BUG THIS REFUSES. The value is compared against the wall clock on
+        // every tick and written to a file read by another process, so a stamp that does not say
+        // which zone it is in would be silently wrong by the machine's offset — and CLAUDE.md
+        // decision 12 is the standing evidence that a confident wrong instant here costs hours.
+        if (retryNotBeforeUtc != null && retryNotBeforeUtc.Value.Kind != DateTimeKind.Utc)
+            throw new ArgumentException($"The scheduled retry must be UTC, got {retryNotBeforeUtc.Value.Kind} ('{orchId}/{memberId}')");
+
+        return new PrintSessionStateModel(sessionId, sessionStarted, role, orchId, memberId, workingDirectory, model, channelFilePath, cursors, nextTurnNumber, failedAttempts, executedTurns, retryNotBeforeUtc);
     }
 
     /// <summary>
@@ -45,7 +53,7 @@ public static class PrintSessionState_Factory
         return Create(sessionId, false, role, orchId, memberId, workingDirectory, model, channelFilePath, cursors, 1, 0, []);
     }
 
-    /// <summary>A turn completed: recorded, the cursors advanced, attempts reset, the transcript id possibly replaced (Fresh mode).</summary>
+    /// <summary>A turn completed: recorded, the cursors advanced, attempts reset, any scheduled retry dropped, the transcript id possibly replaced (Fresh mode).</summary>
     public static IPrintSessionState CreateFrom_Existing_TurnExecuted(IPrintSessionState source, IExecutedTurn executed, string sessionId, IReadOnlyList<ITurnCursor> cursors)
     {
         return Create(
@@ -71,7 +79,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_Cursors(IPrintSessionState source, IReadOnlyList<ITurnCursor> cursors)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc);
     }
 
     /// <summary>
@@ -81,7 +89,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_SessionClaimed(IPrintSessionState source, string sessionId)
     {
-        return Create(sessionId, true, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns);
+        return Create(sessionId, true, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc);
     }
 
     /// <summary>
@@ -92,7 +100,7 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_SessionUnclaimed(IPrintSessionState source, string sessionId)
     {
-        return Create(sessionId, false, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns);
+        return Create(sessionId, false, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc);
     }
 
     /// <summary>
@@ -102,22 +110,54 @@ public static class PrintSessionState_Factory
     /// </summary>
     public static IPrintSessionState CreateFrom_Existing_Relaunched(IPrintSessionState source, string workingDirectory, string? model)
     {
-        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, workingDirectory, model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns);
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, workingDirectory, model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, source.RetryNotBeforeUtc);
     }
 
-    /// <summary>A turn attempt failed (timeout or error): counted, nothing else moves — the same request id retries.</summary>
+    /// <summary>
+    /// A turn attempt failed (timeout or error): counted, nothing else moves — the same request id
+    /// retries after the backoff. Any scheduled retry is DROPPED: this failure is the newer fact
+    /// about the same turn, and a stale appointment would hold the backoff off for hours.
+    /// </summary>
     public static IPrintSessionState CreateFrom_Existing_AttemptFailed(IPrintSessionState source)
     {
         return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts + 1, source.ExecutedTurns);
     }
 
-    /// <summary>New traffic arrived after a stall: the attempt counter starts over for the next turn.</summary>
+    /// <summary>
+    /// THE TURN HAS AN APPOINTMENT, NOT A FAILURE. The CLI refused for a usage limit and named when
+    /// the window reopens, so the same request id waits for that instant and the attempt counter
+    /// does NOT move — measured on the VPS 2026-09-08/09, three attempts a minute apart against a
+    /// weekly quota spent the session's whole allowance and left the orchestration stalled for the
+    /// night. The one transition that writes <see cref="IPrintSessionState.RetryNotBeforeUtc"/>.
+    /// </summary>
+    public static IPrintSessionState CreateFrom_Existing_LimitDeferred(IPrintSessionState source, DateTime retryNotBeforeUtc)
+    {
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, retryNotBeforeUtc);
+    }
+
+    /// <summary>
+    /// THE APPOINTMENT IS BROKEN, NOT KEPT — <c>/resume</c>'s override (see
+    /// <see cref="PrintTurnDispatcher.IPrintTurnDispatcher.Clear_LimitDeferrals"/>). The owner is not
+    /// the mechanism that scheduled the wait, so they get to end it early: the same request id tries
+    /// again on the very next tick. The exact opposite of <see cref="CreateFrom_Existing_LimitDeferred"/>,
+    /// and like it, <see cref="IPrintSessionState.FailedAttempts"/> does not move — breaking the wait is
+    /// not a new failure of the turn any more than scheduling it was one.
+    /// </summary>
+    public static IPrintSessionState CreateFrom_Existing_LimitDeferralCleared(IPrintSessionState source)
+    {
+        return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, source.FailedAttempts, source.ExecutedTurns, null);
+    }
+
+    /// <summary>
+    /// New traffic arrived after a stall: the attempt counter starts over for the next turn, and any
+    /// scheduled retry goes with it — the appointment belonged to the turn that stalled.
+    /// </summary>
     public static IPrintSessionState CreateFrom_Existing_AttemptsReset(IPrintSessionState source)
     {
         return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber, 0, source.ExecutedTurns);
     }
 
-    /// <summary>A request id found already executed: the turn number is skipped without running anything.</summary>
+    /// <summary>A request id found already executed: the turn number is skipped without running anything, and nothing is left waiting on it.</summary>
     public static IPrintSessionState CreateFrom_Existing_TurnSkipped(IPrintSessionState source)
     {
         return Create(source.SessionId, source.SessionStarted, source.Role, source.OrchId, source.MemberId, source.WorkingDirectory, source.Model, source.ChannelFilePath, source.Cursors, source.NextTurnNumber + 1, 0, source.ExecutedTurns);
