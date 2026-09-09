@@ -13,7 +13,8 @@ namespace AIOrchestratorCoreLib.Running.RunnerConfigs;
 ///   "sessionMemoryMax": "3G"
 /// },
 /// "printRunner": { "maxConcurrentTurns": 10, "maxConcurrentTurnsPerOrchestration": 3,
-///                  "turnTimeoutMinutes": 30, "coalesceSeconds": 3, "streamSilenceSeconds": 120 }
+///                  "turnTimeoutMinutes": 30, "coalesceSeconds": 3, "streamSilenceSeconds": 120,
+///                  "memberDigestMinutes": 5 }
 /// </code>
 /// Tolerant on the way in — an absent block, an absent role, an unknown word all read as the
 /// default, because a typo in a hand-edited file must not stop the app from starting — and
@@ -33,6 +34,22 @@ public static class RunnerConfigs_Json
     public const string TURN_TIMEOUT_MINUTES_KEY = "turnTimeoutMinutes";
     public const string COALESCE_SECONDS_KEY = "coalesceSeconds";
     public const string STREAM_SILENCE_SECONDS_KEY = "streamSilenceSeconds";
+
+    /// <summary>
+    /// The digest window of <see cref="PendingTraffic.WakeUp_Policy"/>, in minutes — how long a
+    /// member's ordinary entry may be held before it buys its supervisor a turn. Under
+    /// <see cref="LIMITS_KEY"/> with its siblings because it is a thing the DISPATCHER does with
+    /// turns, not a thing a spawn does with a session.
+    ///
+    /// <para>
+    /// READ WITH <c>Read_NonNegativeDouble_OrDefault</c> and not the positive reader, which is the
+    /// whole difference between a setting and an accident: <c>0</c> means the owner turned the digest
+    /// OFF (one entry, one turn — the behaviour before 2026-09-09), and the positive reader would
+    /// have silently given them the 5-minute default back. Same choice
+    /// <see cref="COALESCE_SECONDS_KEY"/> makes, for the same reason.
+    /// </para>
+    /// </summary>
+    public const string MEMBER_DIGEST_MINUTES_KEY = "memberDigestMinutes";
 
     /// <summary>
     /// The per-session memory ceiling, and it sits in the ROLES block rather than in
@@ -74,7 +91,8 @@ public static class RunnerConfigs_Json
             TimeSpan.FromSeconds(Read_NonNegativeDouble_OrDefault(limits, COALESCE_SECONDS_KEY, defaults.CoalesceWindow.TotalSeconds)),
             TimeSpan.FromSeconds(Read_PositiveDouble_OrDefault(limits, STREAM_SILENCE_SECONDS_KEY, defaults.SilenceLimit.TotalSeconds)),
             rejections,
-            sessionMemoryMax);
+            sessionMemoryMax,
+            TimeSpan.FromMinutes(Read_NonNegativeDouble_OrDefault(limits, MEMBER_DIGEST_MINUTES_KEY, defaults.MemberDigestWindow.TotalMinutes)));
     }
 
     /// <summary>Sets both blocks on <paramref name="configRoot"/>, replacing whatever was there.</summary>
@@ -105,6 +123,7 @@ public static class RunnerConfigs_Json
             [TURN_TIMEOUT_MINUTES_KEY] = configs.TurnTimeout.TotalMinutes,
             [COALESCE_SECONDS_KEY] = configs.CoalesceWindow.TotalSeconds,
             [STREAM_SILENCE_SECONDS_KEY] = configs.SilenceLimit.TotalSeconds,
+            [MEMBER_DIGEST_MINUTES_KEY] = configs.MemberDigestWindow.TotalMinutes,
         };
     }
 

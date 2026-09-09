@@ -10,6 +10,17 @@ public static class RunnerConfigs_Factory
     public static readonly TimeSpan DEFAULT_COALESCE_WINDOW = TimeSpan.FromSeconds(3);
 
     /// <summary>
+    /// FIVE MINUTES OF DIGEST, the number the spec proposed (§C4) and the one the measurement
+    /// supports. Measured on the VPS 6–9 Sep 2026: 247 of a supervisor's ~400 wake-ups were member
+    /// traffic and a wake-up costs on the order of 1 M input tokens, so the saving scales with how
+    /// many reports fall inside one window — while the cost of the window is only how late a report
+    /// is READ, and every member that is genuinely stuck says so with a marker and is never held.
+    /// Longer starts to be a supervisor that has stopped following its crew; shorter stops catching
+    /// two members finishing near each other, which is the case this exists for.
+    /// </summary>
+    public static readonly TimeSpan DEFAULT_MEMBER_DIGEST_WINDOW = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Two minutes of total silence from a living stream process. Long enough that a turn thinking
     /// hard, or running a slow tool, is never mistaken for a hung one — the CLI emits assistant and
     /// hook events throughout a working turn, so real silence means real silence — and short enough
@@ -35,7 +46,8 @@ public static class RunnerConfigs_Factory
         TimeSpan coalesceWindow,
         TimeSpan? silenceLimit = null,
         IReadOnlyList<string>? rejections = null,
-        string? sessionMemoryMax = null)
+        string? sessionMemoryMax = null,
+        TimeSpan? memberDigestWindow = null)
     {
         if (maxConcurrentTurns < 1)
             throw new ArgumentException($"maxConcurrentTurns must be >= 1, got {maxConcurrentTurns}");
@@ -48,8 +60,13 @@ public static class RunnerConfigs_Factory
         if (silenceLimit != null && silenceLimit.Value <= TimeSpan.Zero)
             throw new ArgumentException($"silenceLimit must be positive, got {silenceLimit}");
 
+        // A NEGATIVE DIGEST IS NOT REFUSED, IT IS OFF. Zero and below both mean "one entry, one turn"
+        // — the behaviour before 2026-09-09 — and the policy reads them that way, so there is nothing
+        // for a validator to protect here and a throw would only turn a hand-typed minus into an app
+        // that will not start.
         return new RunnerConfigsModel(
             roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow,
+            memberDigestWindow ?? DEFAULT_MEMBER_DIGEST_WINDOW,
             silenceLimit ?? DEFAULT_SILENCE_LIMIT, sessionMemoryMax ?? DEFAULT_SESSION_MEMORY_MAX, rejections ?? []);
     }
 
@@ -69,17 +86,21 @@ public static class RunnerConfigs_Factory
 
         roles[role] = roleConfig;
 
-        return Create(roles, source.MaxConcurrentTurns, source.MaxConcurrentTurnsPerOrchestration, source.TurnTimeout, source.CoalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax);
+        return Create(roles, source.MaxConcurrentTurns, source.MaxConcurrentTurnsPerOrchestration, source.TurnTimeout, source.CoalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, source.MemberDigestWindow);
     }
 
-    /// <summary>The same roles with the limits replaced.</summary>
-    public static IRunnerConfigs Create_WithLimits(IRunnerConfigs source, int maxConcurrentTurns, int maxConcurrentTurnsPerOrchestration, TimeSpan turnTimeout, TimeSpan coalesceWindow)
+    /// <summary>
+    /// The same roles with the limits replaced. <paramref name="memberDigestWindow"/> is optional and
+    /// defaults to KEEPING the source's, so a caller that only means to change a concurrency number
+    /// cannot silently reset how long a supervisor holds its crew's reports.
+    /// </summary>
+    public static IRunnerConfigs Create_WithLimits(IRunnerConfigs source, int maxConcurrentTurns, int maxConcurrentTurnsPerOrchestration, TimeSpan turnTimeout, TimeSpan coalesceWindow, TimeSpan? memberDigestWindow = null)
     {
         Dictionary<SessionRoles, IRoleRunnerConfig> roles = [];
 
         foreach (var known in SessionRole_Names.ALL)
             roles[known] = source.Get_ForRole(known);
 
-        return Create(roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax);
+        return Create(roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, memberDigestWindow ?? source.MemberDigestWindow);
     }
 }

@@ -39,8 +39,18 @@ public sealed class PrintRunnerTestHarness : IDisposable
     readonly string _resumeForGeneral;
     readonly string _resumeForMembers;
     readonly double _streamSilenceSeconds;
+    readonly double _memberDigestMinutes;
 
-    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript")
+    /// <param name="memberDigestMinutes">
+    /// The supervisor's wake-up digest (<c>WakeUp_Policy</c>), OFF by default here and five minutes in
+    /// production. Off is deliberate: a test that means to drive a member's report through a
+    /// supervisor keeps saying exactly what it always said, and the digest is driven on injected
+    /// timing by the tests written for it (<c>MemberTrafficRidesOneDigestedTurnTests</c>) plus the
+    /// production default, which <c>RunnerConfigsJsonTests</c> pins. A harness default of five minutes
+    /// would instead make every such test wait out a wall clock, which is the one thing this
+    /// mechanism was required not to need.
+    /// </param>
+    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript", double memberDigestMinutes = 0)
     {
         TempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-print-runner-{Guid.NewGuid():N}");
         RepoPath = Path.Combine(TempRoot, "repo");
@@ -56,6 +66,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
         _resumeForGeneral = resumeForGeneral;
         _resumeForMembers = resumeForMembers;
         _streamSilenceSeconds = streamSilenceSeconds;
+        _memberDigestMinutes = memberDigestMinutes;
 
         Directory.CreateDirectory(Paths.Root);
         Write_Config(printRoles);
@@ -99,6 +110,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
                 ["turnTimeoutMinutes"] = _turnTimeoutMinutes,
                 ["coalesceSeconds"] = _coalesceSeconds,
                 ["streamSilenceSeconds"] = _streamSilenceSeconds,
+                ["memberDigestMinutes"] = _memberDigestMinutes,
             },
         };
 
@@ -278,6 +290,31 @@ public sealed class PrintRunnerTestHarness : IDisposable
         }
 
         dispatcher.Tick(DateTime.Now);
+        return condition();
+    }
+
+    /// <summary>
+    /// THE SAME DRIVER ON AN INJECTED CLOCK. <c>Tick</c> takes the moment it is deciding at, so
+    /// anything the dispatcher schedules — the coalesce window, the wake-up digest — can be tested by
+    /// handing it a later <paramref name="nowLocal"/> instead of by sleeping through it. The polling
+    /// is still real time, because what is being waited for is a turn appearing in flight on a
+    /// background task; the DECISION under test is made entirely from the stamp passed in.
+    /// </summary>
+    public static bool Drive_Until_At(IPrintTurnDispatcher dispatcher, DateTime nowLocal, Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            dispatcher.Tick(nowLocal);
+
+            if (condition())
+                return true;
+
+            Thread.Sleep(50);
+        }
+
+        dispatcher.Tick(nowLocal);
         return condition();
     }
 

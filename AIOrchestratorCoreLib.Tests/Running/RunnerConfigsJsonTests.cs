@@ -47,6 +47,40 @@ public class RunnerConfigsJsonTests : IDisposable
         Assert.Equal(RunnerConfigs_Factory.DEFAULT_MAX_CONCURRENT_TURNS_PER_ORCHESTRATION, configs.MaxConcurrentTurnsPerOrchestration);
         Assert.Equal(RunnerConfigs_Factory.DEFAULT_TURN_TIMEOUT, configs.TurnTimeout);
         Assert.Equal(RunnerConfigs_Factory.DEFAULT_COALESCE_WINDOW, configs.CoalesceWindow);
+        Assert.Equal(RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW, configs.MemberDigestWindow);
+    }
+
+    /// <summary>
+    /// THE DIGEST WINDOW THE VPS WILL RUN ON, pinned at the surface the owner edits (spec C4). Five
+    /// minutes is the spec's proposal, and the test harness deliberately does NOT default to it (see
+    /// its <c>memberDigestMinutes</c> parameter) — so this is the only place that says what production
+    /// gets when nobody writes the key.
+    /// </summary>
+    [Fact]
+    public void TheMemberDigestWindow_IsFiveMinutesUnlessTheOwnerSaysOtherwise()
+    {
+        Assert.Equal(TimeSpan.FromMinutes(5), RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW);
+
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""
+            {"printRunner": { "memberDigestMinutes": 2.5 }}
+            """) as JsonObject);
+
+        Assert.Equal(TimeSpan.FromMinutes(2.5), configs.MemberDigestWindow);
+    }
+
+    /// <summary>
+    /// AND ZERO MEANS OFF, not "unreadable, have the default back". It is the owner's way back to one
+    /// entry one turn — the behaviour before 2026-09-09 — without a deployment, which is why the key
+    /// is read with the NON-NEGATIVE reader rather than the positive one that governs a timeout.
+    /// </summary>
+    [Fact]
+    public void AZeroMemberDigest_TurnsTheDigestOffRatherThanRestoringTheDefault()
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""
+            {"printRunner": { "memberDigestMinutes": 0 }}
+            """) as JsonObject);
+
+        Assert.Equal(TimeSpan.Zero, configs.MemberDigestWindow);
     }
 
     [Fact]
@@ -66,7 +100,7 @@ public class RunnerConfigsJsonTests : IDisposable
                 "general": { "runner": "print", "resume": "fresh" },
                 "supervisor": { "runner": "terminal" }
               },
-              "printRunner": { "maxConcurrentTurns": 4, "maxConcurrentTurnsPerOrchestration": 2, "turnTimeoutMinutes": 0.5, "coalesceSeconds": 1 }
+              "printRunner": { "maxConcurrentTurns": 4, "maxConcurrentTurnsPerOrchestration": 2, "turnTimeoutMinutes": 0.5, "coalesceSeconds": 1, "memberDigestMinutes": 7 }
             }
             """) as JsonObject;
 
@@ -82,6 +116,7 @@ public class RunnerConfigsJsonTests : IDisposable
         Assert.Equal(2, configs.MaxConcurrentTurnsPerOrchestration);
         Assert.Equal(TimeSpan.FromSeconds(30), configs.TurnTimeout);
         Assert.Equal(TimeSpan.FromSeconds(1), configs.CoalesceWindow);
+        Assert.Equal(TimeSpan.FromMinutes(7), configs.MemberDigestWindow);
     }
 
     [Fact]
@@ -90,7 +125,7 @@ public class RunnerConfigsJsonTests : IDisposable
         var root = JsonNode.Parse("""
             {
               "runners": { "implementer": { "runner": "daemon", "resume": "sometimes" }, "solo": "print" },
-              "printRunner": { "maxConcurrentTurns": 0, "turnTimeoutMinutes": -3, "coalesceSeconds": "soon" }
+              "printRunner": { "maxConcurrentTurns": 0, "turnTimeoutMinutes": -3, "coalesceSeconds": "soon", "memberDigestMinutes": "later" }
             }
             """) as JsonObject;
 
@@ -102,6 +137,7 @@ public class RunnerConfigsJsonTests : IDisposable
         Assert.Equal(RunnerConfigs_Factory.DEFAULT_MAX_CONCURRENT_TURNS, configs.MaxConcurrentTurns);
         Assert.Equal(RunnerConfigs_Factory.DEFAULT_TURN_TIMEOUT, configs.TurnTimeout);
         Assert.Equal(RunnerConfigs_Factory.DEFAULT_COALESCE_WINDOW, configs.CoalesceWindow);
+        Assert.Equal(RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW, configs.MemberDigestWindow);
     }
 
     [Fact]
@@ -110,7 +146,7 @@ public class RunnerConfigsJsonTests : IDisposable
         var runners = RunnerConfigs_Factory.Create_WithLimits(
             RunnerConfigs_Factory.Create_WithRole(
                 RunnerConfigs_Factory.Create_Default(), SessionRoles.Reviewer, RoleRunnerConfig_Factory.Create(SessionRunners.Print, ResumeModes.Transcript, "plan")),
-            7, 2, TimeSpan.FromMinutes(12), TimeSpan.FromSeconds(5));
+            7, 2, TimeSpan.FromMinutes(12), TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(3));
 
         var config = OrchestratorConfig_Factory.Create(
             [RepoEntry_Factory.Create("Repo", "/tmp/repo")], "opus", "opus", "sonnet", "sonnet", null, null, null, null, null, null, runners);
@@ -126,6 +162,7 @@ public class RunnerConfigsJsonTests : IDisposable
         Assert.Equal(2, reloaded.MaxConcurrentTurnsPerOrchestration);
         Assert.Equal(TimeSpan.FromMinutes(12), reloaded.TurnTimeout);
         Assert.Equal(TimeSpan.FromSeconds(5), reloaded.CoalesceWindow);
+        Assert.Equal(TimeSpan.FromMinutes(3), reloaded.MemberDigestWindow);
 
         // Written explicitly: every role appears, so the owner sees the whole surface.
         var written = JsonNode.Parse(File.ReadAllText(_paths.ConfigFile)) as JsonObject;

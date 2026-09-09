@@ -155,6 +155,27 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         public string PendingSignature = string.Empty;
 
         public DateTime PendingSeenAt;
+
+        /// <summary>
+        /// WHEN THE MEMBER TRAFFIC NOW WAITING FIRST TURNED UP — the digest's clock
+        /// (<see cref="WakeUp_Policy"/>), null while nothing digestable is pending.
+        ///
+        /// <para>
+        /// IT IS NOT <see cref="PendingSeenAt"/>, AND IT MUST NOT BE. That one restarts every time the
+        /// set changes, because its question is "has this stopped moving"; the digest's question is
+        /// "how long has the oldest of these been waiting", and answering it with a stamp that resets
+        /// would let a crew filing a report every four minutes push its own deadline out for ever.
+        /// So it is set on the tick the first held entry appears and left alone until a turn takes
+        /// them — which bounds the wait at the configured window whatever else lands meanwhile.
+        /// </para>
+        /// <para>
+        /// IN THE TRACKER AND NOT THE STATE FILE, like the deferral note above and for the same
+        /// reason: a restart costs one early delivery, and this is scheduling rather than the record
+        /// decision 8 is enforced from.
+        /// </para>
+        /// </summary>
+        public DateTime? DigestHeldSince;
+
         public DateTime? LastFailureAt;
 
         /// <summary>The pending set a stall happened on; null while nothing is stalled.</summary>
@@ -520,6 +541,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             tracker.PendingSeenAt = nowLocal;
         }
 
+        // THE DIGEST'S CLOCK STARTS ON THE FIRST HELD ENTRY AND IS NOT RESTARTED BY THE NEXT ONE — see
+        // SessionTracker.DigestHeldSince. Cleared as soon as nothing digestable is pending, which is
+        // what a completed turn produces, so the next report starts its own window rather than
+        // inheriting a spent one.
+        if (WakeUp_Policy.Contains_DigestableTraffic(ordered))
+            tracker.DigestHeldSince ??= nowLocal;
+        else
+            tracker.DigestHeldSince = null;
+
         // Entries still landing ride the same turn, whichever channel they land on: wait until the set
         // has been unchanged for the window — a SHORTER one when the owner is in it
         // (CoalesceWindow_Policy, owner decision 2026-09-09). Member traffic keeps the full window
@@ -553,6 +583,37 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (tracker.LastFailureAt != null && nowLocal - tracker.LastFailureAt.Value < _retryBackoff)
             return;
+
+        // THE SUPERVISOR IS WOKEN TO DECIDE, NOT TO TAKE NOTE (spec §C4, measured 6–9 Sep 2026: 247 of
+        // its ~400 wake-ups were member traffic, at ~1 M input tokens each). The owner and a member
+        // that says it is blocked start a turn now, exactly as before; a member's ordinary report is
+        // held for MemberDigestWindow so several of them ride ONE turn. Nothing is lost by being held
+        // — a turn takes every pending entry, so held reports ride whatever starts the next one,
+        // including the owner's own next message.
+        //
+        // LAST OF THE GATES, deliberately: every rule above it — the coalesce window, the stall, the
+        // usage-limit appointment and its notice, the retry backoff — behaves exactly as it did, and
+        // this only ever decides whether the turn STARTS. Four stages landed in this method today and
+        // that is worth more than saving a tick's work.
+        //
+        // A SESSION THAT HAS NEVER TAKEN A TURN IS NEVER HELD. The boot turn reaches the policy as an
+        // empty pending set and is released by it — but only while the set IS empty, and a supervisor
+        // whose very first traffic is a member's report has a non-empty one. Its greeting is what
+        // creates the orchestration's Telegram topic (Needs_BootTurn above), so holding that report for
+        // the digest would hold the owner's own way in behind it.
+        var wakeReason = Needs_BootTurn(state)
+            ? "the session has not taken a turn yet"
+            : WakeUp_Policy.Resolve_WakeReason_OrNull(ordered, tracker.DigestHeldSince, nowLocal, configs.MemberDigestWindow);
+
+        if (wakeReason == null)
+            return;
+
+        // SAID ONCE PER TURN, not once per tick: a supervisor turn that did NOT happen leaves no
+        // trace anywhere, so the line that says which rule released the traffic is the only way to
+        // audit the digest from the log. Only when something was actually being held — an owner
+        // message on a quiet channel is not news.
+        if (tracker.DigestHeldSince != null)
+            _log.Log_Info(orchId, $"'{memberId}': {Describe_Traffic(ordered)} — {wakeReason}");
 
         Start_Turn(key, stateFile, state, ordered, sources, tracker, configs);
     }
