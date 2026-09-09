@@ -81,6 +81,57 @@ public class OrchestrationLauncherTests : IDisposable
         Assert.DoesNotContain("sonnet", command);
     }
 
+    /// <summary>
+    /// THE REVIEWER NO LONGER RIDES THE IMPLEMENTER'S DEFAULT (owner 2026-09-09). Pinned at the
+    /// launcher because that is the point of effect: the config split is worth nothing if the spawn
+    /// still reaches for one key for every member that is not a supervisor. Three distinct models so
+    /// no assertion can pass by coincidence.
+    /// </summary>
+    [Fact]
+    public void Start_Orchestration_SpawnsTheReviewerOnTheReviewerModel_NotTheImplementersOne()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"supervisorModel":"opus","implementerModel":"sonnet","reviewerModel":"haiku"}""");
+
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        // Spawn order is supervisor, imp-1, rev-1 (Start_Orchestration).
+        Assert.Equal(3, _spawner.SpawnedCommands.Count);
+
+        var implementer = Join(_spawner.SpawnedCommands[1]);
+        var reviewer = Join(_spawner.SpawnedCommands[2]);
+
+        Assert.Contains("--model sonnet", implementer);
+        Assert.Contains("--model haiku", reviewer);
+
+        Assert.Equal("rev-1", session.Members[^1].MemberId);
+    }
+
+    /// <summary>
+    /// ...and with no reviewerModel key, the reviewer keeps taking the implementer's — the ladder
+    /// that makes this change invisible on an existing box. A solo takes the same route, through the
+    /// same call, which is why one config covers both.
+    /// </summary>
+    [Fact]
+    public void WithNoReviewerModelKey_TheReviewerStillTakesTheImplementerModel()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"haiku"}""");
+
+        _launcher.Start_Orchestration("Repo", _tempRepo);
+
+        Assert.Contains("--model haiku", Join(_spawner.SpawnedCommands[2]));
+    }
+
+    /// <summary>A basic orchestration's one session takes the solo default, by the same one reader.</summary>
+    [Fact]
+    public void Start_BasicOrchestration_SpawnsTheSoloOnTheSoloModel()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"sonnet","soloModel":"opus"}""");
+
+        _launcher.Start_BasicOrchestration("Repo", _tempRepo);
+
+        Assert.Contains("--model opus", Join(_spawner.SpawnedCommands[^1]));
+    }
+
     /// <summary>The claude invocation travels base64-encoded inside the terminal script; read it decoded.</summary>
     static string Join(ISpawnCommand command)
     {

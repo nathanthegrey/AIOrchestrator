@@ -13,6 +13,18 @@ public static class OrchestratorConfig_Factory
     public const string DEFAULT_SUPERVISOR_MODEL = "opus";
     public const string DEFAULT_IMPLEMENTER_MODEL = "opus";
     public const string DEFAULT_COMMUNICATOR_MODEL = "sonnet";
+
+    /// <summary>
+    /// Reviewing stays opus even after the implementer moves to sonnet (owner, 2026-09-09): a bad
+    /// implementation gets found and fixed, a bad APPROVAL does not announce itself.
+    /// </summary>
+    public const string DEFAULT_REVIEWER_MODEL = "opus";
+
+    /// <summary>
+    /// A solo is supervisor, implementer and reviewer in one session with nobody above it, so it
+    /// takes the supervision price rather than the implementation one.
+    /// </summary>
+    public const string DEFAULT_SOLO_MODEL = "opus";
     /// <summary>Opt-in: a screenshot raises a real window, so an absent key must read as OFF.</summary>
     public const bool DEFAULT_TELEGRAM_STATUS_SCREENSHOTS = false;
 
@@ -20,6 +32,13 @@ public static class OrchestratorConfig_Factory
         IReadOnlyList<IRepoEntry> repos,
         string? supervisorModel,
         string? implementerModel,
+
+        // AFTER THE IMPLEMENTER AND BEFORE THE GENERAL, which is SessionRole_Names.ALL's own order —
+        // and inserted positionally rather than appended, deliberately: every existing call site
+        // fails to compile instead of silently binding a string to the wrong role. Measured while
+        // writing this: all six of them do.
+        string? reviewerModel,
+        string? soloModel,
         string? generalSupervisorModel,
         string? communicatorModel,
         long? telegramSupergroupChatId,
@@ -40,7 +59,7 @@ public static class OrchestratorConfig_Factory
         ITelegramProseSettings? telegramProse = null)
     {
         return Create(
-            repos, supervisorModel, implementerModel, generalSupervisorModel, communicatorModel,
+            repos, supervisorModel, implementerModel, reviewerModel, soloModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
             RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse);
@@ -55,6 +74,13 @@ public static class OrchestratorConfig_Factory
         IReadOnlyList<IRepoEntry> repos,
         string? supervisorModel,
         string? implementerModel,
+
+        // AFTER THE IMPLEMENTER AND BEFORE THE GENERAL, which is SessionRole_Names.ALL's own order —
+        // and inserted positionally rather than appended, deliberately: every existing call site
+        // fails to compile instead of silently binding a string to the wrong role. Measured while
+        // writing this: all six of them do.
+        string? reviewerModel,
+        string? soloModel,
         string? generalSupervisorModel,
         string? communicatorModel,
         long? telegramSupergroupChatId,
@@ -73,6 +99,15 @@ public static class OrchestratorConfig_Factory
             repos,
             supervisorModel ?? DEFAULT_SUPERVISOR_MODEL,
             implementerModel ?? DEFAULT_IMPLEMENTER_MODEL,
+
+            // THE LADDER IS THE COMPATIBILITY PROMISE, and it is resolved HERE so that
+            // IOrchestratorConfig.ReviewerModel is the EFFECTIVE answer and no reader has to
+            // remember the fallback. An absent reviewerModel means "what the reviewer got until
+            // now", which was implementerModel — including the case that matters, an owner who had
+            // set implementerModel by hand and never heard of this key. Only when neither is set
+            // does the shipped default apply, and it is opus, which is what the reviewer already ran.
+            reviewerModel ?? implementerModel ?? DEFAULT_REVIEWER_MODEL,
+            soloModel ?? implementerModel ?? DEFAULT_SOLO_MODEL,
             generalSupervisorModel ?? DEFAULT_GENERAL_SUPERVISOR_MODEL,
             communicatorModel ?? DEFAULT_COMMUNICATOR_MODEL,
             telegramSupergroupChatId,
@@ -103,7 +138,7 @@ public static class OrchestratorConfig_Factory
 
     public static IOrchestratorConfig Create_Empty()
     {
-        return Create([], null, null, null, null, null, null, null, null, null, null);
+        return Create([], null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /// <summary>
@@ -117,6 +152,8 @@ public static class OrchestratorConfig_Factory
             source.Repos,
             source.SupervisorModel,
             source.ImplementerModel,
+            source.ReviewerModel,
+            source.SoloModel,
             source.GeneralSupervisorModel,
             source.CommunicatorModel,
             source.TelegramSupergroupChatId,

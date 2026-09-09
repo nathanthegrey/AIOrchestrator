@@ -30,6 +30,14 @@ public static class OrchestratorConfig_Loader
             repos,
             Get_String_OrNull(configRoot, "supervisorModel"),
             Get_String_OrNull(configRoot, "implementerModel"),
+
+            // ABSENT MEANS "WHAT THE ROLE GOT UNTIL NOW", and the factory is where that ladder lives
+            // (reviewer/solo → implementer → the shipped default). Passed as the raw key, null and
+            // all, precisely so the factory can tell "the owner never said" from "the owner said
+            // this" — reading them here with a fallback would hide the first case from the only
+            // place that can act on it.
+            Get_String_OrNull(configRoot, REVIEWER_MODEL_KEY),
+            Get_String_OrNull(configRoot, SOLO_MODEL_KEY),
             Get_String_OrNull(configRoot, "generalSupervisorModel"),
             Get_String_OrNull(configRoot, "communicatorModel"),
             Get_Long_OrNull(configRoot, "telegramSupergroupChatId"),
@@ -117,6 +125,15 @@ public static class OrchestratorConfig_Loader
 
         Atomic_FileWriter.Write_AllText(paths.ConfigFile, configRoot.ToJsonString(JsonWriting.INDENTED));
 
+        // reviewerModel AND soloModel ARE READ AND NEVER WRITTEN, and they belong to the paragraph
+        // below rather than beside their four siblings above. The four have a Settings field, so the
+        // value in the file is the owner's own; these two have none, and their default is one that is
+        // MEANT TO MOVE — an absent reviewerModel tracks implementerModel by design (owner
+        // 2026-09-09: implementer sonnet eventually, reviewer opus). Writing this build's answer
+        // would materialise it as if the owner had chosen it and cut that ladder for good, on the
+        // first button press, on every box that had never heard of the keys. A hand-edited value is
+        // safe either way: Save() merges, so keys it does not write survive untouched.
+        //
         // planBackend, THE GUARDRAIL KEYS, defaults AND telegram ARE DELIBERATELY ABSENT from the writes above,
         // for the same reason from two directions. planBackend is hand-edited, no window builds one,
         // and IOrchestratorConfig.PlanBackend is null in every config the app constructs itself —
@@ -250,6 +267,13 @@ public static class OrchestratorConfig_Loader
             return null;
         }
     }
+
+    /// <summary>
+    /// The per-role model keys this loader reads but never writes — named once, because a key spelled
+    /// in two places is a key that gets read under one spelling and saved under the other.
+    /// </summary>
+    public const string REVIEWER_MODEL_KEY = "reviewerModel";
+    public const string SOLO_MODEL_KEY = "soloModel";
 
     /// <summary>The config keys behind <see cref="IGuardrailSettings"/>, named once.</summary>
     const string GUARDRAIL_HIGH_RISK_PATTERNS = "highRiskPatterns";

@@ -317,7 +317,7 @@ internal sealed class OrchestrationLauncherModel(
             orchId,
             SessionLaunch_Factory.SUPERVISOR_MEMBER_ID,
             session.RepoPath,
-            session.SupervisorModelOverride ?? _configProvider.Get_Current().SupervisorModel,
+            session.SupervisorModelOverride ?? _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Supervisor),
             pidFile,
             session.DisplayName);
 
@@ -348,7 +348,7 @@ internal sealed class OrchestrationLauncherModel(
             orchId,
             SessionLaunch_Factory.COMMUNICATOR_MEMBER_ID,
             session.RepoPath,
-            _configProvider.Get_Current().CommunicatorModel,
+            _configProvider.Get_Current().Get_ModelForRole(SessionRoles.Communicator),
             pidFile,
             session.DisplayName);
 
@@ -391,13 +391,25 @@ internal sealed class OrchestrationLauncherModel(
         var pidFile = _paths.Get_ImplementerPidFile(orchId, memberId);
         var kind = MemberKind_Ids.Resolve_Kind(memberId);
 
+        var role = SessionRole_Names.From_MemberKind(kind);
+
         // THREE TIERS, IN THIS ORDER: the owner's set-model for this orchestration, then the model
         // the supervisor asked for when it requested this member (sized to the task — on the record,
         // so a respawn keeps it), then the config default. A fixed model per role made no sense to
         // the owner (2026-09-07): a one-line fix and a redesign are not the same job.
-        var model = session.ImplementerModelOverride ?? member?.Model ?? _configProvider.Get_Current().ImplementerModel;
+        //
+        // THE THIRD TIER IS NOW PER ROLE, not per member-that-writes-code. A reviewer and a solo both
+        // took `implementerModel` here until 2026-09-09, which made the owner's decision — implementer
+        // sonnet, reviewer opus — unstateable rather than merely unset. The ladder inside
+        // Get_ModelForRole keeps the old answer for a config.json that never heard of the new keys.
+        //
+        // THE FIRST TIER IS STILL THE IMPLEMENTER'S, deliberately: `set-model implementer` is the
+        // owner reaching into ONE orchestration by hand, and it has covered every working member
+        // since it existed. Narrowing it to implementers here would silently stop applying to the
+        // reviewer the owner had just used it on — a separate decision, and theirs, not this stage's.
+        var model = session.ImplementerModelOverride ?? member?.Model ?? _configProvider.Get_Current().Get_ModelForRole(role);
 
-        var launch = SessionLaunch_Factory.Create(SessionRole_Names.From_MemberKind(kind), orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName);
+        var launch = SessionLaunch_Factory.Create(role, orchId, memberId, session.RepoPath, model, pidFile, session.DisplayName);
 
         _store.Set_MemberPid(orchId, memberId, null);
         Delete_StalePidFile_BestEffort(pidFile);
@@ -425,7 +437,7 @@ internal sealed class OrchestrationLauncherModel(
             ChannelDiscovery.GENERAL_ORCH_ID,
             SessionLaunch_Factory.GENERAL_MEMBER_ID,
             _paths.GeneralFolder,
-            _configProvider.Get_Current().GeneralSupervisorModel,
+            _configProvider.Get_Current().Get_ModelForRole(SessionRoles.General),
             _paths.GeneralPidFile,
             null);
 

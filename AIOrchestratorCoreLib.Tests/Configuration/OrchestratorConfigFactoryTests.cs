@@ -19,6 +19,8 @@ public class OrchestratorConfigFactoryTests
             [RepoEntry_Factory.Create("Arb Studio", @"C:\repos\arb")],
             "opus",
             "fable",
+            null,
+            null,
             "sonnet",
             "haiku",
             -1001234567890,

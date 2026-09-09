@@ -113,7 +113,7 @@ public class RunnerConfigsJsonTests : IDisposable
             7, 2, TimeSpan.FromMinutes(12), TimeSpan.FromSeconds(5));
 
         var config = OrchestratorConfig_Factory.Create(
-            [RepoEntry_Factory.Create("Repo", "/tmp/repo")], "opus", "opus", "sonnet", "sonnet", null, null, null, null, null, null, runners);
+            [RepoEntry_Factory.Create("Repo", "/tmp/repo")], "opus", "opus", null, null, "sonnet", "sonnet", null, null, null, null, null, null, runners);
 
         OrchestratorConfig_Loader.Save(config, _paths);
         var reloaded = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Runners;
@@ -143,7 +143,7 @@ public class RunnerConfigsJsonTests : IDisposable
     public void ToggleCopies_KeepTheRunners()
     {
         var runners = RunnerConfigs_Factory.Create_WithRole(RunnerConfigs_Factory.Create_Default(), SessionRoles.Implementer, RoleRunnerConfig_Factory.Create(SessionRunners.Print, ResumeModes.Transcript, null));
-        var source = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null, runners);
+        var source = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null, null, null, runners);
 
         Assert.Same(runners, OrchestratorConfig_Factory.Create_WithStatusScreenshots(source, true).Runners);
     }
@@ -151,7 +151,7 @@ public class RunnerConfigsJsonTests : IDisposable
     [Fact]
     public void TheOverloadWithoutRunners_DefaultsToTerminal()
     {
-        var config = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null);
+        var config = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null, null, null);
 
         Assert.Equal(SessionRunners.Terminal, config.Runners.Get_ForRole(SessionRoles.Implementer).Runner);
     }
