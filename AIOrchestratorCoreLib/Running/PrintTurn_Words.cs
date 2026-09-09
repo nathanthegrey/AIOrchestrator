@@ -20,6 +20,16 @@ public static class PrintTurn_Words
     public const string TURN_STALLED_SUBJECT = "turn stalled";
 
     /// <summary>
+    /// Subject prefix of the alert written when a session has been killed at the turn deadline
+    /// <c>ClosingTurn_Words.KILLS_BEFORE_ALERT</c> turns in a row. NOT
+    /// <see cref="TURN_STALLED_SUBJECT"/>: nothing is stalled — every one of those turns ended, was
+    /// reported on by its closing turn and had its entries retired, which is precisely why the
+    /// attempt counter never moved and the stall alert could never fire. What it says is that the
+    /// work is not fitting inside a turn, which is a thing to act on and not a failure to retry.
+    /// </summary>
+    public const string DEADLINE_KILLS_SUBJECT = "turns killed at the deadline";
+
+    /// <summary>
     /// Subject prefix of the entry written when a turn was refused for a usage limit that named its
     /// reset. NOT <see cref="TURN_STALLED_SUBJECT"/>, deliberately: a stall means "not retried until
     /// new traffic arrives", and this turn has an appointment. The subject carries the time it keeps.
