@@ -8012,7 +8012,24 @@ internal sealed class BridgeEngineModel(
         // before an appointment (IPrintTurnDispatcher.Clear_LimitDeferrals's own doc explains why that
         // appointment can also just be wrong). This must run before or after the appends indifferently —
         // it only ever touches RetryNotBeforeUtc, never a channel.
-        _printTurns.Clear_LimitDeferrals();
+        //
+        // GUARDED, BECAUSE IT RUNS FIRST (F7, 2026-09-09). Everything the owner asked for is below this
+        // line: an exception escaping here aborted /resume before a single channel was appended, was
+        // logged as a Telegram backoff, and had the update redelivered and retried for ever — the one
+        // command that exists for "nothing else will speak to these sessions again" being the one a
+        // single unreadable state file could cancel. Clear_LimitDeferrals contains its own per-session
+        // failures; this covers the rest of it (the registration scan included), so the wake still
+        // happens and the log says the override did not.
+        var clearedAppointments = 0;
+
+        try
+        {
+            clearedAppointments = _printTurns.Clear_LimitDeferrals();
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(GLOBAL_ORCH_ID, "/resume could not clear the usage-limit appointments — the wake below still ran, so a session that was merely idle is moving; one that is waiting on a limit is NOT, and needs /resume again", ex);
+        }
 
         var wokenSessions = 0;
         var wokenOrchestrations = 0;
@@ -8063,10 +8080,19 @@ internal sealed class BridgeEngineModel(
         if (notWoken.Count > 0)
             _log.Log_Warning(GLOBAL_ORCH_ID, $"/resume could NOT wake (channel locked): {string.Join(", ", notWoken)}");
 
+        // THE APPOINTMENTS ARE REPORTED, NOT JUST THE WAKES (F7, 2026-09-09). Dropping a usage-limit
+        // appointment is the thing /resume is FOR, and the reply used to count only channel appends —
+        // so the owner sending it at the reset read the same sentence whether it had freed five parked
+        // sessions or none. Said only when there were some: "cleared 0" on every /resume is noise, and
+        // decision 15's test is whether the line is one the owner can act on.
+        var clearedNote = clearedAppointments == 0
+            ? string.Empty
+            : $" — cleared {clearedAppointments} usage-limit appointment{(clearedAppointments == 1 ? "" : "s")}";
+
         await Send_DirectReply_BestEffort_Async(
             client,
             messageThreadId,
-            $"▶ go ahead sent to {wokenSessions} session{(wokenSessions == 1 ? "" : "s")} across {wokenOrchestrations} orchestration{(wokenOrchestrations == 1 ? "" : "s")} (+ general)",
+            $"▶ go ahead sent to {wokenSessions} session{(wokenSessions == 1 ? "" : "s")} across {wokenOrchestrations} orchestration{(wokenOrchestrations == 1 ? "" : "s")} (+ general){clearedNote}",
             cancellationToken);
     }
 
