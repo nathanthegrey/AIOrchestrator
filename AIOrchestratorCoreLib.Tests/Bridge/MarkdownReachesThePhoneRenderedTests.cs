@@ -5,7 +5,6 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
-using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 
@@ -20,18 +19,20 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// nothing to render and printed the source.
 ///
 /// <para>
-/// Three separate facts are pinned here, and the middle one is the one that matters most:
+/// Two facts are pinned here, and the second is the one that matters most:
 /// </para>
 /// <list type="number">
 ///   <item>a mirrored entry reaches Telegram RENDERED and through the HTML call — nothing else in
 ///   this codebase expresses "parse_mode: HTML", the choice of method IS the parse mode;</item>
 ///   <item>when Telegram REFUSES to parse it, the message still arrives. A rendering bug must cost
 ///   the formatting and never the message: a 400 on the mirror path would otherwise be retried into
-///   the same rejection for ever and wedge that channel;</item>
-///   <item>the Italian layer runs BEFORE the renderer, so the translated text is what gets rendered.
-///   Reversed, the translator would be handed HTML tags to "translate" and the owner would get
-///   Italian prose with English markup mangled through it.</item>
+///   the same rejection for ever and wedge that channel.</item>
 /// </list>
+/// <para>
+/// A THIRD fact used to live here — that the Italian layer ran before the renderer, so the
+/// translated text was what got rendered. The layer was abolished on 2026-09-09 and the ordering it
+/// pinned no longer exists.
+/// </para>
 /// <para>
 /// Driven end to end rather than poked, because which API method the engine picks has no getter —
 /// it is only observable as the call the client received.
@@ -71,7 +72,7 @@ public class MarkdownReachesThePhoneRenderedTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        Write_Config(italianLayer: false);
+        Write_Config();
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
         _store = OrchestrationSessionStore_Factory.Create(_paths);
@@ -98,7 +99,7 @@ public class MarkdownReachesThePhoneRenderedTests : IDisposable
     [Trait("Speed", "Slow")]
     public async Task AMirroredEntry_ReachesTelegramAsHtml_WithItsMarkersRendered()
     {
-        var engine = Build_Engine(new EchoTranslator_Fake());
+        var engine = Build_Engine();
         var orchId = await Start_WithChannelAlreadySeen_Async(engine);
 
         Append_SupervisorEntry(orchId, 1, "goal", MARKDOWN_ENTRY);
@@ -126,7 +127,7 @@ public class MarkdownReachesThePhoneRenderedTests : IDisposable
         _telegram.Refuse_HtmlWith(new TelegramApiException(
             400, "Telegram 'sendMessage' failed with HTTP 400: {\"ok\":false,\"description\":\"Bad Request: can't parse entities: Unmatched end tag at byte offset 12\"}"));
 
-        var engine = Build_Engine(new EchoTranslator_Fake());
+        var engine = Build_Engine();
         var orchId = await Start_WithChannelAlreadySeen_Async(engine);
 
         Append_SupervisorEntry(orchId, 1, "goal", MARKDOWN_ENTRY);
@@ -147,45 +148,18 @@ public class MarkdownReachesThePhoneRenderedTests : IDisposable
             $"the log line does not say what was done about it.{Environment.NewLine}{_log.Dump()}");
     }
 
-    [Fact]
-    [Trait("Speed", "Slow")]
-    public async Task TheItalianLayerRunsFirst_SoTheTranslatedBoldIsWhatGetsRendered()
+    IBridgeEngine Build_Engine()
     {
-        Write_Config(italianLayer: true);
-
-        // Stands in for the live translator: it rewrites the WORDS and leaves the Markdown alone,
-        // which is what the real one is instructed to do.
-        var engine = Build_Engine(new WordSwapTranslator_Fake("GOAL 2: V1 LIVE", "OBIETTIVO 2: V1 ONLINE"));
-        var orchId = await Start_WithChannelAlreadySeen_Async(engine);
-
-        Append_SupervisorEntry(orchId, 1, "goal", MARKDOWN_ENTRY);
-
-        Assert.True(
-            await Run_Until_Async(engine, () => _telegram.AnyHtmlSendContains("<b>OBIETTIVO 2: V1 ONLINE</b>"), 20_000),
-            "the translated text did not arrive rendered — either the renderer ran before the "
-                + "translator (so the translator was handed HTML), or the Italian path skips the "
-                + $"renderer entirely.{Environment.NewLine}html sends: {_telegram.Dump_HtmlSends()}"
-                + $"{Environment.NewLine}{_log.Dump()}");
-
-        Assert.False(
-            _telegram.AnyHtmlSendContains("**"),
-            $"a Markdown marker survived into the sent HTML: {_telegram.Dump_HtmlSends()}");
+        return BridgeEngine_Factory.Create_WithTelegramClient(
+            _paths, _configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
-    IBridgeEngine Build_Engine(IMessageTranslator translator)
-    {
-        return BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
-            _paths, _configProvider, _store, _launcher, _log, _telegram, translator,
-            BridgeTestTiming.Fast());
-    }
-
-    void Write_Config(bool italianLayer)
+    void Write_Config()
     {
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},"
-            + $"\"telegramItalianLayer\":{(italianLayer ? "true" : "false")}}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
     }
 
     /// <summary>
@@ -432,27 +406,4 @@ internal sealed class ByMethodTelegram_Fake : ITelegramApiClient
     }
 
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<byte>());
-}
-
-/// <summary>Hands the text straight back — the Italian layer off, without a subprocess.</summary>
-internal sealed class EchoTranslator_Fake : IMessageTranslator
-{
-    public Task<string> Translate_ToEnglish_Async(string text, CancellationToken cancellationToken) => Task.FromResult(text);
-
-    public Task<string> Translate_ToItalian_Async(string text, CancellationToken cancellationToken) => Task.FromResult(text);
-}
-
-/// <summary>
-/// Rewrites one phrase and touches nothing else. Deterministic on purpose: the fact under test is
-/// the ORDER of two steps, and a real translation call would make the assertion depend on a model's
-/// wording as well.
-/// </summary>
-internal sealed class WordSwapTranslator_Fake(string from, string to) : IMessageTranslator
-{
-    public Task<string> Translate_ToEnglish_Async(string text, CancellationToken cancellationToken) => Task.FromResult(text);
-
-    public Task<string> Translate_ToItalian_Async(string text, CancellationToken cancellationToken)
-    {
-        return Task.FromResult(text.Replace(from, to, StringComparison.Ordinal));
-    }
 }

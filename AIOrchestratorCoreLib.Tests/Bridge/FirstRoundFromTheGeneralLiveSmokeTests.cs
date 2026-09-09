@@ -14,7 +14,6 @@ using AIOrchestratorCoreLib.Spawning.SessionSpawner;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Running;
 using AIOrchestratorCoreLib.Time.Clock;
-using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
 using Xunit.Abstractions;
 using AIOrchestratorCoreLib.Tests.TestSupport;
@@ -96,7 +95,7 @@ public class FirstRoundFromTheGeneralLiveSmokeTests(ITestOutputHelper output)
 
         var engine = BridgeEngine_Factory.Create_WithDecisionState(
             paths, configProvider, store, launcher, log, telegram,
-            MessageTranslator_Factory.Create(log), EngineStateStore_Factory.Create_File(paths, log),
+            EngineStateStore_Factory.Create_File(paths, log),
             Clock_Factory.Create_System(),
             BridgeTestTiming.Fast());
 
@@ -315,7 +314,6 @@ public class FirstRoundFromTheGeneralLiveSmokeTests(ITestOutputHelper output)
               "repos": [{"name": "{{REPO_NAME}}", "path": {{System.Text.Json.JsonSerializer.Serialize(repo)}}}],
               "telegramSupergroupChatId": {{SUPERGROUP_CHAT_ID}},
               "telegramOwnerUserId": {{OWNER_USER_ID}},
-              "telegramItalianLayer": false,
               "generalSupervisorModel": "haiku",
               "supervisorModel": "haiku",
               "implementerModel": "haiku",

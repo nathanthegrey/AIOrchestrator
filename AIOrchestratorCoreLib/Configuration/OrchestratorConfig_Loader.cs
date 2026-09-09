@@ -35,7 +35,6 @@ public static class OrchestratorConfig_Loader
             Get_Long_OrNull(configRoot, "telegramSupergroupChatId"),
             Get_Long_OrNull(configRoot, "telegramOwnerUserId"),
             Get_String_OrNull(secretsRoot, "telegramBotToken"),
-            Get_Bool_OrNull(configRoot, "telegramItalianLayer"),
             Get_Bool_OrNull(configRoot, "telegramStatusScreenshots"),
             Get_String_OrNull(configRoot, "voiceTranscribeCommand"),
             Get_Long_OrNull(configRoot, "orchestrationTokenBudget"),
@@ -67,7 +66,7 @@ public static class OrchestratorConfig_Loader
     /// <para>
     /// IT MERGES RATHER THAN REPLACES, and that is a fix rather than a refinement: this method used to
     /// build a fresh object and write it, so every key it did not know about was deleted the first
-    /// time anything saved — the Settings window, the repo list, the /italian toggle. A hand-edited
+    /// time anything saved — the Settings window, the repo list, the /screenshots toggle. A hand-edited
     /// key (planBackend is the first, and will not be the last) survived exactly until the owner next
     /// pressed a button. Unknown keys are now carried through untouched. Agents edit config.json at
     /// runtime, which is exactly why <see cref="ConfigRepos_Reorderer"/> was already written to
@@ -110,7 +109,6 @@ public static class OrchestratorConfig_Loader
         configRoot["communicatorModel"] = config.CommunicatorModel;
         configRoot["telegramSupergroupChatId"] = config.TelegramSupergroupChatId;
         configRoot["telegramOwnerUserId"] = config.TelegramOwnerUserId;
-        configRoot["telegramItalianLayer"] = config.TelegramItalianLayer;
         configRoot["telegramStatusScreenshots"] = config.TelegramStatusScreenshots;
         configRoot["voiceTranscribeCommand"] = config.VoiceTranscribeCommand;
         configRoot["orchestrationTokenBudget"] = config.OrchestrationTokenBudget;

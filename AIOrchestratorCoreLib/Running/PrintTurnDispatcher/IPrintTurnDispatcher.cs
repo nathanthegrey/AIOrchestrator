@@ -48,8 +48,28 @@ public interface IPrintTurnDispatcher
     /// A session with no deferral is untouched — no rewrite, no log line. Reporting a clear that did not
     /// happen would be the same lie <c>/resume</c> exists to end, in the other direction.
     /// </para>
+    /// <para>
+    /// RETURNS HOW MANY IT CLEARED, so the owner's reply can say it (F7, 2026-09-09). It used to log per
+    /// session and count nothing, and <c>/resume</c>'s reply counted only sessions woken — so the one
+    /// thing this method exists to do was the one thing the owner was never told about.
+    /// </para>
+    /// <para>
+    /// A SESSION WITH A TURN IN FLIGHT IS SKIPPED, not waited for (F6, reproduced 2026-09-09). This reads
+    /// a state file and writes back a value derived from that snapshot; a turn running at the same time
+    /// writes its own record into the same file, and the derived write landed on top of it —
+    /// <c>executed_turns 1 → 0</c>, <c>next_turn 3 → 2</c>, so the same request id ran twice. Skipping
+    /// costs nothing: a session that is RUNNING is not one <c>/resume</c> needs to wake, and the
+    /// dispatcher now also drops the appointment the moment a deferred turn starts, so the window this
+    /// closes is only the turn's own duration.
+    /// </para>
+    /// <para>
+    /// IT NEVER THROWS PAST ITS OWN LOOP. <c>/resume</c> calls it BEFORE it appends anything, so an
+    /// escaping IO failure aborted the whole command, was logged as a Telegram backoff, and had the
+    /// update redelivered and retried for ever.
+    /// </para>
     /// </summary>
-    void Clear_LimitDeferrals();
+    /// <returns>The number of sessions whose appointment was dropped.</returns>
+    int Clear_LimitDeferrals();
 
     /// <summary>Cancels every in-flight turn (process trees killed) and waits for them to settle.</summary>
     Task Stop_Async();
