@@ -478,6 +478,65 @@ proprietario **insieme alla ragione**, così vede per che cosa sta pagando.
 
 **Dove.** `stage/1j-implementer-model`.
 
+### La memoria di un turno gliela consegna l'app, non se la va a cercare
+
+**Com'era.** Ogni sessione ricordava tutta la propria conversazione e la rimandava al modello a ogni
+mossa: il contesto cresceva per tutto il giorno e non si azzerava mai. Quando le sessioni sono
+diventate fresche — una per turno — il trascinamento è sparito, ma la sessione nuova si metteva a
+cercare da sola quello che le serviva, rileggendo il canale da cima a fondo.
+
+**Cos'è adesso.** Prima di svegliare una sessione, il bridge le scrive un **pacchetto**: le voci che
+l'hanno svegliata, l'incarico che sta lavorando (cercato anche nell'archivio, non solo nella parte
+recente del canale), il suo ultimo rapporto, lo stato del codice, e le righe del piano che la
+riguardano. La sessione lo legge come prima cosa e usa il canale solo per un fatto che al pacchetto
+manca. Al supervisore, quando toccherà a lui, il pacchetto porta anche il piano intero e la coda dei
+messaggi del proprietario.
+
+**Perché.** Ciò che una sessione va a cercare l'app lo ha già in mano: farglielo cercare è pagare due
+volte, una in lettura e una in contesto. **Misurato** il 2026-09-09: le sessioni fresche aprivano il
+proprio canale 7,8 volte per turno prima, circa una volta dopo; il contesto della prima chiamata è
+passato da 249.000 token a 39.000, e il costo per chiamata dei membri da 345.000 a circa 100.000 —
+stabile su tre finestre di misura diverse.
+
+**Il prezzo pagato, detto chiaro.** Il guadagno per *turno* è più piccolo di quello per chiamata
+(1,5 volte contro 3,4), perché i turni si sono allungati: un membro fresco con un incarico grosso
+lavora fino alla scadenza dei trenta minuti. Il 41% dei token di quella sera stava in turni arrivati
+alla scadenza. È il problema che viene affrontato adesso, non uno risolto.
+
+**Una cosa imparata sulla forma, non sul contenuto.** Il pacchetto viaggia in un **file**, non
+attaccato al messaggio: misurato che il testo passato per quella strada viene appiccicato al comando
+di ruolo e finisce dentro il suo argomento, e ci sono ruoli che quell'argomento lo usano per
+costruire percorsi. La strada comoda era anche quella che rompeva.
+
+**Dove.** `stage/4b-state-pack`.
+
+### Una promessa di spegnimento che il processo stesso tagliava
+
+**Com'era.** Quando il servizio veniva fermato, l'app annunciava di aspettare i turni in corso —
+fino a trentuno minuti — e trenta secondi dopo il sistema la dichiarava spenta. I turni a metà
+morivano e ricominciavano da zero.
+
+**Cos'è adesso.** L'attesa dichiarata è quella vera: i turni in volo arrivano alla fine, e solo dopo
+le sessioni vengono chiuse. La prima fermata con la correzione attiva ha aspettato ventuno minuti e
+ha scritto in chiaro «drenaggio completo, nulla da rifare».
+
+**Perché era sfuggito.** Il tempo di spegnimento non era stato impostato da nessuno, quindi valeva il
+predefinito di trenta secondi: l'ordine di grandezza sbagliato di sessanta volte. E la spiegazione
+che tutti avevano in mano era un'altra — si dava la colpa alla configurazione del server, che invece
+concedeva trentacinque minuti; il taglio era del processo. **Misurato** il 2026-09-09: tre riavvii in
+sei minuti hanno ucciso cinque sessioni fresche, quindici milioni di token, e lo stesso turno è
+ripartito da zero quattro volte.
+
+**Il principio.** Un'attesa promessa in un messaggio e non impostata nel codice è una promessa che
+non esiste. Le tre soglie in gioco — quanto aspetta chi lavora, quanto aspetta l'app, quanto aspetta
+il sistema operativo — ora si calcolano da un unico posto, l'una sopra l'altra, e se qualcuno
+configura un turno più lungo di quanto lo spegnimento possa reggere l'app lo dice all'avvio.
+
+**Cosa cambia per chi lo usa.** Fermare il servizio adesso può prendere minuti invece di secondi. È
+il prezzo giusto: prima era istantaneo perché buttava via il lavoro.
+
+**Dove.** `stage/4e-host-shutdown-timeout`.
+
 ### Un'impostazione che si legge una volta sola è un'impostazione che mente
 
 **Com'era.** Il modello del supervisore generale veniva fissato alla prima registrazione della
@@ -629,7 +688,7 @@ l'unico controllo che ha trovato qualcosa.
 ## 6. Che cosa stiamo facendo adesso
 
 Questa sezione è l'unica che parla al futuro, quindi invecchia in fretta: **aggiornata al
-2026-09-09**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
+2026-09-09, notte**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
 
 **Dov'è il costo che resta.** Le sessioni fresche hanno tolto di mezzo il contesto trascinato da un
 turno all'altro; adesso la spesa è concentrata **dentro** i turni lunghi, quelli che arrivano fino
@@ -648,6 +707,27 @@ lì spento.
   ancora stati rifatti. Sono attesi, non verificati.
 - Il file di istruzioni del progetto principale è stato modificato benché sia territorio di chi ha
   scritto l'originale: andrà risolto al prossimo allineamento.
+
+**Tre modifiche scritte e tutte e tre fermate, la notte del 9 settembre.** Il consiglio a metà
+turno, il riassunto di risveglio del supervisore e la scelta del modello dentro l'incarico sono
+state scritte, verificate da chi le ha commissionate (diff letto, suite verde) e poi **rotte una per
+una da una revisione avversaria indipendente**, con una prova per ogni difetto. Nessuna è in
+produzione. I difetti, le prove e la lista di lavoro stanno in
+`docs/superpowers/specs/2026-09-09-review-findings-4g-4h-4i.md`; i rami sono `stage/4g-soft-boundary`,
+`stage/4h-wakeup-digest`, `stage/4i-model-per-task`.
+
+Vale la pena dire *come* sono state rotte, perché sono tre volte lo stesso errore in tre posti
+diversi: **una funzione che non funziona affatto, dietro una suite verde.** Il consiglio a metà turno
+non arrivava mai, perché due campi vuoti si fondevano in uno — e tutti i suoi ventuno test passavano
+perché il messaggio finto usato nei test conteneva un campo che la CLI vera non manda. Il riassunto
+di risveglio funzionava una volta sola, perché il suo cronometro non veniva mai azzerato. La scelta
+del modello si appoggiava alla firma di un messaggio, che in questo sistema è solo testo.
+
+**La lezione, che conta più delle tre funzioni.** Tre revisioni su tre hanno trovato difetti reali
+*dopo* che qualcuno aveva letto il diff e visto la suite verde — la stessa proporzione dell'audit del
+mattino. Quindi: nessuna modifica che cambia comportamento vivo va integrata senza la sua revisione
+avversaria, e chi la commissiona non è chi la certifica. E un test si giudica da una domanda sola:
+passerebbe anche se la funzione fosse spenta? Se sì, non fissa nulla.
 
 **Una lezione di processo, che vale più di una funzione.** Il 2026-09-09 due filoni di lavoro sono
 andati avanti in parallelo sugli stessi file, e **la stessa funzione è stata costruita due volte** —
