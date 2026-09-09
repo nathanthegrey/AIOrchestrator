@@ -308,10 +308,10 @@ fi
 
 # MERGED ONTO WHAT IS THERE, NEVER REBUILT FROM A FIELD LIST. The previous shape named six keys and
 # silently dropped every other one the app persists — communicatorModel, voiceTranscribeCommand,
-# orchestrationTokenBudget, telegramStatusScreenshots, and telegramItalianLayer, which is the setting
-# the owner toggles from their phone (CLAUDE.md decision 11). A bootstrap re-run turned the Italian
-# layer off and said nothing. Written to a temp file and moved into place, after a backup, so a jq
-# that fails for any reason leaves the existing config untouched rather than truncated.
+# orchestrationTokenBudget and telegramStatusScreenshots, which the owner toggles from their phone.
+# A bootstrap re-run changed settings and said nothing. Written to a temp file and moved into place,
+# after a backup, so a jq that fails for any reason leaves the existing config untouched rather than
+# truncated.
 [ -f "$config_file" ] && cp "$config_file" "$config_file.aiorch-backup"
 
 printf '%s' "$existing_config" | jq \

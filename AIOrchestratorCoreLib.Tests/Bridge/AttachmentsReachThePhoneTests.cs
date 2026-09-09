@@ -45,7 +45,7 @@ public class AttachmentsReachThePhoneTests : IDisposable
         Directory.CreateDirectory(_paths.RequestsFolder);
         File.WriteAllText(
             _paths.ConfigFile,
-            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
         _store = OrchestrationSessionStore_Factory.Create(_paths);
         _log = new RecordingLog_Fake();
@@ -204,9 +204,8 @@ public class AttachmentsReachThePhoneTests : IDisposable
 
     IBridgeEngine Build_Engine()
     {
-        return BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
-            _paths, _configProvider, _store, _launcher, _log, _telegram, new EchoTranslator_Fake(),
-            BridgeTestTiming.Fast());
+        return BridgeEngine_Factory.Create_WithTelegramClient(
+            _paths, _configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
     async Task<string> Start_WithChannelAlreadySeen_Async(IBridgeEngine engine)

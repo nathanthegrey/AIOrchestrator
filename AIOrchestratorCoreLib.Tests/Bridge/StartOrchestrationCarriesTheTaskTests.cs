@@ -10,7 +10,6 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Time.Clock;
-using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 
@@ -55,13 +54,12 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        // The inbound loop needs the chat and owner ids or it throws. The Italian layer is pinned OFF
-        // because it defaults ON and would hand every string to the real translator. The runners are
+        // The inbound loop needs the chat and owner ids or it throws. The runners are
         // left at their default — TERMINAL — deliberately: a bridge-driven role would have the engine's
         // own dispatcher reach for a real `claude`, which is a second subject and a second way to fail.
         File.WriteAllText(
             _paths.ConfigFile,
-            $$"""{"repos":[{"name":"Repo","path":{{System.Text.Json.JsonSerializer.Serialize(_tempRepo)}}}],"telegramSupergroupChatId":{{SUPERGROUP_CHAT_ID}},"telegramOwnerUserId":{{OWNER_USER_ID}},"telegramItalianLayer":false}""");
+            $$"""{"repos":[{"name":"Repo","path":{{System.Text.Json.JsonSerializer.Serialize(_tempRepo)}}}],"telegramSupergroupChatId":{{SUPERGROUP_CHAT_ID}},"telegramOwnerUserId":{{OWNER_USER_ID}}}""");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -146,7 +144,7 @@ public class StartOrchestrationCarriesTheTaskTests : IDisposable
     {
         return BridgeEngine_Factory.Create_WithDecisionState(
             _paths, _configProvider, _store, launcher, _log, new CapturingTelegram_Fake(),
-            MessageTranslator_Factory.Create(_log), _engineState,
+            _engineState,
             Clock_Factory.Create_System(),
             BridgeTestTiming.Fast());
     }

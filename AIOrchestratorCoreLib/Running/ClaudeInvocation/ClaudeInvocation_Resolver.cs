@@ -4,8 +4,8 @@ namespace AIOrchestratorCoreLib.Running.ClaudeInvocation;
 
 /// <summary>
 /// The real CLI, per OS. On Windows the npm shim is <c>claude.cmd</c>, which only cmd.exe can
-/// start (the WPF app has no shell of its own — the same resolution <c>MessageTranslatorModel</c>
-/// uses); elsewhere <c>claude</c> resolves through PATH like any executable. The prompt never
+/// start (the WPF app has no shell of its own); elsewhere <c>claude</c> resolves through PATH like
+/// any executable. The prompt never
 /// travels through this command line — it goes on stdin — so cmd.exe's quoting rules never meet
 /// user text.
 /// </summary>

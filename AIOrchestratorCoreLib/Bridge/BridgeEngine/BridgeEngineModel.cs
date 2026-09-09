@@ -39,7 +39,6 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram.TelegramCallbackTap;
 using AIOrchestratorCoreLib.Telegram.TelegramOwnerMessage;
 using AIOrchestratorCoreLib.Transcription.VoiceTranscriber;
-using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 
 namespace AIOrchestratorCoreLib.Bridge.BridgeEngine;
@@ -53,7 +52,6 @@ internal sealed class BridgeEngineModel(
     IChannelTailer tailer,
     ITelegramApiClient? telegramClient,
     ISessionWatchdog watchdog,
-    IMessageTranslator translator,
     IVoiceTranscriber transcriber,
     IPrintTurnDispatcher printTurns,
     long initialLastUpdateId,
@@ -144,7 +142,6 @@ internal sealed class BridgeEngineModel(
     readonly IChannelTailer _tailer = tailer;
     readonly ITelegramApiClient? _telegramClient = telegramClient;
     readonly ISessionWatchdog _watchdog = watchdog;
-    readonly IMessageTranslator _translator = translator;
     readonly IVoiceTranscriber _transcriber = transcriber;
     readonly IPrintTurnDispatcher _printTurns = printTurns;
 
@@ -794,40 +791,11 @@ internal sealed class BridgeEngineModel(
     public event Action<string>? OrchestrationActivity;
     public event Action<bool>? MutedChanged;
     public event Action<bool>? SilenceAllChanged;
-    public event Action<bool>? ItalianLayerChanged;
-
-    /// <summary>
-    /// Flips the 🇮🇹 translation layer and PERSISTS it: the config provider reloads on the file's
-    /// write stamp, so the next outbound message already honours the new setting — there is no
-    /// in-memory copy of this flag to keep in step.
-    /// </summary>
-    public void Set_ItalianLayer(bool enabled)
-    {
-        var current = _configProvider.Get_Current();
-
-        if (current.TelegramItalianLayer == enabled)
-            return;
-
-        OrchestratorConfig_Loader.Save(OrchestratorConfig_Factory.Create_WithItalianLayer(current, enabled), _paths);
-
-        _log.Log_Info(GLOBAL_ORCH_ID, enabled
-            ? "Italian layer ON — outbound Telegram traffic is translated on the way out"
-            : "Italian layer OFF — outbound Telegram traffic goes out as the agents wrote it");
-
-        try
-        {
-            ItalianLayerChanged?.Invoke(enabled);
-        }
-        catch
-        {
-            // A faulty subscriber must not take the bridge down.
-        }
-    }
 
     /// <summary>
     /// Turns the periodic status's screenshots on or off, APP-WIDE and persisted — the owner asked
     /// for it to "work app wise, independently from where I place the command", so it lives in
-    /// config.json beside the Italian layer rather than on any one orchestration.
+    /// config.json rather than on any one orchestration.
     /// </summary>
     public void Set_StatusScreenshots(bool enabled)
     {
@@ -3191,7 +3159,6 @@ internal sealed class BridgeEngineModel(
             // COMPLETE OR NOT AT ALL. The body still reaches the owner — a formatting fault must
             // never cost them a message — but an incomplete question grows no buttons, and the
             // agent is told every missing line at once so a refusal is one round trip and not four.
-            // Built from the ENGLISH markers, before the Italian layer rewrites the body below.
             OwnerQuestion? question = null;
             var draft = new OwnerQuestionDraft(questionLines, optionLabels, recommendLines, riskLines, rowLines);
 
@@ -3203,21 +3170,6 @@ internal sealed class BridgeEngineModel(
                     question = OwnerQuestion_Contract.Build(draft);
                 else
                     Refuse_Question(append.Channel, faults);
-            }
-
-            // Italian layer (live config): the owner reads Italian on the phone; sessions and
-            // channels stay English. The speaker prefix never reaches the translator — a live
-            // translation once mangled it into garbage — and it does not need splitting off here
-            // any more, because it was never joined: `Format_Parts` above kept it apart. Presence
-            // lines (implementer spokes' "online") are canned app strings and stay English.
-            if (_configProvider.Get_Current().TelegramItalianLayer && append.Channel.IsOwnerChannel)
-            {
-                // Fenced blocks (ASCII mockups, snippets) are lifted out first: translating a
-                // drawing corrupts the very thing being shown.
-                var (withoutBlocks, blocks) = MonospaceBlocks_Formatter.Extract_Blocks(text);
-
-                text = MonospaceBlocks_Formatter.Restore_Blocks(
-                    await _translator.Translate_ToItalian_Async(withoutBlocks, cancellationToken), blocks);
             }
 
             // SPLIT, NEVER DROPPED, and numbered when there is more than one piece. This used to be
@@ -3495,9 +3447,6 @@ internal sealed class BridgeEngineModel(
 
         var prompt = questionPrompt;
 
-        if (_configProvider.Get_Current().TelegramItalianLayer && channel.IsOwnerChannel)
-            prompt = await _translator.Translate_ToItalian_Async(prompt, cancellationToken);
-
         // THE OPTIONS MOVE INTO THE MESSAGE WHEN THEY ARE TOO LONG TO READ ON A BUTTON. The owner,
         // 2026-08-24: "buttons don't wrap, so when a session asks me a question I often can't read all
         // the button text." Telegram truncates a long label with an ellipsis and there is no markup
@@ -3512,16 +3461,11 @@ internal sealed class BridgeEngineModel(
         // question they cannot answer without scrolling back is the one they defer. The row code is
         // beside it for the same reason — asked for three times in one afternoon (2026-09-07),
         // because "272, 267" and "the trial one" were the same conversation an hour apart.
-        var recommendation = _configProvider.Get_Current().TelegramItalianLayer && channel.IsOwnerChannel
-            ? await _translator.Translate_ToItalian_Async(question.Recommendation, cancellationToken)
-            : question.Recommendation;
+        var recommendation = question.Recommendation;
 
         var promptWithGuidance = $"{promptWithOptions}\n\n💡 {recommendation}"
             + (question.RowCode == null ? string.Empty : $"\n📎 {question.RowCode}");
 
-        // CLASSIFIED FROM THE ENGLISH, before the Italian layer rewrote the prompt above — the
-        // patterns are English words an agent writes, and matching a translation of them would make
-        // the guard depend on which language the owner happens to read in.
         var guardrails = _configProvider.Get_Current().Guardrails;
 
         // THE OPTIONS AND THE BODY COUNT TOO, and reading the question line alone was a hole with a
@@ -4993,9 +4937,6 @@ internal sealed class BridgeEngineModel(
 
         var text = CloseConfirmationPrompt_Builder.Build(request, unresolved);
 
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
-
         var confirmData = $"close-yes-{Guid.NewGuid():N}";
         var declineData = $"close-no-{Guid.NewGuid():N}";
 
@@ -5804,10 +5745,6 @@ internal sealed class BridgeEngineModel(
                     {
                         await Send_CostReport_Async(client, message.MessageThreadId, cancellationToken);
                     }
-                    else if (command == "italian")
-                    {
-                        await Toggle_ItalianLayer_Async(client, message.MessageThreadId, cancellationToken);
-                    }
                     else if (command == "limits")
                     {
                         await Send_LimitsReport_Async(client, message.MessageThreadId, cancellationToken);
@@ -6019,7 +5956,6 @@ internal sealed class BridgeEngineModel(
                     ("mute_all", "Toggle 🔕 everywhere"),
                     ("dnd_all", "Toggle 🌙 everywhere"),
                     ("pc", "Toggle 💻 THIS topic — I'm at its terminal, don't text or block"),
-                    ("italian", "Toggle 🇮🇹 — translate what I send you"),
                 ],
                 cancellationToken);
 
@@ -6073,53 +6009,10 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_ProgressReport_Async(ITelegramApiClient client, long? messageThreadId, string command, CancellationToken cancellationToken)
     {
-        var text = await Translate_LedgerText_Async(
-            Build_ProgressReportText(messageThreadId, unfinishedOnly: command == "left"), command, messageThreadId, cancellationToken);
+        var text = Build_ProgressReportText(messageThreadId, unfinishedOnly: command == "left");
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
-    }
-
-    /// <summary>
-    /// The Italian layer, with the ledger's SHAPE checked on the way back — and the English original
-    /// sent instead if it did not survive.
-    ///
-    /// This is the last step on the owner's directive path and was the only one with no guarantee:
-    /// the whole message went through a `claude -p` subprocess and nothing compared what returned. A
-    /// model handed forty rows, several near-identical, is being invited to summarise — and rule 11
-    /// makes the Italian layer persisted and the owner's normal mode, so this is the production path
-    /// rather than an edge case.
-    ///
-    /// The DECISION is in Planning.LedgerTranslation_Verifier, where the suite can reach it. This
-    /// method is left with the call and the fallback, deliberately: two findings in a row landed
-    /// inside this class, which is internal sealed and unreachable from the tests.
-    ///
-    /// THE FALLBACK IS NOT ANNOUNCED TO THE OWNER (rule 15): they cannot act on it, and the English
-    /// text arriving in place of Italian is the signal. The log line is for us.
-    /// </summary>
-    async Task<string> Translate_LedgerText_Async(string englishText, string command, long? messageThreadId, CancellationToken cancellationToken)
-    {
-        if (!_configProvider.Get_Current().TelegramItalianLayer)
-            return englishText;
-
-        var translated = await _translator.Translate_ToItalian_Async(englishText, cancellationToken);
-
-        // The translator returns the ORIGINAL on failure or timeout, by contract, so that case passes
-        // the check rather than tripping a fallback for a translation that never happened.
-        var shapeChange = Planning.LedgerTranslation_Verifier.Describe_ShapeChange_OrNull(englishText, translated);
-
-        if (shapeChange == null)
-            return translated;
-
-        // WHICH command, WHICH orchestration, and WHAT changed. This line is the whole diagnostic
-        // surface for the failure the verifier exists to detect, because rule 15 correctly keeps it
-        // off the owner's phone — so an unattributable "shape changed" would mean reproducing it by
-        // hand to learn anything. The General topic names itself: see Resolve_LogScope_ForTopic.
-        _log.Log_Warning(
-            Resolve_LogScope_ForTopic(messageThreadId),
-            $"/{command}: the Italian layer changed the ledger's shape ({shapeChange}) — sending the English original rather than a rearranged ledger");
-
-        return englishText;
     }
 
     /// <summary>
@@ -6153,7 +6046,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_TaskListReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
-        var text = await Translate_LedgerText_Async(Build_TaskListText(messageThreadId), "tasks", messageThreadId, cancellationToken);
+        var text = Build_TaskListText(messageThreadId);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -6456,9 +6349,6 @@ internal sealed class BridgeEngineModel(
     {
         var text = Build_TokensReportText(messageThreadId);
 
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
-
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
     }
@@ -6545,9 +6435,6 @@ internal sealed class BridgeEngineModel(
     async Task Send_CostReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var text = Build_CostReportText(messageThreadId);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -6639,12 +6526,8 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// /italian — flips the translation layer from the phone. The confirmation is written in the
-    /// language the layer is being switched TO, so the toggle demonstrates itself.
-    /// </summary>
-    /// <summary>
     /// /screens — the app-wide switch for the periodic status's screenshots. A toggle rather than
-    /// two commands, the same shape as /italian and /test, and it ignores which topic it was sent
+    /// two commands, the same shape as /test, and it ignores which topic it was sent
     /// from: the owner asked for one that works "independently from where I place the command".
     /// </summary>
     async Task Toggle_StatusScreenshots_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
@@ -6666,21 +6549,6 @@ internal sealed class BridgeEngineModel(
         var text = enabled
             ? "📸 Status screenshots ON — every half-hourly status carries a picture of the session's terminal, taken only while you are away from the PC."
             : "📸 Status screenshots OFF — the half-hourly status is text only from here on.";
-
-        await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
-    }
-
-    async Task Toggle_ItalianLayer_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
-    {
-        var enabled = !_configProvider.Get_Current().TelegramItalianLayer;
-        Set_ItalianLayer(enabled);
-
-        var text = enabled
-            ? "🇮🇹 Italian layer ON — everything I send you is translated from here on."
-            : "🇬🇧 Italian layer OFF — messages now reach you exactly as the sessions wrote them.";
-
-        if (enabled)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
 
         await Send_DirectReply_BestEffort_Async(client, messageThreadId, text, cancellationToken);
     }
@@ -7379,9 +7247,6 @@ internal sealed class BridgeEngineModel(
     {
         var text = Build_LimitsReportText();
 
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
-
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
     }
@@ -7454,9 +7319,6 @@ internal sealed class BridgeEngineModel(
     async Task Send_ContextReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var text = Build_ContextReportText(messageThreadId);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -7563,7 +7425,6 @@ internal sealed class BridgeEngineModel(
     {
         var text = Build_GitReportText(messageThreadId);
 
-        // NOT translated: this is verbatim git output (branch names, commit subjects, paths).
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
     }
@@ -8120,9 +7981,6 @@ internal sealed class BridgeEngineModel(
     async Task Send_MemberStatusReport_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
         var text = Build_MemberStatusText(messageThreadId);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -8904,9 +8762,6 @@ internal sealed class BridgeEngineModel(
     {
         var text = Build_TurnLogText(messageThreadId, command, rawText);
 
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
-
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
     }
@@ -8947,9 +8802,6 @@ internal sealed class BridgeEngineModel(
     async Task Send_ImplementerPeek_Async(ITelegramApiClient client, long? messageThreadId, string command, string rawText, CancellationToken cancellationToken)
     {
         var text = Build_ImplementerPeekText(messageThreadId, command, rawText);
-
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            text = await _translator.Translate_ToItalian_Async(text, cancellationToken);
 
         foreach (var chunk in TelegramMessage_Chunker.Chunk(text))
             await Send_DirectReply_BestEffort_Async(client, messageThreadId, chunk, cancellationToken);
@@ -9190,7 +9042,7 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// A tap IS an owner message: the tapped text goes through the normal pipeline (aggregation,
-    /// translation, delivery receipts) into the topic the buttons live in.
+    /// delivery receipts) into the topic the buttons live in.
     ///
     /// <para>
     /// ONE ROUTE FOR BOTH KINDS OF TAP — the answer that closes a question, and the "let's talk"
@@ -10906,10 +10758,10 @@ internal sealed class BridgeEngineModel(
 
     /// <summary>
     /// The log scope for an owner message, which is the topic question with the thread id already in
-    /// hand. A THIN ADAPTER, not a second implementation: this method and the one used by the ledger
-    /// translator answered the identical question forty lines apart and DISAGREED on the General
-    /// branch — one returned "general", the other the empty string, and the empty one silently lost
-    /// its diagnostic. Rule 12 is what makes that possible; one body is what closes it.
+    /// hand. A THIN ADAPTER, not a second implementation: this method and the one that used to sit
+    /// beside the ledger reports answered the identical question forty lines apart and DISAGREED on
+    /// the General branch — one returned "general", the other the empty string, and the empty one
+    /// silently lost its diagnostic. Rule 12 is what makes that possible; one body is what closes it.
     /// </summary>
     string Describe_MessageOrch(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message)
     {
@@ -11025,17 +10877,17 @@ internal sealed class BridgeEngineModel(
             // TAKE_READYDELIVERIES HAS ALREADY EMPTIED THE BUFFER FOR EVERY KEY IN THIS BATCH, so from
             // here the local variables are the only copy of the owner's words. The append's own
             // failure is handled below with a put-back; this wrapper covers the OTHER ways out, which
-            // were not — a translator that throws destroys the text outright, and any escape from the
-            // loop destroys every delivery still to come in the batch as well.
+            // were not — anything that throws between here and the append destroys the text outright,
+            // and any escape from the loop destroys every delivery still to come in the batch too.
             try
             {
                 await Deliver_OwnerMessage_Async(delivery, cancellationToken);
             }
             catch (Exception exception)
             {
-                // The ORIGINAL, never the possibly-half-translated working copy: a partially
-                // translated string becoming the owner's message is worse than a late one, and it
-                // would be near-impossible to diagnose from outside.
+                // The ORIGINAL, never the working copy: a half-processed string becoming the
+                // owner's message is worse than a late one, and it would be near-impossible to
+                // diagnose from outside.
                 _ownerDeliveryBuffer.Restore_Segment(delivery.Key, delivery.Value.Text, delivery.Value.FirstOrdinal);
                 _ownerDeliveryBuffer.Release(delivery.Key);
 
@@ -11084,9 +10936,9 @@ internal sealed class BridgeEngineModel(
         // wait." It was.
         //
         // Re-asked HERE, immediately before the append, because that is the last moment the answer is
-        // still true: everything above (target lookup, translation) can take seconds. Put back rather
-        // than dropped — the segment keeps its ordinal, so it lands in the owner's original order
-        // when GO comes.
+        // still true: everything above (target lookup, the append's own preparation) can take
+        // seconds. Put back rather than dropped — the segment keeps its ordinal, so it lands in the
+        // owner's original order when GO comes.
         //
         // THE HONEST LIMIT: once the append has landed the session may already have read it, and no
         // amount of checking can un-send it. This narrows the window to the append itself; it does
@@ -11100,11 +10952,6 @@ internal sealed class BridgeEngineModel(
         }
 
         var deliveryText = delivery.Value.Text;
-
-        // Italian layer: the SESSION must only ever see English — translate the aggregated
-        // owner text before it touches the channel. Already-English text passes unchanged.
-        if (_configProvider.Get_Current().TelegramItalianLayer)
-            deliveryText = await _translator.Translate_ToEnglish_Async(deliveryText, cancellationToken);
 
         // Counted BEFORE the owner entry lands, so a later increase can only mean the session
         // answered THIS message. SESSION, not supervisor: a basic orchestration is answered by its
@@ -11120,12 +10967,11 @@ internal sealed class BridgeEngineModel(
             // Put it back and mark it ready: the owner has already waited out one aggregation
             // window and must not serve a second one for a lock they know nothing about.
             //
-            // delivery.Value, THE ORIGINAL — not deliveryText. This put back the TRANSLATED string
-            // until rev-9 caught it: with the Italian layer on, the buffer stopped holding the
-            // owner's message and started holding a machine translation of it, which the retry then
-            // ran through the translator AGAIN. The owner's words were replaced by a paraphrase of
-            // themselves and re-paraphrased on every subsequent lock. Translation belongs on the way
-            // OUT; nothing may put an output of that pipeline back into the input side.
+            // delivery.Value, THE ORIGINAL — not deliveryText. NOTHING may put an output of the
+            // outbound pipeline back into the input side: until rev-9 this put back the string the
+            // Italian layer (removed 2026-09-09) had rewritten, so the buffer stopped holding the
+            // owner's message and started holding a machine paraphrase of it, re-paraphrased on every
+            // subsequent lock. The rule outlives the layer that taught it.
             _ownerDeliveryBuffer.Restore_Segment(delivery.Key, delivery.Value.Text, delivery.Value.FirstOrdinal);
             _ownerDeliveryBuffer.Release(delivery.Key);
 
@@ -13171,7 +13017,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     /// <summary>
     /// Downloads the voice note and runs the CONFIGURED transcription command; the transcript
-    /// becomes the message text (then translated by the Italian layer like any owner text).
+    /// becomes the message text, delivered like any owner text.
     /// Null = unconfigured/failed, with a direct explanatory reply already sent to the owner.
     /// </summary>
     async Task<string?> Build_VoiceEntryText_OrNull_Async(
