@@ -147,6 +147,27 @@ public static class PrintTurnPrompt_Builder
         return sources.Count > 1 ? Describe_MultiSourceContract(sources) : SINGLE_SOURCE_CONTRACT;
     }
 
+    public const string CLOSING_REQUEST_SUFFIX = "/closing";
+    public const string CLOSING_MARKER = "CLOSING TURN — your previous turn was stopped at the time limit.";
+
+    /// <summary>
+    /// The prompt of the closing turn (<see cref="TurnExecutor.ITurnExecutor.Execute_ClosingTurn_Async"/>).
+    /// It asks for a REPORT, not for more work: what was done, where it is (branch, commit — committing
+    /// what is safe is allowed, it is how the state survives), what is left with file and line, and the
+    /// dead ends — the one thing git and the channel cannot reconstruct. The final message IS the entry,
+    /// as always, so the supervisor reads it where the brief was written and the next fresh turn's pack
+    /// carries it as the member's last report.
+    /// </summary>
+    public static string Build_Closing(string requestId, TimeSpan killedAfter, TimeSpan budget)
+    {
+        return
+            $"[bridge turn {requestId}{CLOSING_REQUEST_SUFFIX}]\n" +
+            $"{CLOSING_MARKER} It ran for {killedAfter.TotalMinutes:0} minutes and was killed; this is NOT a continuation — do not resume the work. " +
+            $"You have {budget.TotalMinutes:0} minutes. If there are uncommitted changes that are safe to commit, commit them on your branch (one commit, honest message). " +
+            "Then write your REPORT as your final message: first line the subject, then a blank line, then: what you did; branch and commit; what is left, with file and line; what you were about to do next; dead ends (conclusions you reached that are not written anywhere). " +
+            "Your final message IS your channel entry — the bridge appends it under your author word. Then stop.\n";
+    }
+
     const string SINGLE_SOURCE_CONTRACT =
         "Act on it per your role command. Your final message IS your channel entry — the bridge appends it under your author word with the header, the index and the time: first line the subject, then a blank line, then the body. A question ends the turn exactly as an answer does.\n";
 

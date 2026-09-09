@@ -5,6 +5,7 @@ using AIOrchestratorCoreLib.Logging.OrchestrationLog;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
+using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 using AIOrchestratorCoreLib.Running.TurnCursor;
 using AIOrchestratorCoreLib.Running.TurnExecutor;
@@ -822,7 +823,62 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return;
         }
 
+        // A KILLED FRESH TURN GETS ONE CLOSING TURN BEFORE IT IS RETRIED. In transcript mode the retry
+        // resumes the transcript and the partial work survives; in fresh mode the retry starts from
+        // nothing, and measured 2026-09-09 that meant two 30-minute attempts (16 M tokens) redone from
+        // scratch before a third succeeded. The closing turn resumes the killed session once, briefly,
+        // for a report; the report is the member's entry, the pending entries count as answered, and
+        // the supervisor decides what happens next — instead of the bridge repeating the same brief.
+        if (result.TimedOut && fresh)
+        {
+            var closed = await Try_Close_KilledTurn_Async(stateFile, state, roleConfig, executor, result, requestId, attempt, turnNumber, pending, sources, tracker, environment, cancellationToken);
+
+            if (closed)
+                return;
+        }
+
         Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, null);
+    }
+
+    /// <summary>The closing turn's own budget — short on purpose: it writes a report, it does not work.</summary>
+    public static readonly TimeSpan CLOSING_TURN_TIMEOUT = TimeSpan.FromMinutes(5);
+
+    async Task<bool> Try_Close_KilledTurn_Async(string stateFile, IPrintSessionState state, IRoleRunnerConfig roleConfig, ITurnExecutor executor, ITurnResult killed, string requestId, int attempt, int turnNumber, IReadOnlyList<PendingEntry> pending, IReadOnlyList<ITurnSource> sources, SessionTracker tracker, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
+    {
+        var killedSessionId = killed.SessionId ?? state.SessionId;
+        _log.Log_Info(state.OrchId, $"Turn {requestId} attempt {attempt} killed at {killed.Elapsed.TotalMinutes:0} min — asking session {killedSessionId} for a closing report (up to {CLOSING_TURN_TIMEOUT.TotalMinutes:0} min) before any retry");
+
+        var closing = await executor.Execute_ClosingTurn_Async(state, roleConfig, killedSessionId, requestId, environment, killed.Elapsed, CLOSING_TURN_TIMEOUT, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (closing == null)
+            return false;
+
+        if (!TurnOutcomes.Is_Success(closing) || string.IsNullOrWhiteSpace(closing.ResultText))
+        {
+            _log.Log_Warning(state.OrchId, $"Turn {requestId}: the closing turn did not produce a report ({TurnOutcomes.Describe(closing)}, exit {closing.ExitCode}) — falling back to the ordinary retry; {Tail(closing.RawStderr, 200)}");
+            return false;
+        }
+
+        if (!await Write_Reply_Async(state, sources, closing.ResultText))
+        {
+            _log.Log_Warning(state.OrchId, $"Turn {requestId}: the closing report could not be appended (channel locked) — falling back to the ordinary retry");
+            return false;
+        }
+
+        Append_TurnEnded(state, requestId, attempt, pending, killed, TurnOutcomes.TIMEOUT_CLOSED, $"closing turn {Describe_Cost(closing)}, {closing.Elapsed.TotalSeconds:F1} s wall");
+
+        var firstIndex = pending.Count == 0 ? 0 : pending[0].Entry.Index;
+        var lastIndex = pending.Count == 0 ? 0 : pending[^1].Entry.Index;
+        var cost = (killed.TotalCostUsd ?? 0) + (closing.TotalCostUsd ?? 0);
+        var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, firstIndex, lastIndex, DateTime.UtcNow, TurnOutcomes.TIMEOUT_CLOSED, cost, closing.SessionId ?? killedSessionId);
+
+        PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, closing.SessionId ?? killedSessionId, Advance_Cursors(state, sources, pending)));
+        tracker.LastFailureAt = null;
+        tracker.FirstTurnSinceStart = false;
+
+        _log.Log_Info(state.OrchId, $"Turn {requestId} ended — {TurnOutcomes.TIMEOUT_CLOSED}; the report is entry material for the supervisor, the next turn starts fresh from it");
+        return true;
     }
 
     /// <summary>

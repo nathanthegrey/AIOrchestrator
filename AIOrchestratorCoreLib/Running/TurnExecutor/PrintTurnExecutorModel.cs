@@ -79,6 +79,29 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         }
     }
 
+    public async Task<ITurnResult?> Execute_ClosingTurn_Async(
+        IPrintSessionState state,
+        IRoleRunnerConfig roleConfig,
+        string killedSessionId,
+        string requestId,
+        IReadOnlyDictionary<string, string> environment,
+        TimeSpan killedAfter,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        // --resume of the killed session: its transcript exists (the process ran for the whole limit),
+        // and the prompt on stdin is the whole message — no positional command, so nothing lands in
+        // $ARGUMENTS. The same shape as a resumed turn, with a different request.
+        var arguments = PrintTurnCommand_Builder.Build_Arguments(state, roleConfig, killedSessionId, resumeTranscript: true, null);
+        var prompt = PrintTurnPrompt_Builder.Build_Closing(requestId, killedAfter, timeout);
+
+        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
+
+        TurnLog_Store.Append_TurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), $"{requestId}{PrintTurnPrompt_Builder.CLOSING_REQUEST_SUFFIX}", result);
+
+        return result;
+    }
+
     public void Release(string orchId, string memberId)
     {
         // Nothing is held between turns: that is what "print" means.

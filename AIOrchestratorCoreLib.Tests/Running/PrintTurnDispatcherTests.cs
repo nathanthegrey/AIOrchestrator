@@ -397,6 +397,70 @@ public class PrintTurnDispatcherTests
         Assert.Equal(1, secondPack.Split(StatePack_Builder.TITLE_PREFIX).Length - 1);
     }
 
+    /// <summary>
+    /// Measured 2026-09-09 after round 1: `fincanva-2/imp-5/2` was killed at 30 min twice (6.7 M and
+    /// 9.6 M tokens) and redone from scratch a third time. A fresh turn has no transcript to resume on
+    /// retry, so the bridge now asks the killed session for a report ONCE before anything else.
+    /// </summary>
+    [Fact]
+    public async Task AFreshTurnThatOutlivesTheTimeout_GetsOneClosingTurn_WhoseReportIsItsEntry()
+    {
+        using var harness = new PrintRunnerTestHarness("implementer", turnTimeoutMinutes: 1.0 / 60, resumeForMembers: "fresh");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
+        // Invocation 1 outlives the 1 s limit; invocation 2 is the closing turn and answers with a report.
+        harness.Write_Scenario("""{"turns":[{"delay_ms":8000},{"result":"REPORT — stopped at the limit\n\nhalf done at abc1234; next: src/x.ts:42"}],"default":{"result":"should not run\n\n-"}}""");
+        var dispatcher = harness.Create_Dispatcher(retryBackoff: TimeSpan.FromMilliseconds(100));
+
+        Append_Supervisor(harness, orchId, memberId, "BRIEF — long job", "go");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, TimeSpan.FromSeconds(40)));
+        await dispatcher.Stop_Async();
+
+        var invocations = harness.Read_Invocations();
+        Assert.Equal(2, invocations.Count);
+        var killedSession = invocations[0]["session_id"]!.GetValue<string>();
+        var closingArgs = PrintRunnerTestHarness.Args(invocations[1]);
+        Assert.Contains("--resume", closingArgs);
+        Assert.Equal(killedSession, closingArgs[closingArgs.IndexOf("--resume") + 1]);
+        Assert.Contains(PrintTurnPrompt_Builder.CLOSING_MARKER, invocations[1]["prompt"]!.GetValue<string>());
+
+        var entries = ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId));
+        Assert.Single(entries, entry => entry.Author == ChannelAuthors.Implementer && entry.Subject == "REPORT — stopped at the limit");
+        var ended = Assert.Single(entries, entry => entry.Subject.Contains(PrintTurn_Words.TURN_ENDED_SUBJECT));
+        Assert.Contains(TurnOutcomes.TIMEOUT_CLOSED, ended.Subject);
+        Assert.DoesNotContain(entries, entry => entry.Subject.Contains(PrintTurn_Words.TURN_STALLED_SUBJECT));
+
+        var state = harness.Read_State(SessionRoles.Implementer, orchId, memberId);
+        Assert.Equal(0, state.FailedAttempts);
+        Assert.Equal(2, state.NextTurnNumber);
+        Assert.Equal(TurnOutcomes.TIMEOUT_CLOSED, state.ExecutedTurns[0].Outcome);
+    }
+
+    [Fact]
+    public async Task AClosingTurnThatFails_FallsBackToTheOrdinaryRetry()
+    {
+        using var harness = new PrintRunnerTestHarness("implementer", turnTimeoutMinutes: 1.0 / 60, resumeForMembers: "fresh");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
+        // 1: killed; 2: the closing turn dies; 3: the retry (a new fresh session) succeeds.
+        harness.Write_Scenario("""{"turns":[{"delay_ms":8000},{"exit_code":1,"stderr":"boom"},{"result":"ack\n\ndone on the retry"}]}""");
+        var dispatcher = harness.Create_Dispatcher(retryBackoff: TimeSpan.FromMilliseconds(100));
+
+        Append_Supervisor(harness, orchId, memberId, "BRIEF — long job", "go");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, TimeSpan.FromSeconds(40)));
+        await dispatcher.Stop_Async();
+
+        var invocations = harness.Read_Invocations();
+        Assert.Equal(3, invocations.Count);
+        Assert.Contains("--resume", PrintRunnerTestHarness.Args(invocations[1]));
+        var retryArgs = PrintRunnerTestHarness.Args(invocations[2]);
+        Assert.Contains("--session-id", retryArgs);
+        Assert.NotEqual(invocations[0]["session_id"]!.GetValue<string>(), invocations[2]["session_id"]!.GetValue<string>());
+
+        var entries = ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId));
+        Assert.Single(entries, entry => entry.Author == ChannelAuthors.Implementer && entry.Subject == "ack");
+        Assert.Single(entries, entry => entry.Subject.Contains($"{PrintTurn_Words.TURN_ENDED_SUBJECT} {memberId} turn 1 — timeout") && !entry.Subject.Contains("closed"));
+        Assert.Single(entries, entry => entry.Subject.Contains($"{PrintTurn_Words.TURN_ENDED_SUBJECT} {memberId} turn 1 — success"));
+    }
+
     [Fact]
     public async Task TranscriptMode_FirstTurn_StaysPositionalOnly()
     {

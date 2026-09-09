@@ -51,6 +51,26 @@ public interface ITurnExecutor
     /// implementation that holds anything. Called when a turn's transport failed and the next
     /// attempt must start clean, and when the session is closed.
     /// </summary>
+    /// <summary>
+    /// ONE MORE TURN ON THE TRANSCRIPT THE TIMEOUT JUST KILLED — "write your report and stop". Measured
+    /// 2026-09-09 on the VPS after round 1 (fresh members): `fincanva-2/imp-5/2` was killed at 30 min
+    /// twice (63 and 88 calls, 6.7 M and 9.6 M tokens) and redone from scratch a third time (3.4 M):
+    /// under fresh a killed attempt loses everything, where a resumed one kept its partial work. The
+    /// closing turn resumes the killed session once, briefly, so its report becomes the member's entry
+    /// and the next fresh turn's pack carries it. Null when the transport cannot do it (a stream session
+    /// is retried with its memory anyway); a failed closing turn is reported like any other result and
+    /// the caller falls back to the ordinary retry.
+    /// </summary>
+    Task<ITurnResult?> Execute_ClosingTurn_Async(
+        IPrintSessionState state,
+        IRoleRunnerConfig roleConfig,
+        string killedSessionId,
+        string requestId,
+        IReadOnlyDictionary<string, string> environment,
+        TimeSpan killedAfter,
+        TimeSpan timeout,
+        CancellationToken cancellationToken);
+
     void Release(string orchId, string memberId);
 
     /// <summary>

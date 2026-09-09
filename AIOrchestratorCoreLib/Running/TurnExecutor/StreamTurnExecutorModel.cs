@@ -141,6 +141,12 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         return bootCost > 0 || bootElapsed > TimeSpan.Zero ? With_BootAddedIn(outcome.Result, bootCost, bootElapsed) : outcome.Result;
     }
 
+    /// <summary>Not for a stream session: it keeps its transcript across turns (`resume: transcript`), so its retry already remembers the killed work.</summary>
+    public Task<ITurnResult?> Execute_ClosingTurn_Async(IPrintSessionState state, IRoleRunnerConfig roleConfig, string killedSessionId, string requestId, IReadOnlyDictionary<string, string> environment, TimeSpan killedAfter, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        return Task.FromResult<ITurnResult?>(null);
+    }
+
     public void Release(string orchId, string memberId)
     {
         StreamSessionProcess? process;
