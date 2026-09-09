@@ -1,6 +1,7 @@
 # Velocità di AI Orchestrator — dove va il tempo, e come riprenderselo
 
-Data: 2026-09-09 · Stato: analisi + decisioni del proprietario (§3.6) + verifica del secondo parere (§3.8) + bug trovato (§3.7); nessuna modifica al codice · Autore: sessione Claude (Fable) su richiesta di Nathan
+Data: 2026-09-09 · Stato: **ESEGUITO** — le sette proposte sono in `ours/integration`, riviste in modo
+avversario e corrette (§7). Analisi originale in §1–6, invariata; le decisioni del proprietario in §3.6 · Autore: sessione Claude (Fable) su richiesta di Nathan
 
 ## 0. In una riga
 
@@ -318,3 +319,84 @@ Build/test locale: `DOTNET_ROOT=~/.dotnet ~/.dotnet/dotnet build AIOrchestratorC
 VPS: `ssh orch@159.195.254.120` + `jq`/`python3` su `~/.claude/supervision/*/orchestrator.log.jsonl`
 e `*turns.jsonl` (solo campi `ts`, `message`, `duration_ms`, `num_turns`, `is_error`,
 `api_error_status`, `result` del solo record d'errore); `systemctl status`, `ps`, `free`, `journalctl`.
+
+
+---
+
+# 7. Esito — che cosa è stato fatto, e che cosa gli audit hanno trovato
+
+Scritto a fine giornata, 2026-09-09. Tutto ciò che segue è in `ours/integration` (`9c6b8d4`),
+pushato su `origin`, **non sul VPS**: il daemon in produzione gira ancora il binario del mattino.
+
+## 7.1 Le sette proposte, più due che non erano nel piano
+
+| # | Che cosa fa ora | Rami |
+|---|---|---|
+| P0 | Il battito del processo stream riparte quando gli si manda il prompt: un risveglio dopo una quiete non è più scambiato per silenzio | `7a` |
+| P1 | Un rifiuto per limite d'uso compra un appuntamento **limitato a 6 ore**, mai per una parola sola, e lo dice al proprietario con la data | `7b`, `7i` |
+| P2 | Un turno ucciso alla scadenza scrive dove è arrivato, e **consuma solo ciò a cui ha risposto** | `7f`, `7j` |
+| P3 | Un'aggiunta a un canale sveglia il ciclo; il tuo messaggio finito aspetta 2 s invece di 6 | `7e`, `7k` |
+| P5 | Il traduttore **non esiste più**: layer, flag, comando `/italian`, 47 test del suo mondo | `7c`, `7h` |
+| P7 | Il tick legge ciò che è cambiato: **198 → 44 aperture di file, 1 → 0 scritture** | `7g` |
+| P8 | La suite gira su tempi iniettati: **107 s → 37 s**, nessuna asserzione indebolita | `7d` |
+| + | Le diagnostiche del lock non sono più rubabili: l'intermittente storico del repo è chiuso | `7l` |
+| + | Il test di P0 giudica il turno giusto, non l'intera corsa | `7l` |
+
+P4 (implementer su runner stream) e P9 (regole di protocollo): **non fatte**, decisione del proprietario.
+
+## 7.2 L'audit avversario, e perché è servito
+
+Quattro revisori indipendenti, in worktree isolati, con l'obbligo di **provare** ogni difetto con una
+sonda invece di segnalarne di teorici. Hanno trovato difetti veri in **tutte e tre** le modifiche che
+cambiano il comportamento vivo. I peggiori, tutti confermati e tutti corretti:
+
+- **P1** parcheggiava una sessione **24 ore** quando l'ora di reset era appena passata, e ogni
+  rifiuto successivo aggiungeva un giorno — con il traffico nuovo che non svegliava più nulla.
+  Peggio del comportamento sostituito. E il cancello d'ingresso era la parola «limit»: un turno
+  **riuscito**, il cui unico problema era un canale bloccato, veniva parcheggiato 14 ore senza
+  spendere un tentativo, quindi senza mai fermarsi né avvisare.
+- **P2** poteva **mangiarsi il messaggio del proprietario**: i cursori avanzavano su tutti i canali
+  mentre il rapporto di chiusura ne indirizzava uno solo. E il record scritto per primo dichiarava
+  «un turno di chiusura è stato eseguito» su cinque rami su sei dove non era vero.
+- **P3** aveva ridotto **di dodici volte** il margine che impedisce di specchiare un'entry a metà:
+  con uno scrittore che si ferma 400 ms l'entry arrivava troncata e **la coda distrutta**, non
+  ritardata. Più due difetti da ~1 M token: un punto finale nel messaggio del proprietario
+  raddoppiava il turno del supervisore, e un rapporto arrivato un attimo dopo ne comprava un altro.
+
+Il revisore di P3 ha anche attaccato cinque possibili corse dentro il watcher e **non ne ha rotta
+nessuna**: i difetti stavano in ciò che l'accelerazione costava altrove, non nel meccanismo.
+
+## 7.3 I prezzi pagati, detti chiaramente
+
+- **L'ultima entry di un canale torna a impiegare ~4 s** per arrivare sul telefono, come prima del
+  watcher. È il prezzo di non troncarla. Il guadagno sul percorso del proprietario resta: il
+  dispatcher legge i file direttamente e non passa dal tailer.
+- **Due messaggi a più di 2 s di distanza comprano ancora due turni.** Non esiste una forma che
+  consegni subito il primo e coalizzi il secondo: la grazia deve essere almeno la distanza. 2 s è un
+  giudizio, ed è una costante che si sposta.
+- **La UI Windows è modificata alla cieca** (spunta della lingua e sezione delle impostazioni):
+  quel progetto non compila su macOS. **Serve una build su Windows prima di dirla verificata.**
+- **`--max-budget-usd` non limita la spesa**: misurato il 2026-09-09, con cap 0,0001 $ ha comunque
+  speso 0,11 $ — il tetto è controllato dopo il passo, non prima.
+
+## 7.4 Stato della suite
+
+**2751 verdi, 9 skip, 0 rossi**, in cinque corse consecutive sul main finale; 1 m 10 s – 1 m 30 s.
+Il tempo è salito dai 37 s di P8 perché sono stati aggiunti ~150 test.
+
+La regola del repo che parla di «6 rossi noti + 1 intermittente» **non è più vera** e va riscritta:
+i sei sono skip onesti dal commit `b2dde29`, e l'intermittente è chiuso da `7l`. La formulazione
+suggerita: *«la suite è verde: 0 rossi, 9 skip (6 impossibili su macOS, 3 smoke live). Confronta
+l'insieme dei nomi, mai il numero.»* Il file appartiene al proprietario del repo e non è stato
+toccato.
+
+Da segnalare anche: la **decisione 11** del `CLAUDE.md` descrive `/italian` e
+`Create_WithItalianLayer`, che non esistono più.
+
+## 7.5 Che cosa NON è stato verificato
+
+- Il comportamento su **Linux** del watcher quando la cartella osservata sparisce: qui è macOS
+  (FSEvents), il VPS è inotify. Il re-arm è stato scritto per quella forma ma è **inferito**.
+- La **UI Windows** (vedi 7.3).
+- Il **VPS**: niente di tutto questo è stato messo in produzione, e nessuna misura è stata rifatta lì
+  dopo le modifiche. I numeri di §3 restano quelli del binario del mattino.
