@@ -5,9 +5,9 @@ Data: 2026-09-09 · Stato: analisi + decisioni del proprietario (§3.6) + verifi
 ## 0. In una riga
 
 Il tempo perso dalle orchestrazioni non è nel bridge (che gira al 3,7 % di un core) né nel modello
-(un turno del supervisore dura 26–33 s mediani): è in **turni che muoiono e non ripartono** — 28 timeout
-da 30 minuti (≈14 ore) e 8 orchestrazioni ferme da ore su un limite d'uso che il codice legge ma non
-usa per ripartire — e in **circa 15–20 s di attese fisse dell'app su ogni scambio con te**. La suite
+(un turno del supervisore dura 26–33 s mediani): è in **turni che muoiono e non ripartono** — 26 risvegli del supervisore uccisi da un
+battito mai azzerato (§3.7), 11 turni implementer uccisi a 30 minuti (≈ 5,5 h) e 8 orchestrazioni
+ferme da ore su un limite d'uso che il codice legge ma non usa per ripartire — e in **circa 15–20 s di attese fisse dell'app su ogni scambio con te**. La suite
 di test passa il 75 % del tempo ad aspettare orologi veri.
 
 ## 1. Cos'è l'app (per chi arriva dopo)
@@ -77,7 +77,7 @@ per chi è in print, ~4,5 s di avvio processo: **7–10 s fissi a salto** `[misu
 
 | Evento | fincanva-1 | fincanva-2 | fincanva-3 | Costo |
 |---|---|---|---|---|
-| Timeout di turno (uccisi a 1800 s) | 11 | 12 (7 a 1800 s) | 5 | ≈ 28 × 30 min = **14 ore** di lavoro buttato, poi il turno riparte da zero |
+| Timeout di turno (uccisi a 1800 s) — **corretto 2026-09-09, vedi §3.9** | 6 | 2 | 3 | 11 kill, tutti implementer: ≈ 5,5 h di turni buttati; il rifacimento dopo il kill è durato 82–845 s |
 | Stalli «failed 3 times — not retried until new traffic» | 5 | 5 | 8 | durate misurate fino alla prossima riuscita: **167–509 min**; 8 ancora aperti |
 | Nudge «unread traffic for 8 min» (globale, ultime 20k righe) | 54 | | | la sveglia arriva con 8 min di granularità |
 | Traduzione fallita (exit 1, globale) | 161 (+22 «failed twice») | | | ogni fallimento è uno spawn perso, e sul retry due |
@@ -90,9 +90,10 @@ nuovo. La politica (`PrintTurnDispatcherModel.cs:404-418`, `DEFAULT_RETRY_BACKOF
 (`grep WindowResetsAtUtc Running/` → vuoto), che il bridge legge solo per gli **avvisi**
 (`BridgeEngineModel.cs:2733-2823`). La ripartenza è a mano (`/resume`).
 
-Sui timeout a 1800 s: il limite di silenzio configurato è 600 s (`printRunner.streamSilenceSeconds`),
-quindi quei processi **parlavano** per 30 minuti — stavano lavorando — e sono stati uccisi al
-`DEFAULT_TURN_TIMEOUT` di 30 min. Che cosa facessero non l'ho verificato `[non verificato]`.
+Sui timeout a 1800 s: sono turni **print** (implementer), che emettono un solo JSON alla fine — il
+limite di silenzio non li riguarda e il log dei turni non contiene eventi intermedi; che cosa
+facessero durante i 30 minuti **non è ricostruibile dai log** (§3.9). La stima iniziale «28 × 30 min
+≈ 14 h» era sbagliata: 17 di quei 28 «timeout» erano uccisioni per battito stantio (§3.7).
 
 ### 3.4 Il bridge in sé (VPS, 2 orchestrazioni attive, idle)
 
@@ -191,6 +192,23 @@ evento e all'attesa Telegram, **no** all'azzeramento della coalescenza per il tr
 supervisore (ogni risveglio in più costa ~1 M token: i numeri sopra lo confermano); azzerare solo il
 percorso owner → supervisore.
 
+## 3.9 Classificazione dei turni uccisi a 30 minuti (VPS, solo metadati, 2026-09-09)
+
+42 righe «attempt N timeout» nei log; il tempo fra avvio e uccisione si divide in due gruppi netti:
+31 sotto i 60 s (il battito stantio, §3.7) e **11 a ~1800 s** — i veri kill al `DEFAULT_TURN_TIMEOUT`.
+Tutti e 11 sono implementer (print): fincanva-1 6, fincanva-2 2, fincanva-3 3. Nessun supervisore
+o reviewer. Per ognuno il log dei turni ha un solo record, il marcatore sintetico scritto dal bridge
+al kill (`exit_code -1`), perché il runner print produce un unico JSON alla fine: **quale strumento
+fosse in corso e quante chiamate avesse fatto non si può sapere**. Tutti gli 11 request id sono poi
+riusciti al tentativo successivo in 82–845 s (uno al terzo tentativo). Tre kill (fincanva-2/imp-3/3,
+fincanva-3/imp-2/1, fincanva-3/imp-3/1) hanno lo stesso istante di avvio, 00:57:15Z dell'8 set: turni
+partiti insieme a un riavvio del daemon e morti insieme 30 minuti dopo.
+
+Conseguenze per P2: il costo misurato è ≈ 5,5 h di turni buttati (non 14) più 30 min di attesa per
+ogni kill prima che il lavoro riprenda; il turno di chiusura resta la forma giusta (salva lo stato
+di un turno che stava lavorando invece di perderlo), ma il suo valore è più piccolo di quanto scritto
+in §3.3. Tabella completa: `killed-turns.md` nello scratchpad della sessione (non nel repo).
+
 ## 4. Proposte, in ordine effetto/costo
 
 Numerazione allineata alla lista discussa in chat: P0 battito · P1 limite · P2 timeout · P3 attese ·
@@ -211,7 +229,7 @@ il bridge già legge per gli avvisi diventa anche la sveglia degli stalli.
 ripianificato a quell'ora e non prima; sul VPS un'orchestrazione ferma per limite riparte senza
 `/resume` (log: nessun «failed 3 times» seguito da ore di silenzio).
 
-### P2 — Turni uccisi a 30 min: «rapporto e chiudi», non «più tempo» (effetto: ~14 h/36 h misurate · costo: medio)
+### P2 — Turni uccisi a 30 min: «rapporto e chiudi», non «più tempo» (effetto: ≈ 5,5 h/36 h misurate + 30 min di attesa per kill · costo: medio)
 **Decisione del proprietario (2026-09-09): com'è ora è sbagliato — un implementer può lavorare
 ore.** Forma scelta dopo il confronto con il secondo agente: **non** alzare i 30 minuti (i turni lunghi
 sono quelli da 32–92 chiamate e 7–30 M token in ingresso: più tempo = più contesto), ma allo scadere
