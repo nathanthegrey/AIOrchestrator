@@ -13,17 +13,6 @@ public static class OrchestratorConfig_Factory
     public const string DEFAULT_SUPERVISOR_MODEL = "opus";
     public const string DEFAULT_IMPLEMENTER_MODEL = "opus";
     public const string DEFAULT_COMMUNICATOR_MODEL = "sonnet";
-    /// <summary>
-    /// OFF by default (owner directive 2026-09-09) — the translation layer is switched off, not
-    /// repaired. Every EN→IT/IT→EN exchange spawned a `claude -p` subprocess per message, 45 s
-    /// timeout, and 183 of them failed in one recent log; agents now handle languages themselves
-    /// (the owner's own language with them, English everywhere else — files, code, commits, the
-    /// ledger, channel entries to other agents). An owner can still turn it back on with
-    /// `/italian` or the persisted `telegramItalianLayer` key — the toggle and the translator both
-    /// keep working, only the default flipped.
-    /// </summary>
-    public const bool DEFAULT_TELEGRAM_ITALIAN_LAYER = false;
-
     /// <summary>Opt-in: a screenshot raises a real window, so an absent key must read as OFF.</summary>
     public const bool DEFAULT_TELEGRAM_STATUS_SCREENSHOTS = false;
 
@@ -36,7 +25,6 @@ public static class OrchestratorConfig_Factory
         long? telegramSupergroupChatId,
         long? telegramOwnerUserId,
         string? telegramBotToken,
-        bool? telegramItalianLayer,
         bool? telegramStatusScreenshots,
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
@@ -53,7 +41,7 @@ public static class OrchestratorConfig_Factory
     {
         return Create(
             repos, supervisorModel, implementerModel, generalSupervisorModel, communicatorModel,
-            telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken, telegramItalianLayer,
+            telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
             RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse);
     }
@@ -72,7 +60,6 @@ public static class OrchestratorConfig_Factory
         long? telegramSupergroupChatId,
         long? telegramOwnerUserId,
         string? telegramBotToken,
-        bool? telegramItalianLayer,
         bool? telegramStatusScreenshots,
         string? voiceTranscribeCommand,
         long? orchestrationTokenBudget,
@@ -91,7 +78,6 @@ public static class OrchestratorConfig_Factory
             telegramSupergroupChatId,
             telegramOwnerUserId,
             telegramBotToken,
-            telegramItalianLayer ?? DEFAULT_TELEGRAM_ITALIAN_LAYER,
             telegramStatusScreenshots ?? DEFAULT_TELEGRAM_STATUS_SCREENSHOTS,
             voiceTranscribeCommand,
             orchestrationTokenBudget,
@@ -117,39 +103,13 @@ public static class OrchestratorConfig_Factory
 
     public static IOrchestratorConfig Create_Empty()
     {
-        return Create([], null, null, null, null, null, null, null, null, null, null, null);
-    }
-
-    /// <summary>
-    /// The same config with only the Italian layer changed — the app's status-bar toggle and the
-    /// /italian command both flip it live, and neither should have to restate every other field.
-    /// </summary>
-    public static IOrchestratorConfig Create_WithItalianLayer(IOrchestratorConfig source, bool telegramItalianLayer)
-    {
-        return Create(
-            source.Repos,
-            source.SupervisorModel,
-            source.ImplementerModel,
-            source.GeneralSupervisorModel,
-            source.CommunicatorModel,
-            source.TelegramSupergroupChatId,
-            source.TelegramOwnerUserId,
-            source.TelegramBotToken,
-            telegramItalianLayer,
-            source.TelegramStatusScreenshots,
-            source.VoiceTranscribeCommand,
-            source.OrchestrationTokenBudget,
-            source.Runners,
-            source.PlanBackend,
-            source.Guardrails,
-            source.Defaults,
-            source.TelegramProse);
+        return Create([], null, null, null, null, null, null, null, null, null, null);
     }
 
     /// <summary>
     /// The same config with only the status-screenshot flag changed — the /screenshots command
-    /// flips it live from the phone, and like the Italian toggle it must not have to restate every
-    /// other field just to move one bool.
+    /// flips it live from the phone, and it must not have to restate every other field just to move
+    /// one bool.
     /// </summary>
     public static IOrchestratorConfig Create_WithStatusScreenshots(IOrchestratorConfig source, bool telegramStatusScreenshots)
     {
@@ -162,7 +122,6 @@ public static class OrchestratorConfig_Factory
             source.TelegramSupergroupChatId,
             source.TelegramOwnerUserId,
             source.TelegramBotToken,
-            source.TelegramItalianLayer,
             telegramStatusScreenshots,
             source.VoiceTranscribeCommand,
             source.OrchestrationTokenBudget,

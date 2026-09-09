@@ -138,15 +138,24 @@ public class AwaySuppressesAppAlertsScanTests
 
     /// <summary>
     /// AND THE PREDICATE HAS TO SEE GENERAL. It answers "is the owner at a terminal ANYWHERE", but
-    /// it walks the session store and General keeps no session.json — so a `/pc` held only in
+    /// it walks the session roster and General keeps no session.json — so a `/pc` held only in
     /// General, the topic the owner talks to most, used to read as nobody being at a keyboard.
+    ///
+    /// <para>
+    /// THE ROSTER IS READ THROUGH <c>Sessions_ThisTick()</c>, which is the tick's own snapshot while a
+    /// tick is running and a fresh <c>Load_All()</c> otherwise. This assertion named <c>Load_All()</c>
+    /// until 2026-09-09; what it is actually about is that EVERY orchestration is consulted and not
+    /// only General, and the accessor is that. Both callers of this predicate are the tick's own
+    /// (<c>Check_AwayMode_Async</c> and the status push), so there is no flow here that could be
+    /// handed a roster belonging to somebody else's tick.
+    /// </para>
     /// </summary>
     [Fact]
     public void BeingAtAPc_CountsTheGeneralTopicToo()
     {
         var body = Extract_Method("bool Is_OwnerAtThePc()");
 
-        Assert.Contains("Load_All()", body);
+        Assert.Contains("Sessions_ThisTick()", body);
 
         Assert.Contains("GENERAL_ORCH_ID", body);
     }

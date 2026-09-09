@@ -15,7 +15,6 @@ internal sealed class OrchestratorConfigModel(
     long? telegramSupergroupChatId,
     long? telegramOwnerUserId,
     string? telegramBotToken,
-    bool telegramItalianLayer,
     bool telegramStatusScreenshots,
     string? voiceTranscribeCommand,
     long? orchestrationTokenBudget,
@@ -33,7 +32,6 @@ internal sealed class OrchestratorConfigModel(
     public long? TelegramSupergroupChatId { get; } = telegramSupergroupChatId;
     public long? TelegramOwnerUserId { get; } = telegramOwnerUserId;
     public string? TelegramBotToken { get; } = telegramBotToken;
-    public bool TelegramItalianLayer { get; } = telegramItalianLayer;
     public bool TelegramStatusScreenshots { get; } = telegramStatusScreenshots;
     public string? VoiceTranscribeCommand { get; } = voiceTranscribeCommand;
     public long? OrchestrationTokenBudget { get; } = orchestrationTokenBudget;

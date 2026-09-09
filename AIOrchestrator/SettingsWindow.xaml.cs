@@ -26,7 +26,6 @@ public partial class SettingsWindow : Window
         ImplementerModelTextBox.Text = config.ImplementerModel ?? "";
         GeneralModelTextBox.Text = config.GeneralSupervisorModel ?? "";
         CommunicatorModelTextBox.Text = config.CommunicatorModel ?? "";
-        ItalianLayerCheckBox.IsChecked = config.TelegramItalianLayer;
     }
 
     void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -65,7 +64,6 @@ public partial class SettingsWindow : Window
             chatId,
             ownerId,
             Null_IfEmpty(BotTokenTextBox.Text),
-            ItalianLayerCheckBox.IsChecked == true,
             _config.TelegramStatusScreenshots,
             _config.VoiceTranscribeCommand,
             _config.OrchestrationTokenBudget,

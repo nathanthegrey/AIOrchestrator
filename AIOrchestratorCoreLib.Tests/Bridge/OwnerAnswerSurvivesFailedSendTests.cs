@@ -97,12 +97,11 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         _paths = SupervisionPaths_Factory.Create(_tempRoot);
         Directory.CreateDirectory(_paths.RequestsFolder);
 
-        // The inbound loop reads the chat and owner ids and throws without them. The Italian layer is
-        // pinned OFF because it defaults ON and would hand the owner's text to the real translator.
+        // The inbound loop reads the chat and owner ids and throws without them.
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
