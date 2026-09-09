@@ -150,6 +150,26 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         /// <summary>The pending set a stall happened on; null while nothing is stalled.</summary>
         public string? StalledOnSignature;
 
+        /// <summary>
+        /// The pending set the CURRENT usage-limit appointment has already been spoken about — first
+        /// the traffic the refusal happened on, then whatever landed afterwards and was announced.
+        /// Null while nothing is deferred.
+        ///
+        /// <para>
+        /// IT IS A SIGNATURE AND NOT A FLAG because "has this been said" is a question about the
+        /// TRAFFIC, not about the session: the owner writing twice during one appointment deserves to
+        /// be told twice, and the same entries sitting there over forty ticks deserve to be told
+        /// once. Same comparison the stall uses, for the same reason, and built by the same
+        /// <see cref="Describe_PendingSignature"/> — never a second way of spelling it.
+        /// </para>
+        /// <para>
+        /// IN THE TRACKER AND NOT THE STATE FILE, unlike the appointment itself. Losing it to a
+        /// restart costs one repeated entry; putting it in the state file would put a UI-facing note's
+        /// bookkeeping into the record decision 8 is enforced from.
+        /// </para>
+        /// </summary>
+        public string? DeferralAnnouncedSignature;
+
         /// <summary>True until this dispatcher instance has run the session once — the "resumed after a restart" signal for the prompt.</summary>
         public bool FirstTurnSinceStart = true;
     }
@@ -227,37 +247,72 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// THE /resume OVERRIDE — see <see cref="IPrintTurnDispatcher.Clear_LimitDeferrals"/> for why it
     /// exists. Reuses <see cref="Discover_RegisteredSessions"/> so this asks the exact question
     /// <see cref="Tick"/> asks ("which sessions does this dispatcher own"), never a second one that
-    /// could drift from it. A state file that cannot be read is left alone and reported the same way
-    /// <see cref="Tick"/> already reports one — this is not the place to invent a second failure mode
-    /// for the same broken file.
+    /// could drift from it. A state file it cannot READ OR WRITE is left alone and reported the same
+    /// way <see cref="Tick"/> already reports one — this is not the place to invent a second failure
+    /// mode for the same broken file, and not the place to let one broken file end the whole command
+    /// either (F7).
     /// </summary>
-    public void Clear_LimitDeferrals()
+    /// <returns>How many appointments were dropped — the number the owner's /resume reply quotes.</returns>
+    public int Clear_LimitDeferrals()
     {
+        var nowUtc = DateTime.UtcNow;
+
+        List<(string OrchId, string MemberId, DateTime WaitingUntil)> cleared = [];
+        List<string> skippedInFlight = [];
+
         foreach (var registered in Discover_RegisteredSessions())
         {
-            IPrintSessionState? state;
+            var key = $"{registered.OrchId}/{registered.MemberId}";
 
+            // THE WHOLE OPERATION IS IN THE TRY, NOT JUST THE READ (F7, 2026-09-09). An IO failure in
+            // the WRITE used to escape into Resume_AllSessions_Async — which runs it BEFORE any channel
+            // append — so one unwritable state file aborted the whole /resume, was logged as a Telegram
+            // backoff, and the update was redelivered and retried for ever. One broken session must cost
+            // one session.
             try
             {
-                state = PrintSessionState_Store.Read_OrNull(registered.StateFile);
+                // UNDER THE SAME LOCK THE DISPATCHER STARTS TURNS UNDER, and skipping a session whose
+                // turn is in flight (F6). Start_Turn takes this lock, so while it is held no turn can
+                // BEGIN; a turn already running is the case the skip covers, because its own writes are
+                // outside any lock and this one would be derived from a snapshot taken before them.
+                // The read is inside too — re-reading outside it would be reasoning from a copy the
+                // turn has since replaced, which is the bug in the first place.
+                lock (_lock)
+                {
+                    if (_inFlight.ContainsKey(key))
+                    {
+                        skippedInFlight.Add(key);
+                        continue;
+                    }
+
+                    var state = PrintSessionState_Store.Read_OrNull(registered.StateFile);
+
+                    if (state?.RetryNotBeforeUtc == null)
+                        continue;
+
+                    PrintSessionState_Store.Write(registered.StateFile, PrintSessionState_Factory.CreateFrom_Existing_LimitDeferralCleared(state));
+                    cleared.Add((registered.OrchId, registered.MemberId, state.RetryNotBeforeUtc.Value));
+                }
             }
             catch (Exception ex)
             {
-                if (_warnedBrokenSessions.Add($"{registered.OrchId}/{registered.MemberId}"))
+                if (_warnedBrokenSessions.Add(key))
                     _log.Log_Error(registered.OrchId, $"/resume: '{registered.MemberId}' could not be considered — it is skipped from now on and this is NOT repeated; fix or delete its {PrintSessionState_Store.STATE_FILE_NAME} and restart the app", ex);
-
-                continue;
             }
-
-            if (state?.RetryNotBeforeUtc == null)
-                continue;
-
-            var waitingUntil = state.RetryNotBeforeUtc.Value;
-
-            PrintSessionState_Store.Write(registered.StateFile, PrintSessionState_Factory.CreateFrom_Existing_LimitDeferralCleared(state));
-
-            _log.Log_Info(registered.OrchId, $"'{registered.MemberId}' was waiting on a usage limit until {waitingUntil:HH:mm} UTC — /resume cleared it");
         }
+
+        // LOGGED OUTSIDE THE LOCK. The log writes a file of its own, and holding the dispatcher's lock
+        // across it would put the tick behind a second filesystem for as many sessions as are deferred.
+        foreach (var (orchId, memberId, waitingUntil) in cleared)
+            _log.Log_Info(orchId, $"'{memberId}' was waiting on a usage limit and would have run {LimitDeferral_Wording.Describe_Appointment(waitingUntil, nowUtc)} — /resume cleared it");
+
+        // NAMED, NOT SWALLOWED. A session mid-turn is the one case /resume deliberately does not touch,
+        // and a reader comparing "cleared N" against the number of waiting sessions needs to know why
+        // the two differ.
+        if (skippedInFlight.Count > 0)
+            _log.Log_Info(string.Empty, $"/resume left {skippedInFlight.Count} session(s) alone because a turn is already running for them: {string.Join(", ", skippedInFlight)}");
+
+        return cleared.Count;
     }
 
     public async Task Stop_Async()
@@ -465,8 +520,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // the account its tokens back, and a session that tried anyway would spend an attempt to be
         // told the same thing again. Read from the STATE and not from the tracker, so a bridge
         // restarted inside the window keeps the appointment.
+        //
+        // BUT IT IS SAID NOW, WHICH IS THE HALF THAT WAS MISSING. This branch used to return in
+        // silence, so the owner's message got its ✓ ack from the bridge and then nothing for hours.
         if (state.RetryNotBeforeUtc != null && nowLocal.ToUniversalTime() < state.RetryNotBeforeUtc.Value)
+        {
+            Announce_Deferral_IfTrafficIsNew(state, tracker, signature, ordered, state.RetryNotBeforeUtc.Value, nowLocal);
             return;
+        }
 
         if (tracker.LastFailureAt != null && nowLocal - tracker.LastFailureAt.Value < _retryBackoff)
             return;
@@ -497,6 +558,55 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     static bool Needs_BootTurn(IPrintSessionState state)
     {
         return state.ExecutedTurns.Count == 0 && state.Role is SessionRoles.Supervisor or SessionRoles.Solo;
+    }
+
+    /// <summary>
+    /// ONE ENTRY, ONCE, WHEN SOMETHING NEW LANDS ON A DEFERRED SESSION — and to the OWNER's audience
+    /// for the roles that have one.
+    ///
+    /// <para>
+    /// F5, probe 2026-09-09. <c>Consider_Session</c> returned on the appointment before it looked at
+    /// what was pending, so a message typed into the topic got its ✓ from the bridge and then hours of
+    /// silence, with nothing in the channel, nothing on the phone and nothing in the log. That is the
+    /// waterfall's opposite failure and just as expensive: the owner cannot tell a quota wait from a
+    /// dead app. This says which it is, and what ends it.
+    /// </para>
+    /// <para>
+    /// IT DOES NOT CLEAR THE APPOINTMENT, and that is a decision rather than an omission. An owner
+    /// message is a stronger signal than a parsed hour about WHAT MATTERS; it is no signal at all
+    /// about whether the account has tokens. Running the turn on it would spend a real turn to be
+    /// refused again, write a second identical deferral, and (before the cap) could re-park the
+    /// session further out than the first refusal did — so the owner's own message would be what
+    /// silenced them. The override they want already exists, is one word, and is now named in the
+    /// entry: <c>/resume</c> drops every appointment and the next tick runs. Automatic beats explicit
+    /// only when the automatic thing is right, and this one is a guess about someone else's quota.
+    /// </para>
+    /// <para>
+    /// A FAILED APPEND LEAVES THE SIGNATURE UNSET, so the next tick tries again — the notice is worth
+    /// a retry and there is nothing else to say if it never lands. It is not logged per tick: a
+    /// channel locked for minutes would write a line every two seconds, and
+    /// <c>ChannelLock_Diagnostics</c> already reports refused writes.
+    /// </para>
+    /// </summary>
+    void Announce_Deferral_IfTrafficIsNew(IPrintSessionState state, SessionTracker tracker, string signature, IReadOnlyList<PendingEntry> pending, DateTime retryAtUtc, DateTime nowLocal)
+    {
+        // NOTHING PENDING IS NOT NEWS. A supervisor's boot turn reaches this branch with an empty set,
+        // and "new traffic is waiting" about no traffic is exactly the confident wrong line the entry
+        // exists to replace.
+        if (pending.Count == 0 || signature == tracker.DeferralAnnouncedSignature)
+            return;
+
+        var appointment = LimitDeferral_Wording.Describe_Appointment(retryAtUtc, nowLocal.ToUniversalTime());
+
+        var appended = ChannelAppender.Append_AppEntry(
+            state.ChannelFilePath,
+            Stall_Audience(state),
+            $"{PrintTurn_Words.NEW_TRAFFIC_LIMITED_SUBJECT} {state.MemberId} — runs {appointment}",
+            $"'{state.MemberId}' was refused for a usage limit and is waiting until {appointment}. What has just arrived is NOT lost — it is pending, it will ride the turn that runs then, and no attempt has been spent on it.\n\nIf it cannot wait, /resume drops the appointment and the session runs on the next tick.\n\n{Describe_Traffic(pending)}",
+            DateTime.Now);
+
+        if (appended)
+            tracker.DeferralAnnouncedSignature = signature;
     }
 
     /// <summary>
@@ -769,6 +879,21 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             // New traffic after a stall: the counter starts over for this turn.
             state = PrintSessionState_Factory.CreateFrom_Existing_AttemptsReset(state);
             tracker.StalledOnSignature = null;
+        }
+
+        // THE APPOINTMENT IS KEPT THE MOMENT THE TURN STARTS, so it is spent rather than left standing
+        // for the half hour the turn may run. F6, reproduced 2026-09-09: /resume reads a session's
+        // state file, derives a cleared copy from that SNAPSHOT and writes it back — with an appointment
+        // still on file for a turn already in flight, that write landed on top of the turn's own record
+        // and rolled it back (executed_turns 1 → 0, next_turn 3 → 2), so the same request id ran twice.
+        // A decision-8 violation caused by the owner's own recovery command. Clear_LimitDeferrals now
+        // also refuses a session with a turn in flight; this closes the other half, because the window
+        // was open from the tick that admitted the turn until the turn finished.
+        if (state.RetryNotBeforeUtc != null)
+        {
+            state = PrintSessionState_Factory.CreateFrom_Existing_LimitDeferralCleared(state);
+            PrintSessionState_Store.Write(stateFile, state);
+            tracker.DeferralAnnouncedSignature = null;
         }
 
         var turnNumber = state.NextTurnNumber;
@@ -1236,18 +1361,24 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     bool Record_UsageLimit_IfNamed(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId)
     {
-        if (!LimitReset_Parser.Looks_LikeUsageLimit(result.ResultText, result.ApiErrorStatus))
+        // THE WHOLE RESULT, NOT ITS PROSE. LimitReset_Parser.Is_Refusal also answers "did this turn
+        // report success", which a text-only gate could not: probe 2026-09-09 parked a session that
+        // had exited 0 for fourteen hours, because a successful reply the channel refused comes
+        // through here with the MODEL'S words as the result text. See that method for both probes.
+        if (!LimitReset_Parser.Is_Refusal(result))
             return false;
 
-        var reading = LimitReset_Parser.Read_OrNull(result.ResultText, result.ApiErrorStatus, DateTime.UtcNow);
+        var nowUtc = DateTime.UtcNow;
+        var reading = LimitReset_Parser.Read_OrNull(result.ResultText, result.ApiErrorStatus, nowUtc);
 
         if (reading == null)
         {
-            _log.Log_Warning(state.OrchId, $"Turn {requestId} looks like a usage limit (api_error_status: {Describe_ApiErrorStatus(result)}) but no reset time could be read from it, so it keeps the ordinary {_retryBackoff.TotalSeconds:F0} s backoff and its {MAX_ATTEMPTS} attempts — unread text: '{Tail(result.ResultText ?? string.Empty, 200)}'");
+            _log.Log_Warning(state.OrchId, $"Turn {requestId} was refused for a usage limit (api_error_status: {Describe_ApiErrorStatus(result)}) but no reset time could be read from it (none named, or one further out than the {LimitReset_Parser.MAX_DEFERRAL.TotalHours:0} h cap), so it keeps the ordinary {_retryBackoff.TotalSeconds:F0} s backoff and its {MAX_ATTEMPTS} attempts — unread text: '{Tail(result.ResultText ?? string.Empty, 200)}'");
             return false;
         }
 
         var retryAtUtc = reading.ResetsAtUtc + PrintTurn_Words.LIMIT_RESET_MARGIN;
+        var appointment = LimitDeferral_Wording.Describe_Appointment(retryAtUtc, nowUtc);
 
         PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_LimitDeferred(state, retryAtUtc));
 
@@ -1256,14 +1387,25 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         tracker.LastFailureAt = null;
         tracker.StalledOnSignature = null;
 
-        _log.Log_Info(state.OrchId, $"Turn {requestId} hit a usage limit — retry scheduled at {retryAtUtc:HH:mm} UTC (from {reading.Describe_Source()})");
+        // THE TRAFFIC THAT BOUGHT THE APPOINTMENT IS NOT "NEW" TRAFFIC. Consider_Session announces a
+        // deferral to anything that lands afterwards (F5); recording the signature here is what keeps
+        // it from announcing the very entries this turn was refused over.
+        tracker.DeferralAnnouncedSignature = Describe_PendingSignature(pending);
 
-        ChannelAppender.Append_AppEntry(
-            state.ChannelFilePath,
-            Stall_Audience(state),
-            $"{TURN_LIMITED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — resumes {retryAtUtc:HH:mm} UTC",
-            $"Turn {requestId} was refused for a usage limit and is scheduled to run again at {retryAtUtc:yyyy-MM-dd HH:mm} UTC, read from {reading.Describe_Source()}. Nothing is lost and nothing else is needed: the attempt was NOT counted against the {MAX_ATTEMPTS}-attempt limit, and the same traffic is still pending under the same request id.\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\napi_error_status: {Describe_ApiErrorStatus(result)}",
-            DateTime.Now);
+        _log.Log_Info(state.OrchId, $"Turn {requestId} was refused for a usage limit — retry scheduled {appointment} (from {reading.Describe_Source()})");
+
+        // CHECKED, LIKE Append_TurnEnded's (F5, 2026-09-09). The return was dropped here, so a locked
+        // channel swallowed the one entry that says why the session has gone quiet — and the state file
+        // still holds the appointment, so the silence is real and nothing anywhere accounts for it.
+        if (!ChannelAppender.Append_AppEntry(
+                state.ChannelFilePath,
+                Stall_Audience(state),
+                $"{TURN_LIMITED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — resumes {appointment}",
+                $"Turn {requestId} was refused for a usage limit and is scheduled to run again {appointment}, read from {reading.Describe_Source()}. Nothing is lost and nothing else is needed: the attempt was NOT counted against the {MAX_ATTEMPTS}-attempt limit, and the same traffic is still pending under the same request id.\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\napi_error_status: {Describe_ApiErrorStatus(result)}",
+                DateTime.Now))
+        {
+            _log.Log_Warning(state.OrchId, $"the usage-limit notice for {requestId} could not be appended (channel locked) — the appointment IS recorded in the state file, so the session resumes {appointment} with nothing in its channel saying why it went quiet");
+        }
 
         return true;
     }
