@@ -200,6 +200,21 @@ internal sealed class OwnerDeliveryBufferModel(int aggregationSeconds) : IOwnerD
         if (_heldSinceUtc.ContainsKey(targetKey))
             return false;
 
+        // A FINISHED MESSAGE WAITS FOR NOTHING (owner decision, 2026-09-09). Measured on the VPS that
+        // day: 11–12 s median from the owner's text to the entry landing in the supervisor's channel,
+        // six of them this window. Every message was serving it so that the occasional burst could
+        // arrive as ONE turn; a message that is plainly over must not pay for the ones that are not.
+        //
+        // BELOW THE HOLD CHECK, and that ORDER IS THE CONDITION the owner attached to the change: ⏸
+        // still stops everything, finished sentences included. A message escaping a hold by this route
+        // would be the silent lapse of 2026-08-20 arriving again by a new door.
+        //
+        // ONE SEGMENT IS HALF THE RULE. A second segment is evidence that the first was not the whole
+        // thought, so a burst aggregates exactly as it did before — Bridge.OwnerMessageComplete_Decider
+        // decides only whether ONE text reads as finished, never whether it is alone.
+        if (delivery.Segments.Count == 1 && OwnerMessageComplete_Decider.Is_Complete(delivery.Segments[0].Text))
+            return true;
+
         return idleSeconds >= _aggregationSeconds;
     }
 

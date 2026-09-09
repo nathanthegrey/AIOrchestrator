@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
+using AIOrchestratorCoreLib.Bridge.ChannelChangeWaker;
 using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
@@ -132,12 +133,7 @@ internal sealed class BridgeEngineModel(
     /// <summary>Below this age /cost prints no burn rate — dividing by minutes invents a number.</summary>
     const double MINIMUM_BURN_RATE_HOURS = 0.25;
 
-    /// <summary>The owner often texts several messages in a row — quiet time before delivery as ONE entry.</summary>
     /// <summary>
-    /// Short ON PURPOSE: most messages arrive alone, and a long window makes every one of them feel
-    /// slow. The multi-message case is covered explicitly by WAIT … GO instead of by making
-    /// everyone wait (owner directive).
-    /// </summary>
     const string GLOBAL_ORCH_ID = "";
 
     readonly ISupervisionPaths _paths = paths;
@@ -1035,6 +1031,12 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Run_MirrorLoop_Async(CancellationToken cancellationToken)
     {
+        // OWNED BY THE LOOP, so it dies with it: this method is relaunched by Run_Supervised_Async after
+        // a fault, and a watcher outliving the loop that reads it would be a handle nobody wakes.
+        using var waker = ChannelChangeWaker_Factory.Create(
+            _paths.Root,
+            line => _log.Log_Warning(GLOBAL_ORCH_ID, line));
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -1052,7 +1054,13 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                await Task.Delay(_timing.MirrorTickMilliseconds, cancellationToken);
+                // WAS A BARE Task.Delay, until 2026-09-09. Measured on the VPS that day: 11–12 s median
+                // from the owner's Telegram message to their supervisor's turn starting, and this wait
+                // is on that path TWICE — the tick that writes their message into the channel is not
+                // the tick that carries the answer back. It now ends on a channel write as well as on
+                // the tick; everything else in this loop is unchanged, and on a machine whose watcher
+                // never fires so is this.
+                await waker.Wait_ForChangeOrTick_Async(_timing.MirrorTickMilliseconds, cancellationToken);
             }
             catch (OperationCanceledException)
             {

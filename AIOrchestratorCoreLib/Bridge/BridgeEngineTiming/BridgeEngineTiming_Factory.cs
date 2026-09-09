@@ -5,6 +5,14 @@ namespace AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 public static class BridgeEngineTiming_Factory
 {
     /// <summary>How long the mirror loop sleeps between ticks.</summary>
+    /// <summary>
+    /// The CEILING on how long an append can go unnoticed — not the rate the loop runs at. It stays
+    /// 2000 because it is the safety net: <see cref="ChannelChangeWaker.IChannelChangeWaker"/> ends the
+    /// wait early when the filesystem says a channel was written, and filesystem notification is
+    /// best-effort everywhere (inotify runs out of watches on a Linux box with many folders, a network
+    /// filesystem reports nothing, a container can have no backend at all). Where the watcher never
+    /// fires, the loop behaves EXACTLY as it did before it existed.
+    /// </summary>
     const int MIRROR_TICK_MILLISECONDS = 2000;
 
     /// <summary>
@@ -21,7 +29,29 @@ public static class BridgeEngineTiming_Factory
     /// between how long a hold takes to express and how long every message waits, and the button
     /// moved the first half of that.
     /// </summary>
-    const int OWNER_AGGREGATION_SECONDS = 6;
+    /// <summary>
+    /// The owner often texts several messages in a row — quiet time before delivery as ONE entry, so a
+    /// burst arrives on the session as one turn instead of one turn each.
+    ///
+    /// <para>
+    /// FOUR SECONDS WAS TOO SHORT TO BE HELD: WAIT can only stop a message still in the buffer, and
+    /// four seconds is less than it takes to realise you have more to say and type a word — measured on
+    /// the owner's machine, a WAIT five seconds behind its message arrived after the take and stopped
+    /// nothing. It went to eight. SIX, because the ⏸ button changed what the window has to be long
+    /// enough FOR: with a tap sitting under the receipt the owner set it back down themselves
+    /// (2026-08-15) — "with the button we can reduce the window".
+    /// </para>
+    /// <para>
+    /// THREE, and the balance changed again on 2026-09-09 because the window is no longer served by
+    /// everybody. Measured on the VPS that day: 11–12 s median from the owner's text to the entry
+    /// landing in the supervisor's channel, six of them here — and the owner asked for the wait to
+    /// shrink. A message that is plainly over now skips this window ENTIRELY
+    /// (<see cref="OwnerMessageComplete_Decider"/>, asked below the ⏸ check so a hold still stops
+    /// everything), which leaves the window covering only what it was ever for: a burst of typing that
+    /// has not finished yet.
+    /// </para>
+    /// </summary>
+    const int OWNER_AGGREGATION_SECONDS = 3;
 
     /// <summary>
     /// Pause before re-sending a channel whose mirror send failed. The tailer re-emits an
