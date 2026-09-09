@@ -95,7 +95,8 @@ public static class PrintSessionState_Store
             Parse_Cursors(root, stateFile),
             root["next_turn_number"]?.GetValue<int>() ?? Math.Max(1, executed.Count + 1),
             root["failed_attempts"]?.GetValue<int>() ?? 0,
-            executed);
+            executed,
+            Parse_RetryNotBefore_OrNull(root));
     }
 
     public static void Write(string stateFile, IPrintSessionState state)
@@ -151,6 +152,7 @@ public static class PrintSessionState_Store
             ["sources"] = sources,
             ["next_turn_number"] = state.NextTurnNumber,
             ["failed_attempts"] = state.FailedAttempts,
+            ["retry_not_before_utc"] = state.RetryNotBeforeUtc?.ToString("o"),
             ["executed_turns"] = turns,
         };
 
@@ -195,6 +197,22 @@ public static class PrintSessionState_Store
         }
 
         return cursors;
+    }
+
+    /// <summary>
+    /// The scheduled retry, or none. UNREADABLE READS AS NONE, like every other tolerant read here:
+    /// a stamp this version cannot parse must not become a confident instant, and the cost of losing
+    /// it is one more refusal that reschedules itself — the cost of misreading it is a session that
+    /// waits until a date nobody chose.
+    /// </summary>
+    static DateTime? Parse_RetryNotBefore_OrNull(JsonObject root)
+    {
+        if (root["retry_not_before_utc"]?.GetValue<string>() is not string text || text.Length == 0)
+            return null;
+
+        return DateTime.TryParse(text, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed.ToUniversalTime()
+            : null;
     }
 
     static IExecutedTurn Parse_Turn(JsonObject turn, string stateFile)

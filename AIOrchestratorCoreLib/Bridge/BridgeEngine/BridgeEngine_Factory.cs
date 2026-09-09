@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -30,6 +31,25 @@ public static class BridgeEngine_Factory
         IOrchestrationLauncher launcher,
         IOrchestrationLog log)
     {
+        return Create_WithTiming(paths, configProvider, store, launcher, log, BridgeEngineTiming_Factory.Create_Production());
+    }
+
+    /// <summary>
+    /// THE TIMING TEST SEAM ON THE PRODUCTION PATH, added by the same idiom as the three below and
+    /// for a measured reason: a dozen test files drive the real engine through <see cref="Create"/>
+    /// and therefore sat in front of the real 2-second tick, which is wall-clock sleep and nothing
+    /// else. This overload is <see cref="Create"/> with the periods named instead of assumed —
+    /// same client, same store, same clock — and <see cref="Create"/> is now the one-line caller
+    /// that names the shipped ones. See <see cref="IBridgeEngineTiming"/>.
+    /// </summary>
+    public static IBridgeEngine Create_WithTiming(
+        ISupervisionPaths paths,
+        IOrchestratorConfigProvider configProvider,
+        IOrchestrationSessionStore store,
+        IOrchestrationLauncher launcher,
+        IOrchestrationLog log,
+        IBridgeEngineTiming timing)
+    {
         var startupConfig = configProvider.Get_Current();
         ITelegramApiClient? telegramClient = null;
 
@@ -43,7 +63,7 @@ public static class BridgeEngine_Factory
             telegramClient = TelegramApiClient_Factory.Create(botToken, supergroupChatId);
         }
 
-        return Create_WithTelegramClient(paths, configProvider, store, launcher, log, telegramClient);
+        return Create_WithTelegramClient(paths, configProvider, store, launcher, log, telegramClient, timing);
     }
 
     /// <summary>
@@ -65,11 +85,12 @@ public static class BridgeEngine_Factory
         IOrchestrationSessionStore store,
         IOrchestrationLauncher launcher,
         IOrchestrationLog log,
-        ITelegramApiClient? telegramClient)
+        ITelegramApiClient? telegramClient,
+        IBridgeEngineTiming timing)
     {
         return Create_WithTelegramClientAndTranslator(
             paths, configProvider, store, launcher, log, telegramClient,
-            Translation.MessageTranslator.MessageTranslator_Factory.Create(log));
+            Translation.MessageTranslator.MessageTranslator_Factory.Create(log), timing);
     }
 
     /// <summary>
@@ -90,12 +111,14 @@ public static class BridgeEngine_Factory
         IOrchestrationLauncher launcher,
         IOrchestrationLog log,
         ITelegramApiClient? telegramClient,
-        IMessageTranslator translator)
+        IMessageTranslator translator,
+        IBridgeEngineTiming timing)
     {
         return Create_WithDecisionState(
             paths, configProvider, store, launcher, log, telegramClient, translator,
             EngineStateStore_Factory.Create_File(paths, log),
-            Clock_Factory.Create_System());
+            Clock_Factory.Create_System(),
+            timing);
     }
 
     /// <summary>
@@ -125,7 +148,8 @@ public static class BridgeEngine_Factory
         ITelegramApiClient? telegramClient,
         IMessageTranslator translator,
         IEngineStateStore engineStateStore,
-        IClock clock)
+        IClock clock,
+        IBridgeEngineTiming timing)
     {
         // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
         var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
@@ -147,6 +171,6 @@ public static class BridgeEngine_Factory
 
         return new BridgeEngineModel(
             paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, translator, transcriber,
-            printTurns, lastUpdateId, engineStateStore, restoredState, clock);
+            printTurns, lastUpdateId, engineStateStore, restoredState, clock, timing);
     }
 }

@@ -11,6 +11,7 @@ using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Time.Clock;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -162,7 +163,8 @@ public class DecisionStateReachesTheDiskTests : IDisposable
     {
         return BridgeEngine_Factory.Create_WithDecisionState(
             _paths, _configProvider, _store, _launcher, _log, telegram,
-            MessageTranslator_Factory.Create(_log), engineState, Clock_Factory.Create_System());
+            MessageTranslator_Factory.Create(_log), engineState, Clock_Factory.Create_System(),
+            BridgeTestTiming.Fast());
     }
 
     string Read_OwnerChannel(string orchId) => File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));

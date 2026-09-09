@@ -141,6 +141,30 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         return bootCost > 0 || bootElapsed > TimeSpan.Zero ? With_BootAddedIn(outcome.Result, bootCost, bootElapsed) : outcome.Result;
     }
 
+    /// <summary>
+    /// RUN ON THE RUNG BELOW, always. By the time a closing turn is wanted this session's living
+    /// process is gone — <see cref="Report_TransportFailure"/> released it — and the flag that caps
+    /// its spend works only with <c>--print</c>, so there is nothing here to run it WITH. Delegated
+    /// rather than reimplemented: a second process seam in this class would be a second answer to
+    /// "how does a turn reach the model", which is the thing <see cref="ITurnExecutor"/> exists to
+    /// prevent. With no fallback wired there is no honest answer but null.
+    /// </summary>
+    public async Task<ITurnResult?> Execute_ClosingTurn_Async(
+        IPrintSessionState state,
+        IRoleRunnerConfig roleConfig,
+        string resumeSessionId,
+        string closingRequestId,
+        IReadOnlyList<TurnSource.ITurnSource> sources,
+        IReadOnlyDictionary<string, string> environment,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        if (_fallback == null)
+            return null;
+
+        return await _fallback.Execute_ClosingTurn_Async(state, roleConfig, resumeSessionId, closingRequestId, sources, environment, timeout, cancellationToken);
+    }
+
     public void Release(string orchId, string memberId)
     {
         StreamSessionProcess? process;
@@ -269,8 +293,12 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
 
         _log.Log_Warning(state.OrchId, $"Stream turn {requestId}: {what} — the next attempt resumes the same transcript");
 
+        // MARKED HERE, because this is the only place that still knows which kill it was. Downstream
+        // both look the same (timed out, exit -1, no result document) and they mean opposite things:
+        // a mute process has produced nothing to report, so it keeps today's retry, while a turn
+        // killed at the deadline was working and gets its closing turn (ClosingTurn_Rule).
         if (!outcome.ProcessDied)
-            return outcome.Result;
+            return outcome.WentSilent ? TurnResult_Factory.CreateFrom_SilenceKill(outcome.Result) : outcome.Result;
 
         var failures = Count_StructuralFailure(key);
 

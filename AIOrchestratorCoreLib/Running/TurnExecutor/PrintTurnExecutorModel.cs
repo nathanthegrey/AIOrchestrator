@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Running.ClosingTurn;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.PrintTurnRunner;
@@ -57,6 +58,32 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
 
         TurnLog_Store.Append_TurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), requestId, result);
+
+        return result;
+    }
+
+    /// <summary>
+    /// THE CLOSING TURN, which this transport can always run: one more process, resuming the
+    /// transcript the deadline killed, with a spend cap and a prompt that forbids continuing the
+    /// task. Its result is logged as its own kind, so /tail shows a closing turn as a closing turn
+    /// rather than as a second attempt at the work.
+    /// </summary>
+    public async Task<ITurnResult?> Execute_ClosingTurn_Async(
+        IPrintSessionState state,
+        IRoleRunnerConfig roleConfig,
+        string resumeSessionId,
+        string closingRequestId,
+        IReadOnlyList<TurnSource.ITurnSource> sources,
+        IReadOnlyDictionary<string, string> environment,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var arguments = PrintTurnCommand_Builder.Build_ClosingTurnArguments(state, roleConfig, resumeSessionId, null);
+        var prompt = ClosingTurnPrompt_Builder.Build(closingRequestId, sources);
+
+        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
+
+        TurnLog_Store.Append_ClosingTurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), closingRequestId, result);
 
         return result;
     }

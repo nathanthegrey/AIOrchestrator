@@ -14,7 +14,8 @@ internal sealed class TurnResultModel(
     int? apiErrorStatus,
     string rawStdout,
     string rawStderr,
-    TimeSpan elapsed) : ITurnResult
+    TimeSpan elapsed,
+    bool killedOnSilence) : ITurnResult
 {
     public int ExitCode { get; } = exitCode;
     public bool TimedOut { get; } = timedOut;
@@ -30,4 +31,5 @@ internal sealed class TurnResultModel(
     public string RawStdout { get; } = rawStdout;
     public string RawStderr { get; } = rawStderr;
     public TimeSpan Elapsed { get; } = elapsed;
+    public bool KilledOnSilence { get; } = killedOnSilence;
 }

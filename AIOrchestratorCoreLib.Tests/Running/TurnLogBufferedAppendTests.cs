@@ -122,6 +122,29 @@ public class TurnLogBufferedAppendTests : IDisposable
         Assert.Contains("\"type\":\"assistant\"", onDisk);
     }
 
+    /// <summary>
+    /// AND SO DOES THE CLOSING TURN, which is a third caller and arrived after the buffer did. P2's
+    /// closing turn writes its result through this same store on the way out of a session — the last
+    /// thing that session ever writes, with no later turn to flush behind it — so a closing result left
+    /// in a 200 ms buffer would be a turn the tail never shows. It shares the private overload with
+    /// <c>Append_TurnResult</c> today; this pins the guarantee rather than the sharing, so splitting
+    /// them fails here instead of going quiet.
+    /// </summary>
+    [Fact]
+    public void TheClosingTurnsResult_IsOnDiskTheMomentItIsWritten()
+    {
+        TurnLog_Store.Append_StreamEvent(_logFile, REQUEST_ID, """{"type":"assistant"}""");
+        TurnLog_Store.Append_ClosingTurnResult(_logFile, REQUEST_ID, Build_Result());
+
+        var onDisk = File.ReadAllText(_logFile);
+
+        Assert.Contains("\"subtype\":\"success\"", onDisk);
+
+        // Tagged as the closing turn and not as an ordinary one: the tail has to be able to say which
+        // of the two it is looking at.
+        Assert.Contains($"\"{TurnLog_Store.KIND_KEY}\":\"{TurnLog_Store.KIND_CLOSING_TURN}\"", onDisk);
+    }
+
     [Fact]
     public void AReader_SeesWhatIsStillBuffered()
     {

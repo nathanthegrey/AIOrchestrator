@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -70,7 +71,8 @@ public class QuestionContractProbeTests : IDisposable
 
         _engine = BridgeEngine_Factory.Create_WithDecisionState(
             _paths, _configProvider, _store, _launcher, _log, _telegram,
-            MessageTranslator_Factory.Create(_log), _engineState, _clock);
+            MessageTranslator_Factory.Create(_log), _engineState, _clock,
+            BridgeTestTiming.Fast());
     }
 
     public void Dispose()

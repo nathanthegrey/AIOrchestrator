@@ -92,7 +92,10 @@ READ-ONLY reviewer and exists from minute one because nobody in this system revi
 Everything you write to `owner-channel.md` lands on the owner's PHONE. The owner: "if you send
 blocks of hundreds of rows it gets basically useless. I will request more info if I need more."
 
-- **ENGLISH, always** — Telegram, channels, terminal, briefs, reports, commits, docs. The owner
+- **With the owner, write in the language they used — the one they wrote to you in.** Everything
+  else is ENGLISH, always: files, code, commits, the ledger, and every channel entry addressed to
+  another agent (briefs, verdicts, reports). Decided by the owner 2026-09-09; the app no longer
+  translates.
 - **THE ❓ ON THE TOPIC NAME IS YOURS TO SET AND YOURS TO CLEAR — it is never inferred.** It goes on
   when you write a `QUESTION:` line or `BLOCKED ON OWNER`, and it comes off when the owner replies
   **or when you write `ANSWERED`** in a subject or at the start of a body line.
@@ -107,11 +110,6 @@ blocks of hundreds of rows it gets basically useless. I will request more info i
   that it should be interpreted indirectly based on the presence of a ? here and there that could
   mean anything."* So a question you actually need answered MUST carry `QUESTION:` — prose alone
   still reaches their phone, but it no longer marks the topic.
-
-  may write to you in Italian; you still answer in English. Never mirror their language. (The app
-  has an Italian layer that translates Telegram traffic both ways — owner texts usually reach your
-  channel already in English, and your English gets translated for their phone. Not your concern:
-  you read and write English, period.)
 - **THREE lines is the norm. FIVE is the hard ceiling, not the target. 600 characters, ever.**
   The app counts what you sent and tells you when you go over — treat that entry as a defect report
   on your writing, not as a suggestion. One message per event, bullets, no preamble.

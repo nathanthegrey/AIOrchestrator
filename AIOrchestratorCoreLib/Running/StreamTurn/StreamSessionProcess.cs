@@ -155,6 +155,13 @@ internal sealed class StreamSessionProcess : IDisposable
             return StreamTurnOutcome.Died(Build_Result(exitCode: Read_ExitCode(), timedOut: false, resultJson: null, stopwatch.Elapsed), Stderr);
         }
 
+        // THE SILENCE CLOCK FOR THIS TURN STARTS HERE, not whenever the process last happened to
+        // say something. Left at the previous turn's heartbeat, an idle gap between two prompts
+        // longer than silenceLimit made the first check below true before the read loop had even
+        // run once — measured on production as 26 of 29 silence kills, every one within 10 s of
+        // start. Silence means "nothing since we asked", never "nothing since the turn before".
+        Interlocked.Exchange(ref _lastByteTicksUtc, DateTime.UtcNow.Ticks);
+
         var deadline = DateTime.UtcNow + timeout;
 
         // Per TURN, deliberately: the event is emitted at the CHANGE, not every turn (measured 1 in

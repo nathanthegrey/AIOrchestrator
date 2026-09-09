@@ -15,7 +15,8 @@ internal sealed class PrintSessionStateModel(
     IReadOnlyList<ITurnCursor> cursors,
     int nextTurnNumber,
     int failedAttempts,
-    IReadOnlyList<IExecutedTurn> executedTurns) : IPrintSessionState
+    IReadOnlyList<IExecutedTurn> executedTurns,
+    DateTime? retryNotBeforeUtc) : IPrintSessionState
 {
     public string SessionId { get; } = sessionId;
     public bool SessionStarted { get; } = sessionStarted;
@@ -29,4 +30,5 @@ internal sealed class PrintSessionStateModel(
     public int NextTurnNumber { get; } = nextTurnNumber;
     public int FailedAttempts { get; } = failedAttempts;
     public IReadOnlyList<IExecutedTurn> ExecutedTurns { get; } = executedTurns;
+    public DateTime? RetryNotBeforeUtc { get; } = retryNotBeforeUtc;
 }

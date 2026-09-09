@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.Tests.Channels;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -74,7 +75,8 @@ public class OwnerDeliverySurvivesAFailedFlushTests : IDisposable
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
 
         _engine = BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
-            _paths, configProvider, _store, _launcher, _log, _telegram, _translator);
+            _paths, configProvider, _store, _launcher, _log, _telegram, _translator,
+            BridgeTestTiming.Fast());
     }
 
     public void Dispose()

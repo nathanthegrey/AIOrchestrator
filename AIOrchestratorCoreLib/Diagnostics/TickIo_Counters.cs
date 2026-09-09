@@ -49,6 +49,7 @@ public static class TickIo_Counters
         long _textFileReads;
         long _bridgeStateWrites;
         long _turnLogFileSyscalls;
+        long _ticksEntered;
 
         /// <summary>Reads of a <c>session.json</c> — the file behind every <c>Load_All</c>.</summary>
         public long SessionFileReads => Interlocked.Read(ref _sessionFileReads);
@@ -66,6 +67,16 @@ public static class TickIo_Counters
         /// <summary>Filesystem calls made while appending turn-log lines (mkdir, stat, append).</summary>
         public long TurnLogFileSyscalls => Interlocked.Read(ref _turnLogFileSyscalls);
 
+        /// <summary>
+        /// Mirror ticks begun. THE DENOMINATOR OF EVERY OTHER COUNTER HERE, and it earned its place on
+        /// 2026-09-09: the tick's inter-tick wait stopped being a fixed 2 s delay (ChannelChangeWaker
+        /// ends it on a filesystem event too), so a reading taken over a wall-clock window no longer
+        /// covers one tick. The cost test compared 78 reads to 176 and reported the cache broken; the
+        /// 176 were three ticks. A per-window count is only a per-tick count while the tick period is
+        /// a constant, and it no longer is.
+        /// </summary>
+        public long TicksEntered => Interlocked.Read(ref _ticksEntered);
+
         internal void Add_SessionFileRead() => Interlocked.Increment(ref _sessionFileReads);
 
         internal void Add_TextFileRead() => Interlocked.Increment(ref _textFileReads);
@@ -74,6 +85,8 @@ public static class TickIo_Counters
 
         internal void Add_TurnLogFileSyscall() => Interlocked.Increment(ref _turnLogFileSyscalls);
 
+        internal void Add_TickEntered() => Interlocked.Increment(ref _ticksEntered);
+
         /// <summary>Zeroes every count, so one scope can measure a second tick after a first.</summary>
         public void Reset()
         {
@@ -81,12 +94,14 @@ public static class TickIo_Counters
             Interlocked.Exchange(ref _textFileReads, 0);
             Interlocked.Exchange(ref _bridgeStateWrites, 0);
             Interlocked.Exchange(ref _turnLogFileSyscalls, 0);
+            Interlocked.Exchange(ref _ticksEntered, 0);
         }
 
         public override string ToString()
         {
-            return $"session.json reads={SessionFileReads}, text-file reads={TextFileReads}, "
-                + $"bridge-state writes={BridgeStateWrites}, turn-log syscalls={TurnLogFileSyscalls}";
+            return $"ticks={TicksEntered}, session.json reads={SessionFileReads}, "
+                + $"text-file reads={TextFileReads}, bridge-state writes={BridgeStateWrites}, "
+                + $"turn-log syscalls={TurnLogFileSyscalls}";
         }
     }
 
@@ -116,6 +131,9 @@ public static class TickIo_Counters
     public static void Count_BridgeStateWrite() => _scope.Value?.Add_BridgeStateWrite();
 
     public static void Count_TurnLogFileSyscall() => _scope.Value?.Add_TurnLogFileSyscall();
+
+    /// <summary>Counted once at the top of a mirror tick, so every other count can be read per tick.</summary>
+    public static void Count_TickEntered() => _scope.Value?.Add_TickEntered();
 
     /// <summary>The live counts of one <see cref="Begin_Scope"/>, readable while it is open.</summary>
     public sealed class Scope(Counts counts, Counts? previous) : IDisposable

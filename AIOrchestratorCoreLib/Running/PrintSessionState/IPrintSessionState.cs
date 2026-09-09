@@ -49,5 +49,25 @@ public interface IPrintSessionState
 
     /// <summary>Consecutive failed attempts (timeout / error) of the CURRENT turn; reset when a turn completes.</summary>
     int FailedAttempts { get; }
+
+    /// <summary>
+    /// The instant before which the CURRENT turn must not be retried, or null when nothing is
+    /// waiting. Always UTC.
+    ///
+    /// <para>
+    /// WRITTEN ONLY FOR A USAGE LIMIT THAT NAMED ITS RESET (see
+    /// <see cref="LimitReset_Parser"/>), and it is HERE rather than in the dispatcher's per-session
+    /// tracker for one reason: the tracker dies with the process. Measured on the VPS 2026-09-08/09,
+    /// a refused turn was retried three times a minute apart and then stalled for 167 to 509
+    /// minutes; a bridge restart in the middle of a quota window that forgot the appointment would
+    /// spend the same three attempts again and stall again, which is the loop with extra steps.
+    /// </para>
+    /// <para>
+    /// It is NOT an attempt counter and does not interact with <see cref="FailedAttempts"/>: waiting
+    /// for a window to reopen is not a failure of the turn, and a quota that lasts hours would
+    /// otherwise eat the whole allowance before the model was ever asked.
+    /// </para>
+    /// </summary>
+    DateTime? RetryNotBeforeUtc { get; }
     IReadOnlyList<IExecutedTurn> ExecutedTurns { get; }
 }
