@@ -1,0 +1,577 @@
+# Modifiche del fork — che cosa è cambiato, e perché
+
+Questo file racconta a chi non ha seguito giorno per giorno **che cosa abbiamo cambiato nel fork
+e per quale ragione**. Racconta idee e decisioni, non codice: chi vuole il dettaglio tecnico ha i
+messaggi di commit e le spec in `docs/superpowers/specs/`.
+
+Base: `ours/integration` sopra `master`. Alla data di questo file sono **76 commit** raggruppati in
+**22 rami `stage/*`**, ognuno tenuto integrabile su `master` per conto proprio.
+
+---
+
+## Come si scrive questo file
+
+Chi tocca il fork da qui in avanti aggiunge la sua voce qui dentro, con queste regole.
+
+**Una voce per cambiamento concettuale, non per commit.** Se tre commit servono la stessa idea,
+sono una voce sola. Se un commit contiene due idee, sono due voci.
+
+**Il lettore non legge il codice.** Niente nomi di classi, di metodi o di file sorgente, niente
+diff, niente numeri di riga. I nomi che si vedono da fuori — un marcatore come `ATTACH:`, un
+comando come `/resume` — si possono nominare, perché sono l'interfaccia, non l'implementazione.
+
+**Prima il principio, il difetto come contorno.** La domanda a cui la voce risponde è «qual è la
+regola che adesso vale», non «quale bug abbiamo chiuso». L'incidente serve come prova che la regola
+serviva, e va messo dopo, in una riga o due. Una voce che è solo il racconto di un bug è scritta
+male.
+
+**Le misure solo se misurate.** «26 uccisioni su 29» va bene perché è stato contato; «molto più
+veloce» no. Se un numero è una stima, si dice che è una stima.
+
+**Anche il prezzo pagato.** Se un cambiamento ha peggiorato qualcosa d'altro, si scrive nella voce.
+Un lettore che scopre il prezzo da solo, dopo, smette di fidarsi del resto del file.
+
+**La forma di una voce:**
+
+> ### Titolo — la regola, in parole piane
+>
+> **Com'era.** Il comportamento di prima, in una o due frasi.
+> **Cos'è adesso.** Il comportamento nuovo.
+> **Perché.** Il principio, e poi l'incidente o la misura che lo hanno reso evidente.
+> **Cosa cambia per chi lo usa.** Solo se cambia davvero qualcosa sotto gli occhi.
+> **Dove.** I rami `stage/*`, per chi poi vuole andare a vedere.
+
+**Dove metterla.** In fondo alla sezione tematica giusta. Se nessuna sezione va bene, se ne apre
+una nuova; l'ordine dentro una sezione non ha significato.
+
+**Se un cambiamento successivo ne annulla uno precedente**, non si cancella la voce vecchia: si
+riscrive dicendo che cosa è stato ritirato e perché. La storia di una decisione cambiata vale più
+della decisione.
+
+**La lingua di questo file è l'italiano**, perché è scritto per una persona. Tutto il resto —
+codice, file, commit, voci di canale fra agenti — resta in inglese.
+
+---
+
+## 1. Come il sistema parla con il proprietario
+
+### Una domanda è completa, o non è una domanda
+
+**Com'era.** Un agente chiedeva come gli veniva. Se mancava la riga della domanda, l'app la
+ricavava dall'ultima frase del testo e, se non ci riusciva, ci metteva un «decidi tu» prefabbricato.
+
+**Cos'è adesso.** Una domanda ha una forma obbligatoria: la domanda, almeno due opzioni, una
+raccomandazione, il livello di rischio e la riga di piano a cui si riferisce. Se è incompleta il
+testo arriva lo stesso al proprietario — un errore di forma non deve mai costargli un messaggio —
+ma non gli crescono i bottoni sotto, e l'agente riceve **un solo** messaggio che elenca tutto
+quello che manca, non uno per volta.
+
+**Perché.** Una domanda con le opzioni e una raccomandazione è una decisione presa in trenta
+secondi; la stessa domanda senza è una decisione rimandata di una settimana. Misurato su un
+argomento il 2026-09-07: quaranta minuti di domande fatte una alla volta, parecchie senza opzioni,
+nessuna con una raccomandazione. E i due ripieghi (domanda dedotta, «decidi tu») erano proprio il
+motivo per cui la forma non veniva mai corretta: coprivano il difetto.
+
+**Cosa cambia per chi lo usa.** Raccomandazione e riga di piano stanno accanto alla domanda, dove
+si possono leggere e decidere dalla schermata di blocco del telefono.
+
+**Dove.** `stage/3-owner-questions-and-attachments`.
+
+### «Parliamone» — un bottone che non spende niente
+
+**Com'era.** Per capire una domanda bisognava rispondere, e rispondere significava chiuderla.
+
+**Cos'è adesso.** Ogni domanda offre anche «💬 Parliamone». La domanda resta viva e segnata come in
+discussione: finché si parla, quello che si scrive non chiude niente, e solo un tocco su un'opzione
+decide.
+
+**Perché.** Il proprietario rispondeva alle domande con domande — «di che metodi parli?», «quale
+parte?». Se ogni parola scritta chiude qualcosa, chiedere un chiarimento diventa rischioso, e allora
+si smette di chiederlo.
+
+**Dove.** `stage/3-owner-questions-and-attachments`.
+
+### Una risposta appartiene alla sua domanda
+
+**Com'era.** Qualsiasi messaggio del proprietario chiudeva tutto ciò che era aperto, e le sue parole
+venivano archiviate come risposta sotto ogni domanda che chiudeva. Il proprietario ha visto la sua
+stessa domanda — «a che punto siamo?» — registrata come risposta a una domanda su un merge, due
+volte; e una riga breve chiudere quattro domande insieme, tre delle quali nessuno aveva risposto.
+
+**Cos'è adesso.** L'abbinamento si fa solo quando è sicuro. Se non c'è niente di aperto, se il
+messaggio è a sua volta una domanda, o se ce ne sono due o più aperte, non si abbina niente: le
+domande restano aperte, con i bottoni vivi e i solleciti attivi.
+
+**Perché.** Il sistema ci credeva già, per i tocchi: un bottone porta con sé un codice non
+indovinabile, apposta perché un bottone vecchio non possa rispondere a una domanda per cui non era
+stato offerto. Una riga scritta a mano quel codice non ce l'ha, quindi dove l'attribuzione non si
+può dedurre l'unica cosa onesta è non attribuire. La direzione dell'errore è scelta: nel caso
+peggiore il proprietario tocca un bottone, un gesto; l'errore opposto è una decisione messa a
+verbale che nessuno ha preso.
+
+**Dove.** `stage/2a-an-answer-belongs-to-its-question`.
+
+### Il lucchetto ad alto rischio legge la domanda, non il racconto
+
+**Com'era.** Le domande pericolose (mettere in produzione, cancellare, forzare) si sbloccano con un
+codice a quattro cifre. Il riconoscimento cercava le parole dentro tutto il testo, pezzo di parola
+compreso: in un pomeriggio ha messo il lucchetto a quattro domande di puro prodotto perché nel
+racconto attorno comparivano frasi come «il motore in produzione va in crash su queste chiavi».
+Non si stava mandando in produzione niente.
+
+**Cos'è adesso.** Guarda la domanda e le etichette delle opzioni — cioè quello che il proprietario
+sta effettivamente decidendo — e riconosce parole intere: «lo pubblico adesso?» scatta, «l'avevo già
+pubblicato» no.
+
+**Perché.** Un falso positivo non è gratis: è un codice davanti a una decisione che non ne aveva
+bisogno, e un lucchetto che scatta su quello che un agente ha nominato per caso è un lucchetto che
+si impara a digitare senza leggere. Allora, il giorno che serve, non protegge più niente.
+
+**Dove.** `stage/3-owner-questions-and-attachments`.
+
+### Un file è una consegna, e non può sparire in silenzio
+
+**Com'era.** Gli agenti potevano allegare solo immagini. Il 2026-09-08 quattro mockup HTML che il
+proprietario aveva chiesto sono partiti come immagini, Telegram li ha rifiutati uno per uno, l'app
+ha scritto un avviso in un registro che non legge nessuno e non l'ha detto a nessuno: né al
+proprietario né all'agente. Il supervisore gli ha poi detto in buona fede di averli mandati, e ha
+sostenuto quella premessa falsa per tre messaggi.
+
+**Cos'è adesso.** Esiste `ATTACH:` per mandare un documento, con una regola su da dove può uscire
+un file — la cartella del progetto, quella della supervisione, quella dei mockup — e i limiti di
+dimensione di Telegram. Immagini e documenti passano da un unico cancello che **scrive sempre il
+rifiuto nel canale dell'agente, con dentro il rimedio**: quale marcatore usare, quale limite è stato
+superato, quali cartelle sono ammesse. E un file arriva al proprietario anche se non è una risposta
+a una domanda, perché una consegna è fatta per essere guardata.
+
+**Perché.** Un fallimento silenzioso è la forma peggiore che un guasto può prendere qui, perché la
+sessione continua a ragionare partendo da lì. Un errore detto è un errore che costa un minuto; un
+errore taciuto diventa una discussione fra due persone che hanno in testa due mondi diversi.
+
+**Dove.** `stage/3-owner-questions-and-attachments`, `stage/3a-a-file-never-vanishes-in-silence`.
+
+### Un'entry lunga si piega sul telefono
+
+**Com'era.** Tre messaggi da quattromila caratteri di fila, uno dietro l'altro.
+
+**Cos'è adesso.** Sopra una certa lunghezza arriva il primo paragrafo in chiaro e il resto dentro una
+citazione richiudibile, che si apre con un tocco. Se anche così è enorme, l'entry arriva **in più** come
+file allegato. Non si perde niente e non si taglia niente.
+
+**Perché.** Il canale è la finestra del proprietario su tutto: se leggerlo dal telefono costa fatica,
+smette di guardarlo, e allora il sistema è cieco dalla parte che conta.
+
+**Dove.** `stage/1j-long-entries-fold-on-the-phone`.
+
+### Meno notifiche che non chiedono niente
+
+**Com'era.** Sette avvisi sul ciclo di vita dei membri in due ore, fra cui la chiusura di ogni
+membro.
+
+**Cos'è adesso.** La chiusura di un membro resta fra gli agenti. L'apertura invece continua ad
+arrivare, e apposta: una sessione che parte è una sessione che comincia a spendere, e quelli sono
+soldi del proprietario.
+
+**Perché.** Un avviso su cui non c'è niente da fare e niente da disfare non va al telefono. È la
+stessa regola per cui una lamentela sulla forma del piano va al supervisore e non al proprietario:
+è il supervisore che può sistemarla.
+
+**Dove.** commit diretto su `ours/integration` (`5c29cd6`).
+
+### Il traduttore non c'è più
+
+**Com'era.** L'app traduceva in italiano i messaggi diretti al proprietario prima di mandarli su
+Telegram, con un interruttore per accenderlo e spegnerlo.
+
+**Cos'è adesso.** L'app non traduce niente. Se ne occupano gli agenti, da soli: al proprietario
+rispondono nella lingua in cui il proprietario ha scritto.
+
+**Perché.** Un modello le lingue le sa già — fargli scrivere in inglese e poi tradurre è la stessa
+frase scritta due volte, con un processo in più e un punto in più dove rompersi. La regola che conta
+non è «in che lingua scrive l'agente», è **dove finisce il testo**: quello che resta sul disco o va a
+un altro agente — file, codice, commit, il piano, le voci dei canali — è in inglese, perché è
+materiale di lavoro condiviso; quello che è rivolto a una persona è nella lingua di quella persona.
+Detta così, la regola sta in una riga nel comando di ruolo e non serve nessun meccanismo.
+*Di contorno: tenuto acceso faceva anche danno — prendeva prosa già italiana, la passava a una
+traduzione inglese→italiano, e il testo tornava indietro identico; a quel punto l'app lo marchiava
+come «non tradotto» e metteva una bandierina d'avviso su un messaggio corretto. Nei registri recenti
+contava 183 fallimenti, ognuno un processo in più, e ogni scambio col proprietario ne pagava due.*
+
+**Cosa cambia per chi lo usa.** Niente interruttore, niente comando, un processo in meno per
+messaggio. Su Telegram si continua a parlare in italiano.
+
+**Dove.** `stage/7c-no-translation-layer`, `stage/7h-remove-translator`.
+
+---
+
+## 2. La vita di un turno
+
+### Un membro occupato non è un membro morto
+
+**Com'era.** Un controllo dichiarava «orfano» un membro che non consumava il suo canale da un po'.
+In tre ore, su una sola orchestrazione, ha sparato diciannove volte, e tutte e diciannove erano
+false: un membro ha finito il suo turno diciotto secondi dopo essere stato dichiarato inattivo, un
+altro ha consegnato un rapporto coerente undici secondi dopo.
+
+**Cos'è adesso.** «Non lo so» è una risposta a sé, e non fa scattare niente. Un turno in corso è
+vita. E l'uccisione del processo non è stata ristretta: è stata **tolta**. Quando il sospetto è
+fondato, adesso si chiede al supervisore di andare a vedere.
+
+**Perché.** Il controllo misurava quanto un membro fosse occupato o bloccato, non se fosse vivo: chi
+sta dentro un turno lungo non può leggere il suo canale, quindi veniva condannato proprio perché
+stava lavorando. La conferma sta nel confronto: un'orchestrazione sorella con cinque membri,
+cinquantotto turni e due ore di lavoro non è stata toccata nemmeno una volta — più intensa, ma senza
+un solo turno oltre i cinque minuti, contro undici e un massimo di ventuno qui. E la funzione di
+uccisione era stata introdotta una volta e ristretta cinque, ogni volta reagendo a un falso
+positivo, senza che da nessuna parte risultasse un solo caso in cui avesse salvato qualcuno.
+
+**Dove.** `stage/2b-a-busy-member-is-not-a-dead-one`.
+
+### «Sta lavorando?» — tre risposte, non due
+
+**Com'era.** Tutte le risposte a questa domanda venivano da un file che scrive la barra di stato di
+Claude Code, e che una sessione senza interfaccia non scrive mai. Quindi su ogni macchina governata
+dal bridge il file non c'era, e «non lo so» veniva letto come «no». Il proprietario si è sentito
+dire «inattivo, in attesa» per due ore su cinque membri che stavano tutti lavorando; la parola
+«sta lavorando» non è comparsa una volta.
+
+**Cos'è adesso.** L'app risponde da quello che ha scritto lei: è lei che fa partire i turni, tiene
+l'elenco di quelli in volo e registra quando finiscono. E la risposta ha tre valori: sta lavorando,
+è fermo, **non lo so**.
+
+**Perché.** «Non lo so» non è un modo di dire «no». Confondere le due cose è ciò che ha trasformato
+un file mancante in una decisione distruttiva. Vale in generale: se una fonte non c'è, il sistema
+deve dirlo, non dedurne il contrario.
+
+**Dove.** parte di `stage/2b`.
+
+### L'orologio del silenzio parte quando parte il prompt
+
+**Com'era.** Un turno veniva ucciso «per silenzio» se non arrivavano dati per un tot di tempo, ma il
+cronometro non veniva azzerato quando si mandava una nuova richiesta: contava dal traffico
+precedente. Quindi qualunque turno mandato dopo una pausa più lunga del limite veniva ucciso subito,
+e ritentato un minuto dopo su un processo freddo.
+
+**Cos'è adesso.** Il cronometro parte quando parte la richiesta.
+
+**Perché e quanto.** Ventisei uccisioni per silenzio su ventinove erano di questa forma — il 6% dei
+risvegli del supervisore, che passavano da ~25 secondi a 111 secondi mediani per arrivare a
+destinazione. Due orchestrazioni hanno risposto al proprietario alle 4:47 del mattino solo dopo una
+di queste uccisioni.
+
+**Dove.** `stage/7a-stream-heartbeat`.
+
+### Un rifiuto per limite d'uso compra un appuntamento
+
+**Com'era.** Quando l'account tocca il limite d'uso, l'interfaccia dice a che ora si riapre la
+finestra. L'app buttava via quella frase: tre tentativi a un minuto l'uno dall'altro, poi silenzio
+finché non arrivava traffico nuovo. Diciotto stalli così, da 167 a 509 minuti l'uno, due
+orchestrazioni ferme per un'intera notte con il proprietario che aspettava.
+
+**Cos'è adesso.** L'ora viene letta e diventa un appuntamento: nessun tentativo sprecato,
+l'appuntamento sopravvive a un riavvio, il proprietario viene avvisato nel canale di quando si
+riparte, e `/resume` lo annulla.
+
+**Perché conta anche il seguito.** La prima versione di questa correzione era peggio del difetto, e
+l'ha dimostrato una revisione avversaria: un'ora letta un secondo dopo essere passata veniva
+spostata al giorno dopo, e ogni ulteriore rifiuto aggiungeva un altro giorno, senza che nessun
+traffico potesse svegliare la sessione. E il riconoscimento era la parola «limite»: un turno
+**riuscito**, il cui unico problema era un canale su cui non riusciva a scrivere, veniva parcheggiato
+quattordici ore senza spendere un tentativo — quindi senza mai fermarsi né dare l'allarme. Adesso
+l'appuntamento è limitato a sei ore (la finestra di sessione è cinque, quindi ogni riapertura che una
+sessione può nominare ci sta dentro; un limite settimanale nomina un giorno più in là, ed è una
+lettura che non si può verificare), e per essere un rifiuto ci vuole il codice del rifiuto, non una
+parola.
+
+**Il principio.** Una lettura che non si capisce vale **niente**, mai una supposizione: il sistema
+torna a comportarsi come prima e scrive una riga che dice esattamente che cosa non ha saputo leggere.
+
+**Dove.** `stage/7b-limit-reset-retry`, `stage/7i-limit-reset-fixes`.
+
+### Un turno ucciso alla scadenza dice dove è arrivato
+
+**Com'era.** Dopo trenta minuti il turno veniva ucciso e, un minuto dopo, lo stesso lavoro
+ricominciava da zero. Undici casi, tutti implementatori, ognuno trenta minuti buttati e poi rifatti
+in un tempo fra un minuto e un quarto d'ora. Non erano bloccati — un processo muto viene già ucciso
+prima — stavano lavorando.
+
+**Cos'è adesso.** La scadenza non vuol più dire «butta via». Vuol dire un ultimo turno di chiusura,
+al massimo cinque minuti, con una sola istruzione: non continuare, scrivi che cosa è fatto, che cosa
+è a metà e che cosa viene dopo, poi fermati. Quel rapporto entra nel canale come qualsiasi altra
+voce, quindi sveglia il supervisore, e il lavoro non viene riproposto da capo.
+
+**Perché.** Trenta minuti di ragionamento sono la cosa più costosa che questo sistema produce.
+Buttarli via e rifarli non è solo lento: la seconda volta si prendono decisioni diverse, e nessuno
+sa quali. Vale ancora di più da quando le sessioni ripartono pulite, perché prima almeno restava la
+trascrizione.
+
+**Il prezzo trovato dopo.** Anche qui una revisione avversaria ha trovato il difetto grosso: il
+turno di chiusura marcava come «consegnati» tutti i messaggi in attesa, mentre il suo rapporto è una
+voce sola indirizzata dove gli pare. Un supervisore ucciso mentre rispondeva al proprietario poteva
+scrivere il rapporto altrove, e la domanda del proprietario risultava consegnata senza che restasse
+nessuno a occuparsene. Adesso si consuma solo ciò a cui si è davvero risposto.
+
+**Dove.** `stage/7f-timeout-closing-turn`, `stage/7j-closing-turn-fixes`.
+
+### Uno stop svuota prima di uccidere
+
+**Com'era.** Fermare il servizio chiudeva la porta e ammazzava i turni in corso nello stesso istante.
+In 44 ore di lavoro ci sono stati 21 riavvii (le installazioni), e diciassette turni in volo — 112
+milioni di token, il 6,4% di tutto il consumo — sono morti entro quattro minuti da una riga «mi sto
+fermando», per poi essere rifatti da zero.
+
+**Cos'è adesso.** Due segnali separati: uno chiude la porta ai turni nuovi, l'altro arriva solo dopo
+che quelli in corso hanno avuto il tempo di finire da soli.
+
+**E il seguito, che vale come lezione.** Non bastava. Il servizio annunciava «sto svuotando, fino a
+31 minuti» e il sistema operativo lo dichiarava spento **esattamente trenta secondi dopo**, tre
+riavvii di fila: era un tempo di attesa predefinito dell'ospite di processo, che nessuno aveva mai
+impostato. Cinque sessioni fresche morte a metà turno, quindici milioni di token. Adesso una regola
+sola dimensiona i tre tempi in scala, dal più interno al più esterno.
+
+**Il principio.** Un periodo di grazia deve essere rispettato da ogni strato sotto di lui, altrimenti
+vince in silenzio il valore predefinito di quello più esterno — e l'annuncio che il sistema fa di sé
+diventa una bugia.
+
+**Dove.** `stage/4a-fresh-turns-and-drain`, `stage/4e-host-shutdown-timeout`.
+
+---
+
+## 3. La memoria fra un turno e l'altro
+
+### Una sessione fresca riceve la memoria in un pacchetto
+
+**Com'era.** Una sessione che riparte pulita si avviava con il solo comando di ruolo: i messaggi che
+il bridge aveva appena deciso di consegnarle non le arrivavano, e allora se li andava a cercare da
+sola, aprendo canali e piani. Misurato sul supervisore generale: 9,2 chiamate al modello per turno,
+di cui 7,8 solo per leggere file. E l'83% di tutto il contesto consumato sul server (1456 milioni di
+token su 1756) era roba trascinata dai turni precedenti.
+
+**Cos'è adesso.** L'app prepara un pacchetto e glielo mette in mano: i messaggi in attesa, il brief,
+l'ultimo rapporto che quel membro ha scritto, le righe di piano che lo riguardano, lo stato del
+codice. Il ruolo lo legge per primo e tratta il canale come una consultazione, non come il punto di
+partenza.
+
+**Perché.** Ogni cosa che una sessione deve andare a cercare è pagata due volte: una per cercarla e
+una per rileggerla al turno dopo. Chi sa già che cosa serve — il bridge, che ha appena deciso lui
+quali messaggi sono in attesa — deve consegnarlo, non lasciarlo indovinare.
+
+**Il dettaglio che regge tutto.** Una sezione che non si riesce a leggere viene **nominata** come
+non riempita, invece di comparire vuota: un piano assente non deve leggersi come un piano senza
+righe. E un pacchetto che non si riesce a scrivere non ferma mai il turno.
+
+**Dove.** `stage/4a-fresh-turns-and-drain`, `stage/4b-state-pack`.
+
+### Il brief si ritrova anche dopo che il canale è stato compattato
+
+**Com'era.** A una sessione fresca si davano «le ultime tre voci», che dopo un giro di revisione non
+contengono più l'incarico.
+
+**Cos'è adesso.** L'incarico si cerca con una regola deterministica, e la ricerca attraversa sia il
+canale vivo sia l'archivio.
+
+**Perché.** I canali vengono compattati: la parte vecchia si sposta in un archivio. Qualsiasi cosa
+conti «quante voci ci sono» o «le ultime N» guardando solo il file vivo prima o poi sbaglia, e
+sbaglia in silenzio.
+
+**Dove.** `stage/4b-state-pack`.
+
+### Strumenti per misurare il consumo
+
+**Cos'è.** Script di sola lettura che dicono quante chiamate costa un turno, quanto contesto porta
+la prima chiamata, e quante di quelle chiamate sono lavoro vero contro quante sono orientamento.
+Leggono solo metadati e non scrivono niente fuori dai file temporanei.
+
+**Perché.** Le decisioni di questo capitolo sono tutte compromessi fra costo e comodità. Senza una
+misura presa prima e dopo, sullo stesso punto, sono opinioni.
+
+**Dove.** `stage/4b-state-pack`.
+
+---
+
+## 4. Velocità e costo dell'app
+
+### Una scrittura su un canale sveglia il ciclo
+
+**Com'era.** Un messaggio del proprietario ci metteva 11-12 secondi a raggiungere il supervisore e
+36-42 a ottenere risposta. Di quel tempo l'app se ne teneva una decina: sei secondi per aggregare
+messaggi vicini, fino a due di attesa del giro di controllo, tre di raggruppamento.
+
+**Cos'è adesso.** Un osservatore del file system accorcia l'attesa appena qualcuno scrive; il giro
+di controllo periodico resta come rete di sicurezza, e una macchina che non manda quelle notifiche
+si comporta esattamente come prima, con una riga nel registro che lo dice. La finestra di
+aggregazione per il proprietario si è dimezzata, mentre per i membri resta intera, perché ogni
+risveglio del supervisore in più costa circa un milione di token in ingresso.
+
+**Il prezzo, scritto perché è reale.** Accelerando, il margine che impedisce di specchiare una voce
+scritta a metà era stato ridotto di dodici volte, e uno scrittore che si fermava quattro decimi di
+secondo si vedeva la voce spedita troncata e il resto distrutto. Adesso quel margine è di nuovo una
+durata, non un conteggio di giri, e vale quello che valeva prima. La conseguenza è che **l'ultima
+voce di un canale ci mette di nuovo quattro secondi** ad arrivare sul telefono: è il prezzo di non
+troncarla. Il guadagno sul percorso del proprietario resta, perché quel percorso non passa di lì.
+
+**E un dettaglio che vale un milione di token.** Un messaggio già finito (che termina con un punto)
+saltava del tutto la finestra di attesa: due frasi scritte a due secondi di distanza compravano due
+turni di supervisore. Adesso anche un messaggio finito aspetta un paio di secondi.
+
+**Dove.** `stage/7e-owner-path-latency`, `stage/7k-waker-fixes`.
+
+### Il giro di controllo legge ciò che è cambiato
+
+**Com'era.** Ogni due secondi il ciclo rileggeva tutto: l'elenco delle sessioni tredici volte, i
+canali per intero anche solo per scoprire che non c'era niente da compattare, e riscriveva
+comunque il file dei segnaposti.
+
+**Cos'è adesso.** L'elenco si carica una volta per giro; il controllo di compattazione conta le
+intestazioni invece di leggere tutto; i canali si rileggono solo se sono cambiati davvero
+(dimensione e data, mai «sono passati tot secondi»); i segnaposti si scrivono solo se si sono
+mossi.
+
+**Quanto.** Da 195 aperture di file e una scrittura per giro a 44 aperture e zero scritture: -77%.
+Niente di ciò che il bridge decide è cambiato.
+
+**Dove.** `stage/7g-tick-hygiene`.
+
+### Il modello di ogni membro è scelto sul compito
+
+**Com'era.** Un modello fisso per ruolo.
+
+**Cos'è adesso.** Chi apre una sessione ne indica il modello, e la scelta resta scritta nella scheda
+del membro, così una sessione che viene fatta ripartire torna sul modello per cui il compito era
+stato dimensionato. Ci sono tre livelli di precedenza: quello che ha imposto il proprietario per
+quell'orchestrazione, quello del membro, il valore predefinito. Il modello più costoso lo può
+scegliere solo il proprietario.
+
+**Perché.** Una correzione di una riga e una riprogettazione non sono lo stesso mestiere, e non
+devono costare uguale. Il criterio è scritto nel manuale del ruolo — il modello economico per il
+lavoro meccanico e delimitato, quello grosso per il progetto, il giudizio, i percorsi che toccano
+soldi e le revisioni profonde; nel dubbio si sale di un livello — e la scelta viene detta al
+proprietario **insieme alla ragione**, così vede per che cosa sta pagando.
+
+**Dove.** `stage/1j-implementer-model`.
+
+---
+
+## 5. Onestà: che cosa il sistema può dire di sapere
+
+Questa sezione è la più importante da leggere, perché contiene le regole che valgono anche fuori da
+questo progetto.
+
+### Un controllo che non trova ciò che deve controllare non permette tutto in silenzio
+
+**Com'era.** Nove punti in sei script davano per scontato dove stessero le cartelle della
+supervisione, ignorando l'indicazione ricevuta all'avvio. Se il servizio era stato avviato altrove,
+ogni controllo cercava un percorso inesistente, non trovava niente, e **permetteva tutto**. Senza un
+errore da nessuna parte.
+
+**Cos'è adesso.** Ogni punto legge l'indicazione ricevuta, e un test elenca gli script leggendoli dal
+disco invece che da una lista scritta a mano, così uno aggiunto domani viene preso lo stesso.
+
+**Perché.** È peggio di una regola non applicata, perché il protocollo dice alla sessione il
+contrario: «l'app ti ferma». Su quelle macchine quella frase era semplicemente falsa, e una sessione
+onesta che ci crede si comporta come se fosse protetta.
+
+**Dove.** commit diretto su `ours/integration` (`b828090`).
+
+### Sei test rossi per sempre diventano salti onesti
+
+**Com'era.** Sei test rossi su macOS da sempre, con una diagnosi scritta accanto che era pure
+sbagliata (non era una questione di permessi).
+
+**Cos'è adesso.** Provocano un guasto tenendo un file aperto: è una cosa che su Windows fa fallire
+la scrittura, mentre su macOS e Linux il sistema non consulta affatto i file aperti dagli altri, e
+quindi non c'è proprio niente da provocare. Adesso il test **prova la macchina** invece di leggerne
+il nome, e dove il meccanismo non esiste salta dicendo la ragione vera. Dove esiste, verifica tutto
+quello che verificava prima.
+
+**Perché.** Una suite permanentemente rossa è il posto dove si nasconde un guasto vero: si impara a
+dire «ah, sono quei sei» e si lascia passare il settimo. Da qui la regola di questo fork: si
+confrontano i **nomi**, non il numero.
+
+**Dove.** commit diretto su `ours/integration` (`b2dde29`).
+
+### I test non si rubano più le prove a vicenda
+
+**Com'era.** Le diagnostiche di un lock finivano in un raccoglitore unico per tutto il processo, e
+ogni test che avviava il motore se lo riprendeva. Chi stava raccogliendo si vedeva sparire le prove
+a metà, e il furto compariva come un fallimento suo, sotto un nome che non c'entrava niente. Cinque
+esecuzioni complete rosse su sei.
+
+**Cos'è adesso.** Ogni test raccoglie sul proprio flusso; la produzione è intatta. Zero fallimenti
+su dieci esecuzioni complete.
+
+**Perché conta.** Un rosso intermittente rende **inaffidabile ogni verifica di merge**: non si sa più
+se si sta guardando un difetto nuovo o il solito rumore. E un caso è istruttivo: il finto Claude
+usato nei test andava in crash quando due copie scrivevano nello stesso registro, e il crash faceva
+riuscire un membro che il test voleva veder rifiutato — cioè prendeva esattamente la forma di un
+guasto nel limite d'uso, in una prova dove il limite non era mai stato raggiunto. Il sintomo
+accusava lo strato sbagliato.
+
+**Una cosa provata e rifiutata**, scritta perché nessuno la riprovi: mettere tutte le trentuno classi
+in un gruppo esclusivo. Misurato: 6 minuti e 26 contro 1 minuto e 35. Un costo di quattro volte su
+ogni esecuzione, per sempre, per rendere deterministico un test.
+
+**Dove.** `stage/7l-diagnostics-sink`, `stage/7m-flaky-resume-test`.
+
+### La suite gira su tempi finti
+
+**Com'era.** I test del bridge aspettavano tempi veri: 2583 test impiegavano 107 secondi di orologio
+per 27 di calcolo. Uno solo aspettava 33 secondi veri.
+
+**Cos'è adesso.** I tre valori di tempo del ciclo si iniettano; in produzione valgono esattamente i
+numeri che erano scritti prima, identici. La suite passa da 107 secondi a 37. Nessun test è stato
+cancellato, saltato o indebolito.
+
+**Perché.** Una suite lenta si esegue di meno, e una suite che si esegue di meno non è una rete.
+
+**Dove.** `stage/7d-fake-clock-tests`.
+
+### Le regole del messaggio al proprietario sono controllate, non sperate
+
+**Com'era.** Un conteggio meccanico del prompt del supervisore: 229 regole imperative e 14 coppie che
+non si possono rispettare entrambe. Vince sempre quella più in basso, perché è l'ultima che il
+modello ha letto. Due esempi: «parti dalla decisione» a riga 116 contro un accuso di ricezione
+obbligatorio 396 righe più sotto — che è letteralmente la cosa che la prima regola vieta; e «una
+domanda chiude il tuo turno» contro «costruiscilo e chiedi di passaggio» 783 righe più sotto. Il
+modello soddisfa entrambe chiedendo in mezzo alla prosa senza il marcatore: così non accende
+nessuna spia, non risulta da nessuna parte, e nessuno la insegue. Ecco come si perdono le domande.
+
+**Cos'è adesso.** Un controllo automatico verifica **solo ciò che una macchina può stabilire**: due
+domande in una voce sola, prosa sotto la domanda, opzioni senza domanda, un accuso di ricezione al
+posto della risposta, un percorso di file o una traccia di errore mandati a chi non legge codice, la
+lunghezza. E riporta senza ingoiare: il messaggio arriva comunque al proprietario, e la sessione si
+vede dire nel proprio canale che cosa c'era che non andava.
+
+**Perché così e non di più.** Un controllo che scarta il messaggio trasformerebbe un errore di forma
+nella perdita di una risposta, che è il guaio peggiore di questo sistema. E «rispondi in modo
+completo» o «scrivi in parole semplici» sono regole vere ma sono deliberatamente escluse: un
+controllo che tira a indovinare insegna alla sessione a scrivere per il controllo.
+
+**Dove.** commit diretto su `ours/integration` (`86d695e`).
+
+### L'applicazione Windows si compila su Windows
+
+**Com'era.** Il progetto dell'interfaccia gira solo su Windows, e le macchine su cui si scrive questo
+repo non riescono nemmeno a provarci. Il 2026-09-09 sono finiti in un merge quattro file modificati
+alla cieca, con scritto nel commit «manca ancora una compilazione Windows».
+
+**Cos'è adesso.** L'integrazione continua la fa a ogni push, e compila **solo** ciò che le altre
+macchine non possono: prima l'app da sola, così un errore la nomina, poi tutto il resto.
+
+**Perché.** «Manca ancora una verifica» dentro un messaggio di commit non è una verifica: è un debito
+che qualcuno deve ricordarsi di pagare. Se una macchina può pagarlo da sola, lo paga la macchina.
+
+**Dove.** commit diretto su `ours/integration` (`a2adb76`).
+
+### La revisione avversaria dopo ogni tornata
+
+**Cos'è.** Dopo un gruppo di modifiche, revisori indipendenti in copie di lavoro separate, con
+l'obbligo di **dimostrare** ogni difetto con una prova eseguibile, non di segnalarlo.
+
+**Perché.** Su tre modifiche che cambiavano comportamento vivo, ha trovato difetti veri in tutte e
+tre — quelli raccontati qui sopra nell'appuntamento del limite d'uso, nel turno di chiusura e nella
+voce troncata. Nessuno di quei difetti era visibile da una suite verde, e tutti e tre sarebbero
+arrivati al proprietario nella forma «l'app si è mangiata il mio messaggio». Non è cerimonia: è
+l'unico controllo che ha trovato qualcosa.
+
+**Dove.** raccontata in `docs/superpowers/specs/2026-09-09-report-lavoro-e-runbook.md`.
