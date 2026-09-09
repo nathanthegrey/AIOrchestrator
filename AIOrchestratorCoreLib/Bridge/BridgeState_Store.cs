@@ -125,8 +125,10 @@ public static class BridgeState_Store
             ["lastUpdateId"] = lastUpdateId,
         };
 
-        // Rewritten ~30 times a minute: a plain truncate-then-write is one full disk away from
-        // leaving a zero-length or half-written cursor behind. The rename cannot do that.
+        Diagnostics.TickIo_Counters.Count_BridgeStateWrite();
+
+        // Rewritten on every tick that moved a cursor: a plain truncate-then-write is one full disk
+        // away from leaving a zero-length or half-written cursor behind. The rename cannot do that.
         Atomic_FileWriter.Write_AllText(paths.BridgeStateFile, root.ToJsonString(JsonWriting.INDENTED));
     }
 

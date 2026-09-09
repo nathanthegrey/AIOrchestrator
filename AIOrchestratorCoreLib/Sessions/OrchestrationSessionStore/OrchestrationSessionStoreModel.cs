@@ -11,6 +11,31 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
     readonly ISupervisionPaths _paths = paths;
     readonly Lock _writeLock = new();
 
+    /// <summary>
+    /// The last parse of each <c>session.json</c>, WITH THE STAMP IT WAS PARSED FROM — used only
+    /// while the file on disk still has exactly that length and last-write time.
+    ///
+    /// <para>
+    /// WHY: <c>Load_All</c> is called about twenty-six times inside one 2-second mirror tick — from
+    /// the engine's sweeps, the watchdog and the print dispatcher — and every call re-read and
+    /// re-deserialised every orchestration's session.json. The answers were identical; the reading
+    /// was not free.
+    /// </para>
+    /// <para>
+    /// IT IS NOT A WRITE-BEHIND CACHE AND HOLDS NO UNSAVED STATE. <see cref="Save"/> writes the file
+    /// first and then FORGETS the entry, so the next read comes from disk. That order is what keeps
+    /// this invisible: a reader can never be handed a session that differs from the bytes on disk.
+    /// </para>
+    /// <para>
+    /// INVALIDATED BY THE FILE, NOT BY A CLOCK, so there is no window in which a stale roster, pid
+    /// or <c>ClosedUtc</c> can be served — the failure mode that would matter here, since a stale
+    /// <c>ClosedUtc</c> is how a closed member gets resurrected (see <see cref="Set_MemberPid"/>).
+    /// The stamp pair is belt and braces: every save through <see cref="Storage.Atomic_FileWriter"/>
+    /// moves a fresh file into place, and this store is the only writer of these files in the system.
+    /// </para>
+    /// </summary>
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, ((long Length, DateTime LastWriteUtc) Stamp, IOrchestrationSession Session)> _parsedByOrchId = new();
+
     public IReadOnlyList<IOrchestrationSession> Load_All()
     {
         List<IOrchestrationSession> sessions = [];
@@ -38,12 +63,27 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
 
     public IOrchestrationSession? Get_Session_OrNull(string orchId)
     {
-        var sessionFile = _paths.Get_SessionFile(orchId);
+        var sessionFile = new FileInfo(_paths.Get_SessionFile(orchId));
 
-        if (!File.Exists(sessionFile))
+        // NOT REMEMBERED AS ABSENT: a file that does not exist yet has no stamp to invalidate
+        // against, and the stat this needs is already the cheapest question that can be asked here.
+        if (!sessionFile.Exists)
             return null;
 
-        return SessionJson_Serializer.Deserialize(File.ReadAllText(sessionFile), sessionFile);
+        var stamp = (sessionFile.Length, sessionFile.LastWriteTimeUtc);
+
+        if (_parsedByOrchId.TryGetValue(orchId, out var parsed) && parsed.Stamp == stamp)
+            return parsed.Session;
+
+        Diagnostics.TickIo_Counters.Count_SessionFileRead();
+
+        // A file that cannot be deserialised THROWS, exactly as before, and nothing is remembered —
+        // so a session.json repaired on disk is picked up by the next call rather than by a restart.
+        var session = SessionJson_Serializer.Deserialize(File.ReadAllText(sessionFile.FullName), sessionFile.FullName);
+
+        _parsedByOrchId[orchId] = (stamp, session);
+
+        return session;
     }
 
     public IOrchestrationSession? Find_ByTelegramTopicId_OrNull(long topicId)
@@ -346,5 +386,14 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
     void Save(IOrchestrationSession session)
     {
         Atomic_FileWriter.Write_AllText(_paths.Get_SessionFile(session.OrchId), SessionJson_Serializer.Serialize(session));
+
+        // THE BELT, not the mechanism. The stamp check is what makes a stale parse unusable, and it
+        // already covers this write from either side — a reader racing this call sees the old file
+        // with its old stamp or the new file with its new one, and both are the truth on disk at the
+        // moment they looked. This forget covers the one case a stamp cannot: a replacement that
+        // lands on the SAME length and the same last-write time, which is what the filesystem's
+        // timestamp granularity makes conceivable for a small file rewritten twice in a row. It
+        // costs a dictionary removal on a write that happens a few times an hour.
+        _parsedByOrchId.TryRemove(session.OrchId, out _);
     }
 }
