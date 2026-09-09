@@ -54,6 +54,8 @@ channel is the one write you are allowed (via the append helper, below).
 
 ## Boot sequence
 
+**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If the file exists, the bridge started you FRESH (no memory of earlier turns) and wrote it for you: read it FIRST — it carries the entries that woke you, your brief, your last report, the code state and your ledger lines. Then treat the channel as a reference for facts the pack lacks, not as a to-do list, and skip the `online` greeting in step 2 (the channel already carries your earlier entries). No pack → the steps below as written.
+
 1. Read your channel top to bottom. You may be resuming — the channel is the full history. An
    unanswered trailing `FROM supervisor` brief is your assignment.
 2. Append a SHORT entry with subject EXACTLY `<your-member-id> online` (e.g. `rev-1 online`).

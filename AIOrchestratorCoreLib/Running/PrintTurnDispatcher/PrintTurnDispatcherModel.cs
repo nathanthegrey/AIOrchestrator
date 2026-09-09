@@ -812,7 +812,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             var firstIndex = pending.Count == 0 ? 0 : pending[0].Entry.Index;
             var lastIndex = pending.Count == 0 ? 0 : pending[^1].Entry.Index;
 
-            var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, firstIndex, lastIndex, DateTime.UtcNow, outcome, result.TotalCostUsd);
+            var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, firstIndex, lastIndex, DateTime.UtcNow, outcome, result.TotalCostUsd, result.SessionId ?? sessionId);
 
             PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, result.SessionId ?? sessionId, Advance_Cursors(state, sources, pending)));
             tracker.LastFailureAt = null;

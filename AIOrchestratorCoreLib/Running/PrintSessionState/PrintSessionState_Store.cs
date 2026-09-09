@@ -113,6 +113,7 @@ public static class PrintSessionState_Store
                 ["ended_utc"] = turn.EndedUtc.ToString("o"),
                 ["outcome"] = turn.Outcome,
                 ["cost_usd"] = turn.CostUsd,
+                ["session_id"] = turn.SessionId,
             });
         }
 
@@ -205,7 +206,8 @@ public static class PrintSessionState_Store
             turn["last_entry_index"]?.GetValue<int>() ?? 0,
             DateTime.TryParse(turn["ended_utc"]?.GetValue<string>(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var ended) ? ended.ToUniversalTime() : DateTime.MinValue,
             turn["outcome"]?.GetValue<string>() ?? "unknown",
-            turn["cost_usd"]?.GetValue<double?>());
+            turn["cost_usd"]?.GetValue<double?>(),
+            turn["session_id"]?.GetValue<string?>());
     }
 
     static string Read_String(JsonObject node, string key, string stateFile)

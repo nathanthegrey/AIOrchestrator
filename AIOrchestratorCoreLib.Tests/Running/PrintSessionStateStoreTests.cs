@@ -30,7 +30,7 @@ public class PrintSessionStateStoreTests : IDisposable
     public void WriteThenRead_RoundTripsEverything()
     {
         var file = PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.Implementer, "orch-1", "imp-1");
-        var executed = ExecutedTurn_Factory.Create(1, "orch-1/imp-1/1", 2, 3, new DateTime(2026, 9, 5, 10, 0, 0, DateTimeKind.Utc), "success", 0.0127);
+        var executed = ExecutedTurn_Factory.Create(1, "orch-1/imp-1/1", 2, 3, new DateTime(2026, 9, 5, 10, 0, 0, DateTimeKind.Utc), "success", 0.0127, "stage-sid-1");
         var cursor = TurnCursor_Factory.Create("imp-1", "/repo/ch.md", 3, new HashSet<string> { "0f1e2d3c4b5a6978", "aabbccddeeff0011" });
         var state = PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(
             PrintSessionState_Factory.Create_New("sid", SessionRoles.Implementer, "orch-1", "imp-1", "/repo", "opus", "/repo/ch.md", []), executed, "sid", [cursor]);
@@ -52,7 +52,28 @@ public class PrintSessionStateStoreTests : IDisposable
         Assert.Equal("orch-1/imp-1/1", read.ExecutedTurns[0].RequestId);
         Assert.Equal(new DateTime(2026, 9, 5, 10, 0, 0, DateTimeKind.Utc), read.ExecutedTurns[0].EndedUtc);
         Assert.Equal(0.0127, read.ExecutedTurns[0].CostUsd);
+        // The stage's own session id — the attribution key for a fresh-mode transcript (2026-09-09).
+        Assert.Equal("stage-sid-1", read.ExecutedTurns[0].SessionId);
         Assert.True(PrintSessionState_Store.Exists(_paths, SessionRoles.Implementer, "orch-1", "imp-1"));
+    }
+
+    [Fact]
+    public void ExecutedTurn_WrittenBeforeSessionIdExisted_ReadsAsNull()
+    {
+        var file = PrintSessionState_Store.Get_StateFile(_paths, SessionRoles.Implementer, "orch-1", "imp-1");
+        var executed = ExecutedTurn_Factory.Create(1, "orch-1/imp-1/1", 2, 3, DateTime.UtcNow, "success", null);
+        var state = PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(
+            PrintSessionState_Factory.Create_New("sid", SessionRoles.Implementer, "orch-1", "imp-1", "/repo", null, "/repo/ch.md", []), executed, "sid", []);
+        PrintSessionState_Store.Write(file, state);
+
+        // Exactly what a file from before 2026-09-09 looks like: no session_id on the turn.
+        var text = File.ReadAllText(file).Replace("\"session_id\": null,", string.Empty).Replace("\"session_id\":null,", string.Empty);
+        File.WriteAllText(file, text);
+
+        var read = PrintSessionState_Store.Read_OrNull(file);
+
+        Assert.NotNull(read);
+        Assert.Null(Assert.Single(read.ExecutedTurns).SessionId);
     }
 
     [Fact]

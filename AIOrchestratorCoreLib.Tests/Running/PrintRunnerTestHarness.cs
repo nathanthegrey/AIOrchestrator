@@ -240,6 +240,12 @@ public sealed class PrintRunnerTestHarness : IDisposable
             ?? throw new Exception("state file missing");
     }
 
+    public string? Read_Pack_OrNull(SessionRoles role, string orchId, string memberId)
+    {
+        var file = AIOrchestratorCoreLib.Running.StatePack.StatePack_Locator.Get_File(Paths, role, orchId, memberId);
+        return File.Exists(file) ? File.ReadAllText(file) : null;
+    }
+
     public string Read_Channel(string orchId, string memberId)
     {
         return File.ReadAllText(Paths.Get_ImplementerChannelFile(orchId, memberId));

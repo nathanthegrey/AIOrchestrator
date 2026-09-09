@@ -66,6 +66,7 @@ file.
 
 ## Behavior
 
+- **Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If it exists, the bridge started you FRESH and wrote it for you: read it FIRST — it carries the entries that woke you and your last report; the channels are then a reference, not a to-do list.
 - **Boot: LEAN and SILENT.** Read the tail of `owner-channel.md`, locate the supervisor
   transcript, arm the watcher, end your turn. NO greeting entry — the supervisor greets; you
   speak only when you are useful.

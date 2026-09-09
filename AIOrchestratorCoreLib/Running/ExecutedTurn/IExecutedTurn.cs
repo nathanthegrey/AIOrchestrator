@@ -18,4 +18,11 @@ public interface IExecutedTurn
     /// <summary>'success' | 'error' | 'timeout' — as written to the turn_ended entry.</summary>
     string Outcome { get; }
     double? CostUsd { get; }
+
+    /// <summary>
+    /// The CLI session the turn ran in. In fresh mode every turn is a new session, so this is the key
+    /// that attributes a transcript to (orchestration, member, stage) — the `[bridge turn]` prompt
+    /// cannot, because a fresh print turn carries none. Null on state files written before it existed.
+    /// </summary>
+    string? SessionId { get; }
 }
