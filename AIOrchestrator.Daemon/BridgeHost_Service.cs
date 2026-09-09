@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Composition;
 using AIOrchestratorCoreLib.Composition.HostOptions;
+using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Composition.OrchestratorServices;
 using AIOrchestratorCoreLib.Kit;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -36,8 +37,8 @@ sealed class BridgeHost_Service(
     /// cancel. The engine's last act is to drain queued Telegram announcements; past this bound
     /// the sessions are killed anyway, because a hung drain must not hold up a service stop.
     /// </summary>
-    static readonly TimeSpan ENGINE_STOP_MARGIN = TimeSpan.FromMinutes(2);
-    static readonly TimeSpan ENGINE_STOP_GRACE_FALLBACK = TimeSpan.FromMinutes(33);
+    /// <summary>When the configuration cannot be read: the grace for the default turn timeout (ShutdownGrace_Rule).</summary>
+    static readonly TimeSpan ENGINE_STOP_GRACE_FALLBACK = ShutdownGrace_Rule.Compute_EngineStopGrace(ShutdownGrace_Rule.DEFAULT_TURN_TIMEOUT);
 
     readonly IHostOptions _options = options;
     readonly IHostApplicationLifetime _lifetime = lifetime;
@@ -101,6 +102,15 @@ sealed class BridgeHost_Service(
         services.Engine.SilenceAllChanged += silenced => services.Log.Log_Info("", silenced ? "All topics silenced (🔕 on)" : "Topics audible again (🔕 off)");
 
         services.Log.Log_Info("", $"Daemon starting — supervision root {paths.Root}, Claude home {_options.ClaudeHome}");
+
+        // SAID AT STARTUP, WHERE AN OPERATOR READS IT. The host's shutdown timeout is fixed in
+        // Program.cs for the default turn timeout; a configuration that raised the turn timeout would
+        // have its drain cut again, silently, exactly like 2026-09-09. Warned, never refused: a daemon
+        // that will not start over a config value takes every session down with it.
+        var mismatch = ShutdownGrace_Rule.Describe_Mismatch_OrNull(services.ConfigProvider.Get_Current().Runners.TurnTimeout, ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT);
+
+        if (mismatch != null)
+            services.Log.Log_Warning("", $"Shutdown grace: {mismatch}");
         services.Log.Log_Info("", services.ConfigProvider.Get_Current().Is_TelegramConfigured()
             ? "Telegram: mirror + remote input active"
             : "Telegram: not configured (file-only mode) — fill config.json and secrets.json, then restart");
@@ -169,7 +179,7 @@ sealed class BridgeHost_Service(
     {
         try
         {
-            return services.ConfigProvider.Get_Current().Runners.TurnTimeout + ENGINE_STOP_MARGIN;
+            return ShutdownGrace_Rule.Compute_EngineStopGrace(services.ConfigProvider.Get_Current().Runners.TurnTimeout);
         }
         catch
         {

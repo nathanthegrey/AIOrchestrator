@@ -48,7 +48,8 @@ KillMode=mixed
 # default) plus a minute — so a deploy stops killing work mid-turn. systemd must not SIGKILL it
 # first: this is that drain plus the engine's own margin. Measured 2026-09-06→08: 17 turns died
 # within four minutes of a stop under the old 30 s.
-TimeoutStopSec=2100
+# 2026-09-09: the .NET host's own ShutdownTimeout is now 39 min (ShutdownGrace_Rule: turn 30 + closing 5 + margins); systemd must SIGKILL LAST, so this stays above it.
+TimeoutStopSec=2400
 
 # The bot token lives in $HOME/.claude/supervision/secrets.json, read by the bridge alone — never
 # in this unit, never in the journal.
