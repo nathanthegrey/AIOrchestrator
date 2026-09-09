@@ -65,11 +65,11 @@ public class CloseTapArchiveProbeTests : IDisposable
         var log = OrchestrationLog_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), log);
-        // THE ONE ENGINE TEST THAT KEEPS THE SHIPPED TICK, and it has to. Two of the cases below read
-        // the decision prompt through Assert.Single(EditedTexts), so they depend on the general
-        // dashboard's own edit NOT landing inside the drive window — which is a statement about how
-        // many ticks fit in it, and shrinking the tick made it false (two edits, 2026-09-09). This
-        // class costs under a second at the shipped period, so there was nothing to buy here anyway.
+        // THE ONE ENGINE TEST THAT KEEPS THE SHIPPED TICK. It no longer has to for correctness — the
+        // two cases below read the DECISION PROMPT's own edits, so the general dashboard's tick can
+        // land inside the drive window without being mistaken for the outcome (it did, one full run in
+        // six, 2026-09-09, and shrinking the tick is what made it likely). The shipped period stays
+        // because this class costs under a second at it, so there was never anything to buy here.
         _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, log, _telegram, BridgeEngineTiming_Factory.Create_Production());
     }
 
@@ -133,13 +133,17 @@ public class CloseTapArchiveProbeTests : IDisposable
     {
         await Drive_ToTheTap_Async(
             beforeTap: Break_TheGeneralChannel,
-            until: () => _telegram.EditedTexts.Count > 0);
+            until: () => _telegram.DecisionPromptEdits.Count > 0);
 
-        var decision = Assert.Single(_telegram.EditedTexts);
+        var decision = Assert.Single(_telegram.DecisionPromptEdits);
 
         Assert.Contains("did not complete", decision);
         Assert.DoesNotContain("✅", decision);
         Assert.DoesNotContain("Closed — you confirmed", decision);
+
+        // And nowhere else either: an outcome written to some other message would still be a claim of
+        // success the owner reads, and matching on the prompt alone would no longer see it.
+        Assert.DoesNotContain(_telegram.EditedTexts, text => text.Contains("Closed — you confirmed"));
     }
 
     [Fact]
@@ -147,9 +151,9 @@ public class CloseTapArchiveProbeTests : IDisposable
     {
         await Drive_ToTheTap_Async(
             beforeTap: null,
-            until: () => _telegram.EditedTexts.Count > 0);
+            until: () => _telegram.DecisionPromptEdits.Count > 0);
 
-        Assert.Contains("✅ Closed — you confirmed.", Assert.Single(_telegram.EditedTexts));
+        Assert.Contains("✅ Closed — you confirmed.", Assert.Single(_telegram.DecisionPromptEdits));
     }
 
     /// <summary>
@@ -308,7 +312,8 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
     const string EMPTY_UPDATES = "{\"ok\":true,\"result\":[]}";
 
     readonly object _lock = new();
-    readonly List<string> _editedTexts = [];
+    readonly List<(long MessageId, string Text)> _edits = [];
+    long? _decisionPromptMessageId;
     string? _queuedUpdatesJson;
     long _nextMessageId = 9100;
 
@@ -325,7 +330,33 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         get
         {
             lock (_lock)
-                return _editedTexts.ToList();
+                return _edits.Select(edit => edit.Text).ToList();
+        }
+    }
+
+    /// <summary>
+    /// What the DECISION PROMPT was replaced with — the edits addressed to the message that carried
+    /// the Close button, and nothing else.
+    /// <para>
+    /// It exists because <see cref="EditedTexts"/> is every edit the engine made, and the general
+    /// dashboard edits its own message on a tick of its own. Under parallel load that tick lands
+    /// inside the drive window, a second text appears, and an <c>Assert.Single(EditedTexts)</c> fails
+    /// with two items — measured on this branch 2026-09-09, one full run in six. The cause is
+    /// unrelated to the process-wide lock sink fixed in the same commit: this fake is per-instance and
+    /// nothing outside the class can reach it. Reading the prompt's own edits asserts MORE than the
+    /// count did, since it also pins that the outcome was written to the message the owner tapped.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> DecisionPromptEdits
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _decisionPromptMessageId == null
+                    ? []
+                    : _edits.Where(edit => edit.MessageId == _decisionPromptMessageId).Select(edit => edit.Text).ToList();
+            }
         }
     }
 
@@ -350,18 +381,27 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
     {
         lock (_lock)
         {
+            var messageId = _nextMessageId++;
+
             // The confirming button, by its label rather than its position: a prompt that reordered
             // its buttons would otherwise silently make this test tap "keep it open" and pass.
             foreach (var button in buttons)
             {
                 if (button.Label.Contains("Close", StringComparison.OrdinalIgnoreCase))
+                {
                     ConfirmData = button.Data;
+
+                    // The id is what the outcome edit is later matched against. Recorded off the
+                    // SEND that carried the Close button, so it is the decision prompt by definition
+                    // rather than by position among whatever else the engine happens to send.
+                    _decisionPromptMessageId = messageId;
+                }
 
                 if (button.Label.Contains("Keep", StringComparison.OrdinalIgnoreCase))
                     DeclineData = button.Data;
             }
 
-            return Task.FromResult<long?>(_nextMessageId++);
+            return Task.FromResult<long?>(messageId);
         }
     }
 
@@ -420,7 +460,7 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
     public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
     {
         lock (_lock)
-            _editedTexts.Add(text);
+            _edits.Add((messageId, text));
 
         return Task.CompletedTask;
     }
@@ -444,7 +484,7 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
     {
         lock (_lock)
-            _editedTexts.Add(text);
+            _edits.Add((messageId, text));
 
         return Task.CompletedTask;
     }
