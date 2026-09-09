@@ -7,6 +7,7 @@ using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -174,7 +175,8 @@ public class MarkdownReachesThePhoneRenderedTests : IDisposable
     IBridgeEngine Build_Engine(IMessageTranslator translator)
     {
         return BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
-            _paths, _configProvider, _store, _launcher, _log, _telegram, translator);
+            _paths, _configProvider, _store, _launcher, _log, _telegram, translator,
+            BridgeTestTiming.Fast());
     }
 
     void Write_Config(bool italianLayer)
@@ -203,7 +205,7 @@ public class MarkdownReachesThePhoneRenderedTests : IDisposable
         if (!File.Exists(channelFile))
             File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
 
-        await Run_Until_Async(engine, () => false, 4_000);
+        await Run_Until_Async(engine, () => false, BridgeTestTiming.Window_ForTicks(3));
 
         _telegram.Forget_Everything();
 

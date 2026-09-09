@@ -7,6 +7,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Usage;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -75,7 +76,7 @@ public class StallAlertClockProbeTests : IDisposable
 
         _telegram = new FailableTelegram_Fake();
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, store, new RecordingSpawner_Fake(), log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, store, _launcher, log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, store, _launcher, log, _telegram, BridgeTestTiming.Fast());
     }
 
     public void Dispose()

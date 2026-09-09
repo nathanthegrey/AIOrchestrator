@@ -17,6 +17,7 @@ using AIOrchestratorCoreLib.Time.Clock;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
 using Xunit.Abstractions;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -96,7 +97,8 @@ public class FirstRoundFromTheGeneralLiveSmokeTests(ITestOutputHelper output)
         var engine = BridgeEngine_Factory.Create_WithDecisionState(
             paths, configProvider, store, launcher, log, telegram,
             MessageTranslator_Factory.Create(log), EngineStateStore_Factory.Create_File(paths, log),
-            Clock_Factory.Create_System());
+            Clock_Factory.Create_System(),
+            BridgeTestTiming.Fast());
 
         // The app does this at startup; the test does it explicitly so a watchdog timing difference
         // cannot be mistaken for the thing under test.
