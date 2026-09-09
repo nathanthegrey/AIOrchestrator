@@ -6,7 +6,6 @@ using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
-using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 
@@ -61,7 +60,7 @@ public class QuestionContractProbeTests : IDisposable
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -71,7 +70,7 @@ public class QuestionContractProbeTests : IDisposable
 
         _engine = BridgeEngine_Factory.Create_WithDecisionState(
             _paths, _configProvider, _store, _launcher, _log, _telegram,
-            MessageTranslator_Factory.Create(_log), _engineState, _clock,
+            _engineState, _clock,
             BridgeTestTiming.Fast());
     }
 

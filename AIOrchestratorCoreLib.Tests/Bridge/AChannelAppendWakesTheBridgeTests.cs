@@ -125,9 +125,8 @@ public class AChannelAppendWakesTheBridgeTests : IDisposable
         // PRODUCTION TIMING ON PURPOSE, unlike every other Bridge test: this one measures that an append
         // is mirrored WITHOUT waiting out the tick, and BridgeTestTiming.Fast() would shrink that tick to
         // 20 ms — the test would pass with no waker at all and prove nothing.
-        var engine = BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
-            _paths, _configProvider, _store, _launcher, _log, _telegram, new EchoTranslator_Fake(),
-            BridgeEngineTiming_Factory.Create_Production());
+        var engine = BridgeEngine_Factory.Create_WithTelegramClient(
+            _paths, _configProvider, _store, _launcher, _log, _telegram, BridgeEngineTiming_Factory.Create_Production());
 
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
 

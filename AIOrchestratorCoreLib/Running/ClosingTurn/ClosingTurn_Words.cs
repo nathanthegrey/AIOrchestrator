@@ -26,6 +26,23 @@ public static class ClosingTurn_Words
     /// <c>claude --help</c> on 2.1.266 (2026-09-09): "<c>--max-budget-usd &lt;amount&gt;</c> Maximum
     /// dollar amount to spend on API calls (only works with --print)" — which is why the closing
     /// turn is print-shaped even for a stream session, quite apart from the process being dead.
+    ///
+    /// <para>
+    /// WHAT A TRIPPED CAP LOOKS LIKE, MEASURED on the installed CLI 2026-09-09 with
+    /// <c>claude -p --model haiku --max-budget-usd 0.0001</c>: exit 1, <c>is_error: true</c>,
+    /// <c>subtype: "error_max_budget_usd"</c>, <c>terminal_reason: "budget_exhausted"</c>,
+    /// <c>result: null</c>. <see cref="TurnOutcomes.Is_Success"/> is therefore false for it, which
+    /// is what stops a refusal being filed as a report — and the reason that matters is the next
+    /// paragraph.
+    /// </para>
+    /// <para>
+    /// THE CAP IS ENFORCED AFTER THE STEP, NOT BEFORE IT. That same measured run reported
+    /// <c>total_cost_usd: 0.109</c> against a cap of $0.0001 — a thousand times over. So the flag
+    /// does not bound the spend to its number: it stops the turn once the number has already been
+    /// passed. The real bound on a closing turn is the PROMPT ("do not continue the task") and
+    /// <see cref="TIMEOUT"/>; the flag is the backstop that ends a resumed transcript which decided
+    /// to carry on working anyway.
+    /// </para>
     /// </summary>
     public const string BUDGET_FLAG = "--max-budget-usd";
 
@@ -33,8 +50,30 @@ public static class ClosingTurn_Words
     /// Two dollars. Not a budget that buys work — it buys ONE report on work already done, and a
     /// closing turn that spends more than this is doing something it was told not to do. The net
     /// under the prompt, per spec section C9.
+    ///
+    /// <para>
+    /// STILL TWO AFTER THE 2026-09-09 MEASUREMENT, deliberately. The number looks generous for a
+    /// turn asked to write two sentences, and the instinct is to cut it — but the cap is checked
+    /// after each step (see <see cref="BUDGET_FLAG"/>), so a smaller number does not buy a smaller
+    /// bill; it only ends the turn at an earlier step. A closing turn still has to READ its channel
+    /// and WRITE an entry on a 30-minute transcript's context, and a cap that trips during that
+    /// costs the whole closing turn — money spent, nothing reported, the entries re-run. Lowering
+    /// it is a change to make against a measurement of what a real closing turn costs, not against
+    /// the intuition that two dollars sounds like a lot.
+    /// </para>
     /// </summary>
     public const double BUDGET_USD = 2.00;
+
+    /// <summary>
+    /// HOW MANY DEADLINE KILLS IN A ROW BEFORE SOMEBODY IS TOLD. A deadline kill spends no attempt —
+    /// that is the whole point of the closing turn — so <c>PrintTurn_Words.MAX_ATTEMPTS</c> and the
+    /// stall alert it raises can never be reached by kills alone. Probed on 2026-09-09 against the
+    /// merged feature: three briefs, three kills, three successful closing turns, FailedAttempts 0,
+    /// zero alerts — a session dying at the deadline every single turn said so nowhere. Three,
+    /// matching <c>PrintTurn_Words.MAX_ATTEMPTS</c>, because it is the same judgement ("this is not
+    /// bad luck any more") about the same session.
+    /// </summary>
+    public const int KILLS_BEFORE_ALERT = 3;
 
     /// <summary>
     /// Five minutes. A report of where a turn got to is not work, and the dispatcher clamps this to

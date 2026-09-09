@@ -102,8 +102,12 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
 
             Record_RateLimit_IfNew(state, boot);
 
+            // NOTHING TO CLOSE: the boot is not the turn. Whatever killed it, the brief this turn is
+            // about was never sent, so the transcript holds only a role command — resuming it for a
+            // closing turn would buy a "where I got to" about nothing and, worse, would mark the
+            // unseen brief delivered (adversarial review, 2026-09-09).
             if (Is_TransportFailure(boot))
-                return Report_TransportFailure(key, state, boot, requestId, "while booting the session with its role command");
+                return TurnResult_Factory.CreateFrom_NothingToClose(Report_TransportFailure(key, state, boot, requestId, "while booting the session with its role command"));
 
             bootCost = boot.Result.TotalCostUsd ?? 0;
             bootElapsed = boot.Result.Elapsed;
@@ -112,8 +116,10 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
 
             _log.Log_Info(state.OrchId, $"Stream session '{state.MemberId}' booted with '{bootPrompt}' in {boot.Result.Elapsed.TotalSeconds:F1} s");
 
+            // Same fact by the other route: the boot answered, but it answered so slowly that there is
+            // no turn left to send the brief in. Nothing was asked, so there is nothing to close.
             if (deadline <= TimeSpan.Zero)
-                return TurnResult_Parser.Parse(-1, timedOut: true, string.Empty, "the boot turn used the whole timeout", bootElapsed);
+                return TurnResult_Factory.CreateFrom_NothingToClose(TurnResult_Parser.Parse(-1, timedOut: true, string.Empty, "the boot turn used the whole timeout", bootElapsed));
         }
 
         // THE BOOT ALONE IS THE WHOLE TURN when nothing is pending — the dispatcher's boot turn, run so
@@ -298,7 +304,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         // a mute process has produced nothing to report, so it keeps today's retry, while a turn
         // killed at the deadline was working and gets its closing turn (ClosingTurn_Rule).
         if (!outcome.ProcessDied)
-            return outcome.WentSilent ? TurnResult_Factory.CreateFrom_SilenceKill(outcome.Result) : outcome.Result;
+            return outcome.WentSilent ? TurnResult_Factory.CreateFrom_NothingToClose(outcome.Result) : outcome.Result;
 
         var failures = Count_StructuralFailure(key);
 

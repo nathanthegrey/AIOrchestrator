@@ -11,7 +11,6 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Time.Clock;
-using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 
 namespace AIOrchestratorCoreLib.Bridge.BridgeEngine;
@@ -35,7 +34,7 @@ public static class BridgeEngine_Factory
     }
 
     /// <summary>
-    /// THE TIMING TEST SEAM ON THE PRODUCTION PATH, added by the same idiom as the three below and
+    /// THE TIMING TEST SEAM ON THE PRODUCTION PATH, added by the same idiom as the two below and
     /// for a measured reason: a dozen test files drive the real engine through <see cref="Create"/>
     /// and therefore sat in front of the real 2-second tick, which is wall-clock sleep and nothing
     /// else. This overload is <see cref="Create"/> with the periods named instead of assumed —
@@ -78,6 +77,10 @@ public static class BridgeEngine_Factory
     /// `InternalsVisibleTo`, so an additive public overload is the in-idiom alternative.
     ///
     /// A null client here means the same thing it means in production: file-only mode, no phone.
+    ///
+    /// It used to delegate to a fourth seam that also took an <c>IMessageTranslator</c>; the Telegram
+    /// translation layer was abolished on 2026-09-09, so that overload went with it and this one now
+    /// calls <see cref="Create_WithDecisionState"/> directly.
     /// </summary>
     public static IBridgeEngine Create_WithTelegramClient(
         ISupervisionPaths paths,
@@ -88,34 +91,8 @@ public static class BridgeEngine_Factory
         ITelegramApiClient? telegramClient,
         IBridgeEngineTiming timing)
     {
-        return Create_WithTelegramClientAndTranslator(
-            paths, configProvider, store, launcher, log, telegramClient,
-            Translation.MessageTranslator.MessageTranslator_Factory.Create(log), timing);
-    }
-
-    /// <summary>
-    /// THE TRANSLATOR TEST SEAM, added for the same reason as the one above and by the same idiom.
-    ///
-    /// WHY IT HAD TO EXIST: <c>Take_ReadyDeliveries</c> empties the buffer for the whole batch before
-    /// the loop body runs, so from that point the local variables are the only copy of the owner's
-    /// words. The append's own failure has a put-back (R1); a translator that THROWS did not, and it
-    /// destroyed the owner's text outright — a route unreachable from a test while the real
-    /// translator was the only one obtainable. Hand in one that fails and the route becomes testable.
-    ///
-    /// Every production caller uses the overload above.
-    /// </summary>
-    public static IBridgeEngine Create_WithTelegramClientAndTranslator(
-        ISupervisionPaths paths,
-        IOrchestratorConfigProvider configProvider,
-        IOrchestrationSessionStore store,
-        IOrchestrationLauncher launcher,
-        IOrchestrationLog log,
-        ITelegramApiClient? telegramClient,
-        IMessageTranslator translator,
-        IBridgeEngineTiming timing)
-    {
         return Create_WithDecisionState(
-            paths, configProvider, store, launcher, log, telegramClient, translator,
+            paths, configProvider, store, launcher, log, telegramClient,
             EngineStateStore_Factory.Create_File(paths, log),
             Clock_Factory.Create_System(),
             timing);
@@ -146,7 +123,6 @@ public static class BridgeEngine_Factory
         IOrchestrationLauncher launcher,
         IOrchestrationLog log,
         ITelegramApiClient? telegramClient,
-        IMessageTranslator translator,
         IEngineStateStore engineStateStore,
         IClock clock,
         IBridgeEngineTiming timing)
@@ -176,7 +152,7 @@ public static class BridgeEngine_Factory
         watchdog.Restore_ConsecutiveRespawns(restoredState.ConsecutiveRespawns);
 
         return new BridgeEngineModel(
-            paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, translator, transcriber,
+            paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, transcriber,
             printTurns, lastUpdateId, engineStateStore, restoredState, clock, timing);
     }
 }

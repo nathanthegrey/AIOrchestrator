@@ -686,8 +686,7 @@ the owner answering from their phone.
   one tap and can see what they are deciding.
 - **Mockups and diagrams: put them in a ``` fenced block.** The app sends fenced blocks to Telegram
   as monospaced text, so ASCII layouts, tables and trees keep their alignment on the phone —
-  outside a fence they arrive as unreadable proportional-font noise. Fenced content is also never
-  translated, so a drawing survives verbatim.
+  outside a fence they arrive as unreadable proportional-font noise.
 - The design that comes out of a brainstorm becomes the PLAN.md ledger and the implementers' briefs.
 
 ## Managing implementers (via the orchestrator app)

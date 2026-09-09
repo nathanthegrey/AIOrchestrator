@@ -113,7 +113,7 @@ public class RunnerConfigsJsonTests : IDisposable
             7, 2, TimeSpan.FromMinutes(12), TimeSpan.FromSeconds(5));
 
         var config = OrchestratorConfig_Factory.Create(
-            [RepoEntry_Factory.Create("Repo", "/tmp/repo")], "opus", "opus", "sonnet", "sonnet", null, null, null, null, null, null, null, runners);
+            [RepoEntry_Factory.Create("Repo", "/tmp/repo")], "opus", "opus", "sonnet", "sonnet", null, null, null, null, null, null, runners);
 
         OrchestratorConfig_Loader.Save(config, _paths);
         var reloaded = OrchestratorConfig_Loader.Load_OrEmpty(_paths).Runners;
@@ -135,23 +135,23 @@ public class RunnerConfigsJsonTests : IDisposable
     }
 
     /// <summary>
-    /// The /italian and /screenshots toggles rebuild the config from an existing one; the Settings
-    /// window passes the runners through explicitly. None of them may reset a hand-edited block.
+    /// The /screenshots toggle rebuilds the config from an existing one; the Settings window passes
+    /// the runners through explicitly. Neither may reset a hand-edited block. (There were two such
+    /// toggles until 2026-09-09, when /italian and the layer it drove were abolished.)
     /// </summary>
     [Fact]
     public void ToggleCopies_KeepTheRunners()
     {
         var runners = RunnerConfigs_Factory.Create_WithRole(RunnerConfigs_Factory.Create_Default(), SessionRoles.Implementer, RoleRunnerConfig_Factory.Create(SessionRunners.Print, ResumeModes.Transcript, null));
-        var source = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null, null, runners);
+        var source = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null, runners);
 
-        Assert.Same(runners, OrchestratorConfig_Factory.Create_WithItalianLayer(source, false).Runners);
         Assert.Same(runners, OrchestratorConfig_Factory.Create_WithStatusScreenshots(source, true).Runners);
     }
 
     [Fact]
-    public void TheTwelveArgumentOverload_DefaultsToTerminal()
+    public void TheOverloadWithoutRunners_DefaultsToTerminal()
     {
-        var config = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null, null);
+        var config = OrchestratorConfig_Factory.Create([], null, null, null, null, null, null, null, null, null, null);
 
         Assert.Equal(SessionRunners.Terminal, config.Runners.Get_ForRole(SessionRoles.Implementer).Runner);
     }

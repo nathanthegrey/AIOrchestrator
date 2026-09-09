@@ -99,7 +99,6 @@ sealed class BridgeHost_Service(
 
         services.Engine.MutedChanged += muted => services.Log.Log_Info("", muted ? "Telegram muted (🌙 do-not-disturb on)" : "Telegram unmuted (🌙 off)");
         services.Engine.SilenceAllChanged += silenced => services.Log.Log_Info("", silenced ? "All topics silenced (🔕 on)" : "Topics audible again (🔕 off)");
-        services.Engine.ItalianLayerChanged += enabled => services.Log.Log_Info("", enabled ? "Italian layer on" : "Italian layer off");
 
         services.Log.Log_Info("", $"Daemon starting — supervision root {paths.Root}, Claude home {_options.ClaudeHome}");
         services.Log.Log_Info("", services.ConfigProvider.Get_Current().Is_TelegramConfigured()

@@ -56,7 +56,7 @@ public class ALongAnswerIsSplitNotDroppedTests : IDisposable
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
 
         File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
 
@@ -175,9 +175,8 @@ public class ALongAnswerIsSplitNotDroppedTests : IDisposable
 
     IBridgeEngine Build_Engine()
     {
-        return BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
-            _paths, _configProvider, _store, _launcher, _log, _telegram, new EchoTranslator_Fake(),
-            BridgeTestTiming.Fast());
+        return BridgeEngine_Factory.Create_WithTelegramClient(
+            _paths, _configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
     /// <summary>

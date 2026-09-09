@@ -32,8 +32,8 @@ public class OrchestratorConfigLoaderGuardrailsTests : IDisposable
     /// <summary>
     /// THE LOAD-BEARING ONE. <c>Save</c> used to rebuild config.json from the fields this build
     /// knows and write that over the top, so any key a NEWER build had written — one this build
-    /// has never heard of — was silently deleted by the very next save. One /italian toggled from
-    /// the phone was enough to erase it. A round trip through Load + Save must leave an unknown
+    /// has never heard of — was silently deleted by the very next save. One toggle from the phone
+    /// was enough to erase it. A round trip through Load + Save must leave an unknown
     /// key exactly as it was.
     /// </summary>
     [Fact]

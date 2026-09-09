@@ -181,8 +181,8 @@ public sealed record CloseConfirmationRecord
 /// </para>
 /// <para>
 /// WHAT IS DELIBERATELY NOT HERE: mirror offsets and the Telegram update cursor (they have their own
-/// file, <see cref="BridgeState_Store"/>, rewritten ~30 times a minute — a different write cadence
-/// and a different failure), and every cache the app rebuilds by looking at the world: first-sighted
+/// file, <see cref="BridgeState_Store"/>, rewritten on every tick that moved a cursor — a different
+/// write cadence and a different failure), and every cache the app rebuilds by looking at the world: first-sighted
 /// channels, topic-name stamps, receipt message ids, status-line texts, away trackers. Those are
 /// re-derived within a tick or two of a restart. What is here is what NOTHING can re-derive: a
 /// decision the owner was asked to take, and the memory that they were already asked.

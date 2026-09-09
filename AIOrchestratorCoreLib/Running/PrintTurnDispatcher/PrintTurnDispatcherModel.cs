@@ -64,19 +64,29 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     const string RUNNER_ENV_VAR = PrintTurn_Words.RUNNER_ENV_VAR;
     const string TURN_ENDED_SUBJECT = PrintTurn_Words.TURN_ENDED_SUBJECT;
     const string TURN_STALLED_SUBJECT = PrintTurn_Words.TURN_STALLED_SUBJECT;
+    const string DEADLINE_KILLS_SUBJECT = PrintTurn_Words.DEADLINE_KILLS_SUBJECT;
     const string TURN_LIMITED_SUBJECT = PrintTurn_Words.TURN_LIMITED_SUBJECT;
     const string MISADDRESSED_SUBJECT = PrintTurn_Words.MISADDRESSED_SUBJECT;
     const int ENTRY_APPEND_ATTEMPTS = 3;
     const int ENTRY_APPEND_RETRY_MILLISECONDS = 300;
     /// <summary>
     /// How long cancelled turns get to observe their cancellation and unwind, AFTER the drain. Not
-    /// the drain itself: that is <see cref="Get_DrainGrace"/>, the configured turn timeout plus a
-    /// minute, because a turn that is still legitimately running is worth exactly what it was worth
-    /// before somebody asked the app to stop.
+    /// the drain itself: that is <see cref="Get_DrainGrace"/>, everything one session's turn can
+    /// still legitimately need, because a turn that is still running is worth exactly what it was
+    /// worth before somebody asked the app to stop.
     /// </summary>
     static readonly TimeSpan CANCEL_GRACE = TimeSpan.FromSeconds(15);
+
+    /// <summary>The bookkeeping either side of the turns the drain waits for — see <see cref="ClosingTurn_Rule.Resolve_DrainGrace"/>, which owns the sum.</summary>
     static readonly TimeSpan DRAIN_MARGIN = TimeSpan.FromMinutes(1);
-    static readonly TimeSpan DRAIN_GRACE_FALLBACK = TimeSpan.FromMinutes(31);
+
+    /// <summary>
+    /// The grace when config.json cannot be read at shutdown. COMPUTED from the default turn timeout
+    /// rather than written out as a number: it was a literal 31 minutes, and when the closing turn
+    /// added five minutes to what the path can need, the literal stayed where it was and said nothing
+    /// (adversarial review, 2026-09-09).
+    /// </summary>
+    static readonly TimeSpan DRAIN_GRACE_FALLBACK = ClosingTurn_Rule.Resolve_DrainGrace(RunnerConfigs_Factory.DEFAULT_TURN_TIMEOUT, DRAIN_MARGIN);
 
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
@@ -149,6 +159,26 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         /// <summary>The pending set a stall happened on; null while nothing is stalled.</summary>
         public string? StalledOnSignature;
+
+        /// <summary>
+        /// The pending set the CURRENT usage-limit appointment has already been spoken about — first
+        /// the traffic the refusal happened on, then whatever landed afterwards and was announced.
+        /// Null while nothing is deferred.
+        ///
+        /// <para>
+        /// IT IS A SIGNATURE AND NOT A FLAG because "has this been said" is a question about the
+        /// TRAFFIC, not about the session: the owner writing twice during one appointment deserves to
+        /// be told twice, and the same entries sitting there over forty ticks deserve to be told
+        /// once. Same comparison the stall uses, for the same reason, and built by the same
+        /// <see cref="Describe_PendingSignature"/> — never a second way of spelling it.
+        /// </para>
+        /// <para>
+        /// IN THE TRACKER AND NOT THE STATE FILE, unlike the appointment itself. Losing it to a
+        /// restart costs one repeated entry; putting it in the state file would put a UI-facing note's
+        /// bookkeeping into the record decision 8 is enforced from.
+        /// </para>
+        /// </summary>
+        public string? DeferralAnnouncedSignature;
 
         /// <summary>True until this dispatcher instance has run the session once — the "resumed after a restart" signal for the prompt.</summary>
         public bool FirstTurnSinceStart = true;
@@ -227,37 +257,72 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// THE /resume OVERRIDE — see <see cref="IPrintTurnDispatcher.Clear_LimitDeferrals"/> for why it
     /// exists. Reuses <see cref="Discover_RegisteredSessions"/> so this asks the exact question
     /// <see cref="Tick"/> asks ("which sessions does this dispatcher own"), never a second one that
-    /// could drift from it. A state file that cannot be read is left alone and reported the same way
-    /// <see cref="Tick"/> already reports one — this is not the place to invent a second failure mode
-    /// for the same broken file.
+    /// could drift from it. A state file it cannot READ OR WRITE is left alone and reported the same
+    /// way <see cref="Tick"/> already reports one — this is not the place to invent a second failure
+    /// mode for the same broken file, and not the place to let one broken file end the whole command
+    /// either (F7).
     /// </summary>
-    public void Clear_LimitDeferrals()
+    /// <returns>How many appointments were dropped — the number the owner's /resume reply quotes.</returns>
+    public int Clear_LimitDeferrals()
     {
+        var nowUtc = DateTime.UtcNow;
+
+        List<(string OrchId, string MemberId, DateTime WaitingUntil)> cleared = [];
+        List<string> skippedInFlight = [];
+
         foreach (var registered in Discover_RegisteredSessions())
         {
-            IPrintSessionState? state;
+            var key = $"{registered.OrchId}/{registered.MemberId}";
 
+            // THE WHOLE OPERATION IS IN THE TRY, NOT JUST THE READ (F7, 2026-09-09). An IO failure in
+            // the WRITE used to escape into Resume_AllSessions_Async — which runs it BEFORE any channel
+            // append — so one unwritable state file aborted the whole /resume, was logged as a Telegram
+            // backoff, and the update was redelivered and retried for ever. One broken session must cost
+            // one session.
             try
             {
-                state = PrintSessionState_Store.Read_OrNull(registered.StateFile);
+                // UNDER THE SAME LOCK THE DISPATCHER STARTS TURNS UNDER, and skipping a session whose
+                // turn is in flight (F6). Start_Turn takes this lock, so while it is held no turn can
+                // BEGIN; a turn already running is the case the skip covers, because its own writes are
+                // outside any lock and this one would be derived from a snapshot taken before them.
+                // The read is inside too — re-reading outside it would be reasoning from a copy the
+                // turn has since replaced, which is the bug in the first place.
+                lock (_lock)
+                {
+                    if (_inFlight.ContainsKey(key))
+                    {
+                        skippedInFlight.Add(key);
+                        continue;
+                    }
+
+                    var state = PrintSessionState_Store.Read_OrNull(registered.StateFile);
+
+                    if (state?.RetryNotBeforeUtc == null)
+                        continue;
+
+                    PrintSessionState_Store.Write(registered.StateFile, PrintSessionState_Factory.CreateFrom_Existing_LimitDeferralCleared(state));
+                    cleared.Add((registered.OrchId, registered.MemberId, state.RetryNotBeforeUtc.Value));
+                }
             }
             catch (Exception ex)
             {
-                if (_warnedBrokenSessions.Add($"{registered.OrchId}/{registered.MemberId}"))
+                if (_warnedBrokenSessions.Add(key))
                     _log.Log_Error(registered.OrchId, $"/resume: '{registered.MemberId}' could not be considered — it is skipped from now on and this is NOT repeated; fix or delete its {PrintSessionState_Store.STATE_FILE_NAME} and restart the app", ex);
-
-                continue;
             }
-
-            if (state?.RetryNotBeforeUtc == null)
-                continue;
-
-            var waitingUntil = state.RetryNotBeforeUtc.Value;
-
-            PrintSessionState_Store.Write(registered.StateFile, PrintSessionState_Factory.CreateFrom_Existing_LimitDeferralCleared(state));
-
-            _log.Log_Info(registered.OrchId, $"'{registered.MemberId}' was waiting on a usage limit until {waitingUntil:HH:mm} UTC — /resume cleared it");
         }
+
+        // LOGGED OUTSIDE THE LOCK. The log writes a file of its own, and holding the dispatcher's lock
+        // across it would put the tick behind a second filesystem for as many sessions as are deferred.
+        foreach (var (orchId, memberId, waitingUntil) in cleared)
+            _log.Log_Info(orchId, $"'{memberId}' was waiting on a usage limit and would have run {LimitDeferral_Wording.Describe_Appointment(waitingUntil, nowUtc)} — /resume cleared it");
+
+        // NAMED, NOT SWALLOWED. A session mid-turn is the one case /resume deliberately does not touch,
+        // and a reader comparing "cleared N" against the number of waiting sessions needs to know why
+        // the two differ.
+        if (skippedInFlight.Count > 0)
+            _log.Log_Info(string.Empty, $"/resume left {skippedInFlight.Count} session(s) alone because a turn is already running for them: {string.Join(", ", skippedInFlight)}");
+
+        return cleared.Count;
     }
 
     public async Task Stop_Async()
@@ -273,7 +338,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (running.Length > 0)
         {
             var grace = Get_DrainGrace();
-            _log.Log_Info(string.Empty, $"Stopping — draining {running.Length} in-flight turn(s) before the sessions are killed (up to {grace.TotalMinutes:0} min; the turn timeout plus a minute)");
+
+            // THE NUMBER AND THE REASON FOR IT. A stop can be waiting on a turn that was killed at the
+            // deadline and is now spending its closing turn, so the wait the owner is watching is the
+            // two of them end to end — saying "the turn timeout plus a minute" was the wrong number
+            // AND the wrong explanation of why they are still sitting there.
+            _log.Log_Info(string.Empty, $"Stopping — draining {running.Length} in-flight turn(s) before the sessions are killed (up to {grace.TotalMinutes:0.#} min: the turn timeout, the closing turn a turn killed at the deadline can still be owed, and a minute)");
 
             try
             {
@@ -282,7 +352,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             }
             catch (TimeoutException)
             {
-                _log.Log_Warning(string.Empty, $"Drain grace of {grace.TotalMinutes:0} min elapsed with {InFlightCount} turn(s) still running — cancelling them; their entries stay pending for the next start");
+                _log.Log_Warning(string.Empty, $"Drain grace of {grace.TotalMinutes:0.#} min elapsed with {InFlightCount} turn(s) still running — cancelling them; their entries stay pending for the next start");
             }
             catch
             {
@@ -327,12 +397,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return [.. _inFlight.Values];
     }
 
-    /// <summary>The configured turn timeout plus a minute — read at stop time, so a config edit made while the app ran counts.</summary>
+    /// <summary>
+    /// Everything one session's turn can still legitimately need — read at stop time, so a config edit
+    /// made while the app ran counts. The sum is <see cref="ClosingTurn_Rule.Resolve_DrainGrace"/>'s,
+    /// not restated here: the drain has to cover the work turn AND the closing turn behind it, and it
+    /// went a whole stage covering only the first.
+    /// </summary>
     TimeSpan Get_DrainGrace()
     {
         try
         {
-            return _configProvider.Get_Current().Runners.TurnTimeout + DRAIN_MARGIN;
+            return ClosingTurn_Rule.Resolve_DrainGrace(_configProvider.Get_Current().Runners.TurnTimeout, DRAIN_MARGIN);
         }
         catch
         {
@@ -467,8 +542,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // the account its tokens back, and a session that tried anyway would spend an attempt to be
         // told the same thing again. Read from the STATE and not from the tracker, so a bridge
         // restarted inside the window keeps the appointment.
+        //
+        // BUT IT IS SAID NOW, WHICH IS THE HALF THAT WAS MISSING. This branch used to return in
+        // silence, so the owner's message got its ✓ ack from the bridge and then nothing for hours.
         if (state.RetryNotBeforeUtc != null && nowLocal.ToUniversalTime() < state.RetryNotBeforeUtc.Value)
+        {
+            Announce_Deferral_IfTrafficIsNew(state, tracker, signature, ordered, state.RetryNotBeforeUtc.Value, nowLocal);
             return;
+        }
 
         if (tracker.LastFailureAt != null && nowLocal - tracker.LastFailureAt.Value < _retryBackoff)
             return;
@@ -502,6 +583,55 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     }
 
     /// <summary>
+    /// ONE ENTRY, ONCE, WHEN SOMETHING NEW LANDS ON A DEFERRED SESSION — and to the OWNER's audience
+    /// for the roles that have one.
+    ///
+    /// <para>
+    /// F5, probe 2026-09-09. <c>Consider_Session</c> returned on the appointment before it looked at
+    /// what was pending, so a message typed into the topic got its ✓ from the bridge and then hours of
+    /// silence, with nothing in the channel, nothing on the phone and nothing in the log. That is the
+    /// waterfall's opposite failure and just as expensive: the owner cannot tell a quota wait from a
+    /// dead app. This says which it is, and what ends it.
+    /// </para>
+    /// <para>
+    /// IT DOES NOT CLEAR THE APPOINTMENT, and that is a decision rather than an omission. An owner
+    /// message is a stronger signal than a parsed hour about WHAT MATTERS; it is no signal at all
+    /// about whether the account has tokens. Running the turn on it would spend a real turn to be
+    /// refused again, write a second identical deferral, and (before the cap) could re-park the
+    /// session further out than the first refusal did — so the owner's own message would be what
+    /// silenced them. The override they want already exists, is one word, and is now named in the
+    /// entry: <c>/resume</c> drops every appointment and the next tick runs. Automatic beats explicit
+    /// only when the automatic thing is right, and this one is a guess about someone else's quota.
+    /// </para>
+    /// <para>
+    /// A FAILED APPEND LEAVES THE SIGNATURE UNSET, so the next tick tries again — the notice is worth
+    /// a retry and there is nothing else to say if it never lands. It is not logged per tick: a
+    /// channel locked for minutes would write a line every two seconds, and
+    /// <c>ChannelLock_Diagnostics</c> already reports refused writes.
+    /// </para>
+    /// </summary>
+    void Announce_Deferral_IfTrafficIsNew(IPrintSessionState state, SessionTracker tracker, string signature, IReadOnlyList<PendingEntry> pending, DateTime retryAtUtc, DateTime nowLocal)
+    {
+        // NOTHING PENDING IS NOT NEWS. A supervisor's boot turn reaches this branch with an empty set,
+        // and "new traffic is waiting" about no traffic is exactly the confident wrong line the entry
+        // exists to replace.
+        if (pending.Count == 0 || signature == tracker.DeferralAnnouncedSignature)
+            return;
+
+        var appointment = LimitDeferral_Wording.Describe_Appointment(retryAtUtc, nowLocal.ToUniversalTime());
+
+        var appended = ChannelAppender.Append_AppEntry(
+            state.ChannelFilePath,
+            Stall_Audience(state),
+            $"{PrintTurn_Words.NEW_TRAFFIC_LIMITED_SUBJECT} {state.MemberId} — runs {appointment}",
+            $"'{state.MemberId}' was refused for a usage limit and is waiting until {appointment}. What has just arrived is NOT lost — it is pending, it will ride the turn that runs then, and no attempt has been spent on it.\n\nIf it cannot wait, /resume drops the appointment and the session runs on the next tick.\n\n{Describe_Traffic(pending)}",
+            DateTime.Now);
+
+        if (appended)
+            tracker.DeferralAnnouncedSignature = signature;
+    }
+
+    /// <summary>
     /// Reads every source, baselining the ones this session has never seen and dropping the cursors of
     /// sources it no longer has. A change to the cursor set is PERSISTED HERE, before any turn: a
     /// baseline taken on a tick that starts no turn must survive a restart, or the same history is
@@ -526,7 +656,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var source in sources)
         {
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(source.ChannelFilePath));
+            var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
 
             if (!known.TryGetValue(source.Key, out var cursor))
             {
@@ -773,6 +903,21 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             tracker.StalledOnSignature = null;
         }
 
+        // THE APPOINTMENT IS KEPT THE MOMENT THE TURN STARTS, so it is spent rather than left standing
+        // for the half hour the turn may run. F6, reproduced 2026-09-09: /resume reads a session's
+        // state file, derives a cleared copy from that SNAPSHOT and writes it back — with an appointment
+        // still on file for a turn already in flight, that write landed on top of the turn's own record
+        // and rolled it back (executed_turns 1 → 0, next_turn 3 → 2), so the same request id ran twice.
+        // A decision-8 violation caused by the owner's own recovery command. Clear_LimitDeferrals now
+        // also refuses a session with a turn in flight; this closes the other half, because the window
+        // was open from the tick that admitted the turn until the turn finished.
+        if (state.RetryNotBeforeUtc != null)
+        {
+            state = PrintSessionState_Factory.CreateFrom_Existing_LimitDeferralCleared(state);
+            PrintSessionState_Store.Write(stateFile, state);
+            tracker.DeferralAnnouncedSignature = null;
+        }
+
         var turnNumber = state.NextTurnNumber;
         var requestId = PrintTurn_RequestId.Build(state.OrchId, state.MemberId, turnNumber);
 
@@ -854,7 +999,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (TurnOutcomes.Is_Success(result))
         {
-            if (!await Write_Reply_Async(state, sources, result.ResultText))
+            if (!(await Write_Reply_Async(state, sources, result.ResultText)).AllLanded)
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
@@ -895,10 +1040,20 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// <summary>
     /// THE CLOSING TURN: <c>claude -p --resume &lt;the killed transcript&gt; --max-budget-usd 2.00</c>
     /// with "write where you are and stop", ONE attempt, its own short timeout — then the killed
-    /// turn is recorded as executed and its entries stop being pending. The report is itself new
-    /// traffic for the counterpart, so the next turn starts from the channel (and, in fresh mode,
-    /// from a new session id) rather than replaying a brief the model has already half-answered.
-    /// Spec section C1.3.
+    /// turn is recorded as executed and the entries its report ANSWERED stop being pending. The
+    /// report is itself new traffic for the counterpart, so the next turn starts from the channel
+    /// (and, in fresh mode, from a new session id) rather than replaying a brief the model has
+    /// already half-answered. Spec section C1.3.
+    ///
+    /// <para>
+    /// "ANSWERED" IS THE WHOLE OF WHAT IS CONSUMED, and it is one word that cost the owner an answer.
+    /// The closing turn writes ONE entry and addresses it freely — it is handed the same <c>TO:</c>
+    /// contract as every other turn — so a supervisor woken by the owner and killed at the deadline
+    /// could file its "where I got to" to a spoke while the owner's question was marked delivered by
+    /// it. Nothing reached the phone (both records are agent-audience) and there is nobody above a
+    /// supervisor to re-brief it. A source the report did not write to keeps its cursor and is
+    /// pending again on the next tick — see <see cref="Advance_Cursors"/>.
+    /// </para>
     ///
     /// <para>
     /// THE ATTEMPT IS NOT SPENT when this works. A deadline kill that got its closing turn is a turn
@@ -907,11 +1062,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// that is no longer pending anyway.
     /// </para>
     /// <para>
-    /// EVERY BRANCH THAT CANNOT DO ITS JOB SAYS WHICH ONE, AND FALLS BACK TO TODAY'S BEHAVIOUR
-    /// (decision 21): a transport with no print rung to run it on, a closing turn that is itself
-    /// killed or refused, a reply that cannot be appended. Then the attempt counts and the entries
-    /// are retried exactly as before this stage existed — worse than a report, and no worse than
-    /// last week.
+    /// EVERY BRANCH THAT CANNOT DO ITS JOB SAYS WHICH ONE — IN THE LOG AND IN THE RECORD — AND FALLS
+    /// BACK TO TODAY'S BEHAVIOUR (decision 21): no transcript id to resume, a transport with no print
+    /// rung to run it on, a closing turn that cannot be started, one that is itself killed or refused,
+    /// one that ends cleanly and says nothing, a report that cannot be appended. Then the attempt
+    /// counts and the entries are retried exactly as before this stage existed — worse than a report,
+    /// and no worse than last week. The killed turn's own <c>turn_ended</c> is written ON the branch
+    /// that was taken, naming it, because a record written before the attempt is a forecast.
     /// </para>
     /// <para>
     /// IN TRANSCRIPT MODE THE NEXT TURN STILL RESUMES THE KILLED TRANSCRIPT. Only Fresh mode mints a
@@ -936,16 +1093,30 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         string sessionId,
         CancellationToken cancellationToken)
     {
-        // FIRST, because the closing turn takes minutes and this is the record of what already
-        // happened. The failure branches below therefore ask Record_Failure NOT to write it again.
-        Append_TurnEnded(state, requestId, attempt, pending, killed, TurnOutcomes.TIMEOUT, KILLED_AT_DEADLINE_NOTE);
-
         var closingRequestId = ClosingTurn_Words.Build_RequestId(requestId);
         var closingTimeout = ClosingTurn_Rule.Resolve_Timeout(configs.TurnTimeout);
+
+        // THE KILLED TURN'S RECORD IS WRITTEN WHEN ITS OUTCOME IS KNOWN, NEVER BEFORE. It used to be
+        // appended here, first, saying "a closing turn was run to write where it got to, and these
+        // entries are not re-run" — true on ONE of the six branches below (adversarial review,
+        // 2026-09-09). With no transcript id, no print rung, a closing turn that is itself killed, an
+        // empty report or one that cannot be appended, the entries ARE re-run, and in the no-rung case
+        // no closing turn is even started; under the stalling scenario that sentence went into one
+        // channel three times. A record a supervisor reads is not a plan, it is what happened.
+        void Record_KilledTurn(string note)
+        {
+            Append_TurnEnded(state, requestId, attempt, pending, killed, TurnOutcomes.TIMEOUT, note);
+        }
+
+        void Record_KilledTurn_Retried(string why)
+        {
+            Record_KilledTurn($"killed at the deadline while working — {why}; these entries are retried as before");
+        }
 
         if (string.IsNullOrWhiteSpace(sessionId))
         {
             _log.Log_Warning(state.OrchId, $"Turn {requestId} was killed at the deadline but this session has no transcript id to resume — no closing turn is possible, so its entries stay pending and are retried as before");
+            Record_KilledTurn_Retried("there is no transcript id to resume, so no closing turn was possible");
             Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
             return;
         }
@@ -961,12 +1132,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         catch (OperationCanceledException)
         {
             // The app is stopping: nothing is recorded and the entries are pending at the next
-            // start, exactly as for a work turn cancelled at the same moment.
+            // start, exactly as for a work turn cancelled at the same moment. NOT EVEN THE KILLED
+            // TURN'S RECORD — writing one here would leave the only trace of this turn saying
+            // something about a closing turn that was interrupted before it could mean anything.
             throw;
         }
         catch (Exception ex)
         {
             _log.Log_Error(state.OrchId, $"Closing turn {closingRequestId} could not be started — the killed turn's entries stay pending and are retried as before", ex);
+            Record_KilledTurn_Retried("the closing turn could not be started");
             Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
             return;
         }
@@ -974,6 +1148,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (closing == null)
         {
             _log.Log_Warning(state.OrchId, $"'{state.MemberId}' runs on the {SessionRunner_Names.Get_Word(executor.Kind)} transport, which has no print rung wired beneath it: no closing turn can be run for {requestId}, so its entries stay pending and are retried as before");
+            Record_KilledTurn_Retried($"the {SessionRunner_Names.Get_Word(executor.Kind)} transport has no print rung to run a closing turn on");
             Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
             return;
         }
@@ -983,43 +1158,121 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (!TurnOutcomes.Is_Success(closing))
         {
             _log.Log_Warning(state.OrchId, $"Closing turn {closingRequestId} reported nothing ({closingOutcome}, exit {closing.ExitCode}) — no state was written, so the killed turn's entries stay pending and are retried as before; {Tail(closing.RawStderr, 200)}");
+            Record_KilledTurn_Retried($"the closing turn reported nothing ({closingOutcome})");
             Append_TurnEnded(state, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_FAILED_NOTE);
-            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
             return;
         }
 
-        if (!await Write_Reply_Async(state, sources, closing.ResultText))
+        // AN EMPTY REPORT IS NOT A REPORT. Write_Reply_Async answers true for empty text — it files the
+        // "(no message)" entry, which is right for an ordinary turn that chose to say nothing — so a
+        // closing turn that came back with nothing at all still retired the brief and left the
+        // supervisor a "(no message)" entry where the state of the work should have been. The one
+        // thing this whole path exists to produce is the report, so no report is a failed closing turn.
+        if (string.IsNullOrWhiteSpace(closing.ResultText))
         {
-            _log.Log_Error(state.OrchId, $"Closing turn {closingRequestId} reported but its entry could not be appended — the channel stayed locked, so the killed turn's entries stay pending and are retried as before", null);
-            Append_TurnEnded(state, closingRequestId, 1, pending, closing, TurnOutcomes.ERROR, "closing turn — the state was reported but its entry could not be appended (channel locked)");
-            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            _log.Log_Warning(state.OrchId, $"Closing turn {closingRequestId} ended cleanly but said nothing — there is no state to file, so the killed turn's entries stay pending and are retried as before");
+            Record_KilledTurn_Retried("the closing turn ended cleanly but said nothing");
+            Append_TurnEnded(state, closingRequestId, 1, pending, closing, TurnOutcomes.ERROR, CLOSING_TURN_EMPTY_NOTE);
+            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
             return;
         }
+
+        var delivery = await Write_Reply_Async(state, sources, closing.ResultText);
+
+        if (!delivery.AllLanded)
+        {
+            _log.Log_Error(state.OrchId, $"Closing turn {closingRequestId} reported but its entry could not be appended — the channel stayed locked, so the killed turn's entries stay pending and are retried as before", null);
+            Record_KilledTurn_Retried("the closing turn reported but its entry could not be appended (channel locked)");
+            Append_TurnEnded(state, closingRequestId, 1, pending, closing, TurnOutcomes.ERROR, "closing turn — the state was reported but its entry could not be appended (channel locked)");
+            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true, closingResult: closing);
+            return;
+        }
+
+        // ONLY WHAT THE REPORT ANSWERED IS CONSUMED. The closing turn is asked where it got to, not to
+        // answer the pending set, and it addresses its one entry freely — so a blanket advance retires
+        // entries nothing replied to. The rest keep their cursors and are pending again next tick.
+        HashSet<string> answered = new(delivery.AnsweredSourceKeys, SOURCE_KEYS);
+        var unanswered = pending.Select(item => item.Source.Key).Distinct(SOURCE_KEYS).Where(key => !answered.Contains(key)).ToList();
+
+        Record_KilledTurn(unanswered.Count == 0
+            ? KILLED_AT_DEADLINE_NOTE
+            : $"{KILLED_AT_DEADLINE_NOTE}, except {string.Join(", ", unanswered)} — the report did not address {(unanswered.Count == 1 ? "that channel" : "those channels")}, so its entries stay pending and are handed to the next turn");
 
         Append_TurnEnded(state, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_NOTE);
 
         // ONE record for the pair, under the KILLED turn's number and request id — which is what
         // makes those entries stop being pending, and what stops the same request id ever running
-        // again. The cost is the closing turn's: a turn killed at the deadline reports none of its
-        // own (no result document), and the money that was spent on this turn number after the kill
-        // is exactly what the closing turn spent.
+        // again.
+        //
+        // THE COST IS UNKNOWN AND SAYS SO. It used to be `killed.TotalCostUsd ?? closing.TotalCostUsd`,
+        // and a killed turn has no result document — so it was ALWAYS the closing turn's pennies,
+        // filed as the cost of a turn that is 30 minutes of work in production (probed at $0.0127 on
+        // 2026-09-09). Decision 10 wants one number that cannot disagree with itself; the closing
+        // turn's spend is on the closing turn's own record, and the killed turn's is genuinely not
+        // known here. A confident wrong number is worse than an absent one.
         var firstIndex = pending.Count == 0 ? 0 : pending[0].Entry.Index;
         var lastIndex = pending.Count == 0 ? 0 : pending[^1].Entry.Index;
-        var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, firstIndex, lastIndex, DateTime.UtcNow, TurnOutcomes.TIMEOUT, killed.TotalCostUsd ?? closing.TotalCostUsd, sessionId);
+        var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, firstIndex, lastIndex, DateTime.UtcNow, TurnOutcomes.TIMEOUT, killed.TotalCostUsd, sessionId);
 
-        PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, sessionId, Advance_Cursors(state, sources, pending)));
+        var recorded = PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, sessionId, Advance_Cursors(state, sources, pending, answered));
+
+        PrintSessionState_Store.Write(stateFile, recorded);
         tracker.LastFailureAt = null;
         tracker.FirstTurnSinceStart = false;
 
-        _log.Log_Info(state.OrchId, $"Closing turn {closingRequestId} ended — {closingOutcome}, {Describe_Cost(closing)}, {closing.Elapsed.TotalSeconds:F1} s wall; the killed turn's entries are delivered and the next turn for '{state.MemberId}' starts from the channel");
+        _log.Log_Info(state.OrchId, $"Closing turn {closingRequestId} ended — {closingOutcome}, {Describe_Cost(closing)}, {closing.Elapsed.TotalSeconds:F1} s wall; {(unanswered.Count == 0 ? "the killed turn's entries are delivered" : $"the killed turn's entries are delivered except {string.Join(", ", unanswered)}, which the report did not address and which stay pending")} and the next turn for '{state.MemberId}' starts from the channel");
+
+        Warn_IfDeadlineKillsRepeat(state, recorded.ExecutedTurns, requestId);
     }
 
-    /// <summary>What the killed turn's own record says it is now waiting for.</summary>
-    const string KILLED_AT_DEADLINE_NOTE = "killed at the deadline while working — a closing turn was run to write where it got to, and these entries are not re-run";
+    /// <summary>
+    /// THE BOUND THAT REPLACED THE ONE THE CLOSING TURN REMOVED. A deadline kill deliberately spends no
+    /// attempt, so <see cref="MAX_ATTEMPTS"/> — and the stall alert that is the app's only "this session
+    /// keeps dying" — can never be reached by kills: probed on 2026-09-09, three briefs, three kills,
+    /// three successful closing turns, <c>FailedAttempts</c> 0 and not one word anywhere.
+    ///
+    /// <para>
+    /// IT ALERTS AND CHANGES NOTHING ELSE. The closing turns are working, the reports are landing and
+    /// the entries are being answered; the wasteful retry this stage removed must not come back in the
+    /// shape of a stall. What is wrong is that the work does not fit inside a turn, and the fix for
+    /// that is a smaller brief — which is the reader's job, not the dispatcher's.
+    /// </para>
+    /// <para>
+    /// ONE LINE EVERY <see cref="ClosingTurn_Words.KILLS_BEFORE_ALERT"/> KILLS, not one per kill after
+    /// the third (decision 14: an owner-facing repeat that stacks is the waterfall this system exists
+    /// to prevent). It goes where the stall alert goes — to the supervisor for a member, to the owner
+    /// for a role whose own channel IS the owner's (decision 15: they can act on it, by asking for the
+    /// work to be broken up).
+    /// </para>
+    /// </summary>
+    void Warn_IfDeadlineKillsRepeat(IPrintSessionState state, IReadOnlyList<IExecutedTurn> executedTurns, string requestId)
+    {
+        var kills = ClosingTurn_Rule.Count_TrailingDeadlineKills(executedTurns);
+
+        if (kills < ClosingTurn_Words.KILLS_BEFORE_ALERT || kills % ClosingTurn_Words.KILLS_BEFORE_ALERT != 0)
+            return;
+
+        var alert = $"'{state.MemberId}' has been killed at the turn deadline {kills} turns in a row — every one of them reported where it got to, so nothing is lost, but no turn has finished its work inside the deadline";
+
+        _log.Log_Warning(state.OrchId, alert);
+
+        ChannelAppender.Append_AppEntry(
+            state.ChannelFilePath,
+            Stall_Audience(state),
+            $"{DEADLINE_KILLS_SUBJECT} — '{state.MemberId}', {kills} turns in a row",
+            $"{alert}\n\nNothing is retried and nothing is waiting: each killed turn was closed down and its entries answered. What this says is that the briefs are bigger than a turn — the next one wants to be smaller, or split.\n\nlast request_id: {requestId}\nturns: {string.Join(", ", executedTurns.TakeLast(kills).Select(turn => turn.RequestId))}",
+            DateTime.Now);
+    }
+
+    /// <summary>What the killed turn's own record says, on the one branch where a closing turn did run and did report.</summary>
+    const string KILLED_AT_DEADLINE_NOTE = "killed at the deadline while working — a closing turn wrote where it got to, and these entries are not re-run";
 
     const string CLOSING_TURN_NOTE = "closing turn — where the killed turn got to, not a new answer to those entries";
 
     const string CLOSING_TURN_FAILED_NOTE = "closing turn — no state was reported, so the killed turn's entries are retried as before";
+
+    const string CLOSING_TURN_EMPTY_NOTE = "closing turn — it ended cleanly and said nothing, so there is no state to file and the killed turn's entries are retried as before";
 
     /// <summary>
     /// EVERY DELIVERED ENTRY IS RECORDED, whichever channel it came from and whether or not the session
@@ -1027,12 +1280,23 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// nothing has still read it, and re-handing it the same entry next tick would be a loop.
     ///
     /// <para>
+    /// UNLESS THE TURN NEVER GOT TO READ THEM — <paramref name="answeredSourceKeys"/>, which only the
+    /// closing turn passes. "Handed over" is the right test for a turn that ran to the end and chose
+    /// its silence; it is the wrong test for a turn that was killed and whose replacement was asked a
+    /// different question ("say where you got to"), not the pending one. Measured on the merged
+    /// feature 2026-09-09: a supervisor woken by the owner, killed at the deadline, filed its report
+    /// to a spoke — and the owner's question was retired by a report that never mentioned it, with
+    /// both records agent-audience so nothing reached the phone and nobody above a supervisor to
+    /// notice. A source the closing report did not write to keeps its cursor and is pending again.
+    /// </para>
+    ///
+    /// <para>
     /// The live file is re-read here rather than reused from the tick's read, because the turn has since
     /// appended to it: pruning against a stale copy would keep identities compaction has moved out and,
     /// worse, would be a second opinion about what the file contains.
     /// </para>
     /// </summary>
-    IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending)
+    IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending, IReadOnlySet<string>? answeredSourceKeys = null)
     {
         var byKey = state.Cursors.ToDictionary(cursor => cursor.SourceKey, SOURCE_KEYS);
 
@@ -1043,8 +1307,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             if (!byKey.TryGetValue(source.Key, out var cursor))
                 continue;
 
+            // THE CLOSING TURN'S EXCEPTION, and only its (see Close_Down_KilledTurn_Async). Nothing is
+            // dropped here: the cursor is carried over untouched, so the source keeps its history and
+            // its entries are pending again on the next tick.
+            if (answeredSourceKeys != null && !answeredSourceKeys.Contains(source.Key))
+            {
+                advanced.Add(cursor);
+                continue;
+            }
+
             var delivered = pending.Where(item => SOURCE_KEYS.Equals(item.Source.Key, source.Key)).Select(item => item.Entry).ToList();
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(source.ChannelFilePath));
+            var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
 
             advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
         }
@@ -1081,15 +1354,25 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// thing a non-null signature bought was a compiler warning at the one call site — and a signature
     /// that promises what its caller cannot give is a lie that the next reader resolves with a `!`.
     /// </param>
-    async Task<bool> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
+    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
     {
         var author = SessionRole_Names.Get_Author(state.Role);
         var ownChannel = state.ChannelFilePath;
 
+        // WHICH FILES THE REPLY ACTUALLY REACHED, collected as they are written rather than worked out
+        // again afterwards from the same text — a second reading of the addressing rule is how the
+        // question "did this reply answer the owner" would come to have two answers.
+        HashSet<string> written = new(StringComparer.OrdinalIgnoreCase);
+
         if (sources.Count <= 1)
         {
             var (soleSubject, soleBody) = PrintTurnEntry_Splitter.Split(resultText);
-            return await Append_SessionEntry_WithRetry_Async(ownChannel, author, soleSubject, soleBody);
+            var soleLanded = await Append_SessionEntry_WithRetry_Async(ownChannel, author, soleSubject, soleBody);
+
+            if (soleLanded)
+                written.Add(ownChannel);
+
+            return Describe_Delivery(soleLanded, sources, written);
         }
 
         var byKey = sources.ToDictionary(source => source.Key, SOURCE_KEYS);
@@ -1098,7 +1381,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (blocks.Count == 0)
         {
             var (emptySubject, emptyBody) = PrintTurnEntry_Splitter.Split(resultText);
-            return await Append_SessionEntry_WithRetry_Async(ownChannel, author, emptySubject, emptyBody);
+            var emptyLanded = await Append_SessionEntry_WithRetry_Async(ownChannel, author, emptySubject, emptyBody);
+
+            if (emptyLanded)
+                written.Add(ownChannel);
+
+            return Describe_Delivery(emptyLanded, sources, written);
         }
 
         List<string> misaddressed = [];
@@ -1118,7 +1406,9 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             var (subject, body) = PrintTurnEntry_Splitter.Split(block.Text);
 
-            if (!await Append_SessionEntry_WithRetry_Async(target, author, subject, body))
+            if (await Append_SessionEntry_WithRetry_Async(target, author, subject, body))
+                written.Add(target);
+            else
                 allLanded = false;
         }
 
@@ -1135,16 +1425,38 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 DateTime.Now);
         }
 
-        return allLanded;
+        return Describe_Delivery(allLanded, sources, written);
+    }
+
+    /// <summary>
+    /// WHAT ONE REPLY DID: whether every part of it landed, and which of the session's sources it was
+    /// an answer TO. The second half exists for the closing turn — see
+    /// <see cref="Close_Down_KilledTurn_Async"/> — and every other caller reads only the first.
+    /// </summary>
+    readonly record struct ReplyDelivery(bool AllLanded, IReadOnlyCollection<string> AnsweredSourceKeys);
+
+    /// <summary>The sources whose channel file the reply was written into — a source is answered when its file was written, and by nothing else.</summary>
+    static ReplyDelivery Describe_Delivery(bool allLanded, IReadOnlyList<ITurnSource> sources, HashSet<string> writtenChannelFiles)
+    {
+        return new ReplyDelivery(allLanded, [.. sources.Where(source => writtenChannelFiles.Contains(source.ChannelFilePath)).Select(source => source.Key)]);
     }
 
     /// <param name="turnEndedAlreadyAppended">
-    /// True only on the closing-turn path, which wrote the killed turn's record BEFORE spending
-    /// minutes on the closing turn. Everything else about a failure — the attempt counter, the
+    /// True only on the closing-turn path, which has already written the killed turn's record with a
+    /// note naming the branch it took. Everything else about a failure — the attempt counter, the
     /// missing-transcript recovery, the runner change, the stall alert — is identical, and that is
     /// the point of routing through here rather than growing a second failure path.
     /// </param>
-    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note, bool turnEndedAlreadyAppended = false)
+    /// <param name="closingResult">
+    /// THE OTHER PROCESS THAT RAN UNDER THIS REQUEST ID, on the closing-turn path. It matters for one
+    /// question and it is the important one: the CLOSING turn is the process that resumes the killed
+    /// transcript, so it is the process that can come back with "No conversation found with session
+    /// ID" — and every branch here was handed the KILLED turn's result, which cannot contain that
+    /// sentence because it never passed <c>--resume</c>. Probed on 2026-09-09: the CLI said the
+    /// transcript was gone, nothing listened, and the dead id stayed claimed to be resumed and
+    /// refused for ever, which is the exact stall the recovery below was written to end.
+    /// </param>
+    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note, bool turnEndedAlreadyAppended = false, ITurnResult? closingResult = null)
     {
         var outcome = note == null ? TurnOutcomes.Describe(result) : TurnOutcomes.ERROR;
 
@@ -1163,7 +1475,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // wrong in the other direction: an attempt that ran and merely answered badly has a transcript
         // worth keeping, which is the case the previous stage measured and pinned. The CLI distinguishes
         // the two for us; this listens to it and unspends the id so the next attempt claims a fresh one.
-        if (Transcript_IsGone(result))
+        if (Transcript_IsGone(result) || (closingResult != null && Transcript_IsGone(closingResult)))
         {
             _log.Log_Warning(state.OrchId, $"'{state.MemberId}': the CLI has no transcript for session {state.SessionId} — the id was claimed but never created, so the next attempt starts a fresh one instead of resuming a conversation that does not exist");
             state = PrintSessionState_Factory.CreateFrom_Existing_SessionUnclaimed(state, Guid.NewGuid().ToString());
@@ -1238,18 +1550,24 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     bool Record_UsageLimit_IfNamed(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId)
     {
-        if (!LimitReset_Parser.Looks_LikeUsageLimit(result.ResultText, result.ApiErrorStatus))
+        // THE WHOLE RESULT, NOT ITS PROSE. LimitReset_Parser.Is_Refusal also answers "did this turn
+        // report success", which a text-only gate could not: probe 2026-09-09 parked a session that
+        // had exited 0 for fourteen hours, because a successful reply the channel refused comes
+        // through here with the MODEL'S words as the result text. See that method for both probes.
+        if (!LimitReset_Parser.Is_Refusal(result))
             return false;
 
-        var reading = LimitReset_Parser.Read_OrNull(result.ResultText, result.ApiErrorStatus, DateTime.UtcNow);
+        var nowUtc = DateTime.UtcNow;
+        var reading = LimitReset_Parser.Read_OrNull(result.ResultText, result.ApiErrorStatus, nowUtc);
 
         if (reading == null)
         {
-            _log.Log_Warning(state.OrchId, $"Turn {requestId} looks like a usage limit (api_error_status: {Describe_ApiErrorStatus(result)}) but no reset time could be read from it, so it keeps the ordinary {_retryBackoff.TotalSeconds:F0} s backoff and its {MAX_ATTEMPTS} attempts — unread text: '{Tail(result.ResultText ?? string.Empty, 200)}'");
+            _log.Log_Warning(state.OrchId, $"Turn {requestId} was refused for a usage limit (api_error_status: {Describe_ApiErrorStatus(result)}) but no reset time could be read from it (none named, or one further out than the {LimitReset_Parser.MAX_DEFERRAL.TotalHours:0} h cap), so it keeps the ordinary {_retryBackoff.TotalSeconds:F0} s backoff and its {MAX_ATTEMPTS} attempts — unread text: '{Tail(result.ResultText ?? string.Empty, 200)}'");
             return false;
         }
 
         var retryAtUtc = reading.ResetsAtUtc + PrintTurn_Words.LIMIT_RESET_MARGIN;
+        var appointment = LimitDeferral_Wording.Describe_Appointment(retryAtUtc, nowUtc);
 
         PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_LimitDeferred(state, retryAtUtc));
 
@@ -1258,14 +1576,25 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         tracker.LastFailureAt = null;
         tracker.StalledOnSignature = null;
 
-        _log.Log_Info(state.OrchId, $"Turn {requestId} hit a usage limit — retry scheduled at {retryAtUtc:HH:mm} UTC (from {reading.Describe_Source()})");
+        // THE TRAFFIC THAT BOUGHT THE APPOINTMENT IS NOT "NEW" TRAFFIC. Consider_Session announces a
+        // deferral to anything that lands afterwards (F5); recording the signature here is what keeps
+        // it from announcing the very entries this turn was refused over.
+        tracker.DeferralAnnouncedSignature = Describe_PendingSignature(pending);
 
-        ChannelAppender.Append_AppEntry(
-            state.ChannelFilePath,
-            Stall_Audience(state),
-            $"{TURN_LIMITED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — resumes {retryAtUtc:HH:mm} UTC",
-            $"Turn {requestId} was refused for a usage limit and is scheduled to run again at {retryAtUtc:yyyy-MM-dd HH:mm} UTC, read from {reading.Describe_Source()}. Nothing is lost and nothing else is needed: the attempt was NOT counted against the {MAX_ATTEMPTS}-attempt limit, and the same traffic is still pending under the same request id.\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\napi_error_status: {Describe_ApiErrorStatus(result)}",
-            DateTime.Now);
+        _log.Log_Info(state.OrchId, $"Turn {requestId} was refused for a usage limit — retry scheduled {appointment} (from {reading.Describe_Source()})");
+
+        // CHECKED, LIKE Append_TurnEnded's (F5, 2026-09-09). The return was dropped here, so a locked
+        // channel swallowed the one entry that says why the session has gone quiet — and the state file
+        // still holds the appointment, so the silence is real and nothing anywhere accounts for it.
+        if (!ChannelAppender.Append_AppEntry(
+                state.ChannelFilePath,
+                Stall_Audience(state),
+                $"{TURN_LIMITED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — resumes {appointment}",
+                $"Turn {requestId} was refused for a usage limit and is scheduled to run again {appointment}, read from {reading.Describe_Source()}. Nothing is lost and nothing else is needed: the attempt was NOT counted against the {MAX_ATTEMPTS}-attempt limit, and the same traffic is still pending under the same request id.\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\napi_error_status: {Describe_ApiErrorStatus(result)}",
+                DateTime.Now))
+        {
+            _log.Log_Warning(state.OrchId, $"the usage-limit notice for {requestId} could not be appended (channel locked) — the appointment IS recorded in the state file, so the session resumes {appointment} with nothing in its channel saying why it went quiet");
+        }
 
         return true;
     }

@@ -56,19 +56,6 @@ public class OrchestratorConfigProviderTests : IDisposable
     }
 
     [Fact]
-    public void Get_Current_ItalianLayer_DefaultsFalse_AndAnExplicitTrueSticks()
-    {
-        // Owner directive 2026-09-09: the translation layer is off unless an owner switches it on
-        // (see OrchestratorConfig_Factory.DEFAULT_TELEGRAM_ITALIAN_LAYER for why).
-        Assert.False(_provider.Get_Current().TelegramItalianLayer);
-
-        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"telegramItalianLayer":true}""");
-        File.SetLastWriteTimeUtc(_paths.ConfigFile, DateTime.UtcNow.AddSeconds(2));
-
-        Assert.True(_provider.Get_Current().TelegramItalianLayer);
-    }
-
-    [Fact]
     public void Get_Current_FileChanged_ReturnsNewInstance()
     {
         File.WriteAllText(_paths.ConfigFile, """{"repos":[{"name":"CRM","path":"C:\\somewhere"}]}""");

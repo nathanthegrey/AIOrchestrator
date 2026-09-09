@@ -14,9 +14,9 @@ public interface ISupervisionPaths
     /// <summary>
     /// The bridge's DECISION state: open questions, pending buttons, second-gesture confirmations,
     /// nudge memory, crash-loop counters, the dispatcher pause. Separate from
-    /// <see cref="BridgeStateFile"/> on purpose — that one is a CURSOR rewritten ~30 times a
-    /// minute and losing it costs replayed traffic, while losing this one costs a decision the
-    /// owner was asked to take.
+    /// <see cref="BridgeStateFile"/> on purpose — that one is a CURSOR, rewritten on every tick
+    /// that actually moved it, and losing it costs replayed traffic, while losing this one costs a
+    /// decision the owner was asked to take.
     /// </summary>
     string EngineStateFile { get; }
     string GlobalLogFile { get; }
