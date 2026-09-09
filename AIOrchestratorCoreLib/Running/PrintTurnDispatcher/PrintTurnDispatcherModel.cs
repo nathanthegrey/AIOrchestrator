@@ -446,12 +446,14 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
 
         // Entries still landing ride the same turn, whichever channel they land on: wait until the set
-        // has been unchanged for the window — UNLESS the owner is in it (CoalesceWindow_Policy, owner
-        // decision 2026-09-09). Member traffic keeps the window because an extra supervisor wake costs
-        // ~1 M input tokens, measured; the owner's own message does not, because those three seconds
-        // are a person waiting on their phone at the end of an 11–12 s path. Whatever else is pending
-        // in this pass still rides along — the waiver skips the WAIT, it does not narrow the turn.
-        if (!CoalesceWindow_Policy.Is_Waived(ordered) && nowLocal - tracker.PendingSeenAt < configs.CoalesceWindow)
+        // has been unchanged for the window — a SHORTER one when the owner is in it
+        // (CoalesceWindow_Policy, owner decision 2026-09-09). Member traffic keeps the full window
+        // because an extra supervisor wake costs ~1 M input tokens, measured; the owner's own message
+        // does not, because those three seconds are a person waiting on their phone at the end of an
+        // 11–12 s path. It is a shorter window and not NO window for the same reason: a turn that has
+        // started cannot take what lands next, so waiving it outright bought the second turn instead of
+        // saving it.
+        if (nowLocal - tracker.PendingSeenAt < CoalesceWindow_Policy.Resolve_Window(ordered, configs.CoalesceWindow))
             return;
 
         // Stalled after MAX_ATTEMPTS: nothing runs until the pending set changes — which is what "new
