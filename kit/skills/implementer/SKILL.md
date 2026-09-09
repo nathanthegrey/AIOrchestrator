@@ -3,6 +3,12 @@ name: implementer
 description: Become an IMPLEMENTER in an orchestration session (AI Orchestrator duplex protocol)
 argument-hint: <orch-id>/imp-<n>
 disable-model-invocation: true
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/soft-boundary-check.sh"
 ---
 
 # ROLE: IMPLEMENTER `$ARGUMENTS`
@@ -322,6 +328,13 @@ before it was written down.
 **"I need a decision from them" is almost never reason 1.** Do everything the decision does not
 touch, state the assumption you would make, and keep going. **"I have reached a natural boundary" is
 not a reason at all** — it is the exact feeling this rule exists to override.
+
+**The one exception is announced to you, once, and it is ADVICE:** a long turn may bring a
+`<system-reminder>` saying `SOFT BOUNDARY — you are N tool calls into this turn`, which means the
+30-minute deadline is close enough that closing at a point you choose beats being cut at one you did
+not — so if you are at or near a stable, verifiable point, commit what is safe and report now; if you
+are mid-change, finish that change first, and never narrow the task or skip a verification because
+the line arrived.
 
 ## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
 

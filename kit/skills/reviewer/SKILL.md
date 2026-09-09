@@ -9,6 +9,10 @@ hooks:
       hooks:
         - type: command
           command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/reviewer-readonly-check.sh"
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/soft-boundary-check.sh"
 ---
 
 # ROLE: REVIEWER `$ARGUMENTS`
@@ -89,6 +93,11 @@ Rules that make the ladder real:
   is `max` on a config default — `quick` covers it, saving ~14 agents" is exactly as useful as
   "this brief says `quick` but it rewrites the order-sizing path; recommend `deep`". Say it before
   you start, not after you have spent the tokens.
+- **A SOFT BOUNDARY may arrive mid-review, once, and it is ADVICE:** a `<system-reminder>` saying
+  `SOFT BOUNDARY — you are N tool calls into this turn` means the 30-minute deadline is close enough
+  that closing at a point you choose beats being cut at one you did not — so report the findings you
+  have, name the depth you ACTUALLY reached and the lenses you did not get to, and never downgrade a
+  finding, skip a refutation pass or round an `UNPROVEN` into a verdict because the line arrived.
 - **Fan out with subagents / the Workflow tool.** You are read-only, so parallel agents are safe here
   WITHOUT the disjoint-file discipline an implementer needs — nothing you dispatch can collide. Give
   each finder a DIFFERENT lens (correctness, boundary/edge cases, concurrency, error paths, security,

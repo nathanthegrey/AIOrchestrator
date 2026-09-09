@@ -46,8 +46,9 @@ public class RoleHooksAreShippedTests
         }
 
         // The count is asserted so that a frontmatter someone empties cannot make this pass by
-        // having nothing left to check.
-        Assert.Equal(6, declared);
+        // having nothing left to check. It was 6 until stage 4g wired the soft-boundary advisory
+        // into the three roles that do the work — implementer, reviewer and solo (SoftBoundaryHookTests).
+        Assert.Equal(9, declared);
     }
 
     /// <summary>
