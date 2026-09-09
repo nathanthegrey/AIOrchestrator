@@ -124,6 +124,29 @@ public static class PrintTurnPrompt_Builder
     /// </summary>
     public const string BOOT_TURN = "Nothing has been said to you yet — this is your boot turn. Follow the boot sequence of your role command: read your channels, then file your greeting.";
 
+    /// <summary>
+    /// The pending-traffic block and the contract, as free-standing text — for the state pack
+    /// (<see cref="StatePack.StatePack_Builder"/>), which writes them into a file instead of a
+    /// prompt. One renderer for both roads, so a fresh session and a resumed one read their entries
+    /// in exactly the same shape; a second copy is how the two would come to disagree.
+    /// </summary>
+    public static string Describe_Traffic(IReadOnlyList<PendingEntry> pending, IReadOnlyList<ITurnSource> sources)
+    {
+        var text = new StringBuilder();
+
+        if (sources.Count > 1)
+            Append_MultiSourceTraffic(text, pending);
+        else
+            Append_SingleSourceTraffic(text, pending);
+
+        return text.ToString();
+    }
+
+    public static string Describe_Contract(IReadOnlyList<ITurnSource> sources)
+    {
+        return sources.Count > 1 ? Describe_MultiSourceContract(sources) : SINGLE_SOURCE_CONTRACT;
+    }
+
     const string SINGLE_SOURCE_CONTRACT =
         "Act on it per your role command. Your final message IS your channel entry — the bridge appends it under your author word with the header, the index and the time: first line the subject, then a blank line, then the body. A question ends the turn exactly as an answer does.\n";
 
