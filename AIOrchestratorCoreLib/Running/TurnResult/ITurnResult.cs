@@ -11,16 +11,24 @@ public interface ITurnResult
     bool TimedOut { get; }
 
     /// <summary>
-    /// WHICH KILL THIS WAS, when <see cref="TimedOut"/> is set — and the reason it is a field rather
-    /// than something inferred from the elapsed time. The heartbeat kills a process that has said
-    /// nothing for the silence limit (2 minutes by default) and the deadline kills a turn that
-    /// outlived the turn timeout (30 minutes): both come back timed out, with exit -1 and no result
-    /// document, so from here they are indistinguishable — yet one produced no bytes at all and the
-    /// other was working. Only the deadline kill earns a closing turn
-    /// (<see cref="ClosingTurn.ClosingTurn_Rule"/>), so the silence kill is MARKED where it is known,
-    /// by the stream executor, and never guessed at later.
+    /// THERE IS NO HALF-DONE WORK BEHIND THIS KILL, when <see cref="TimedOut"/> is set — and the
+    /// reason it is a field rather than something inferred from the elapsed time. Every kill comes
+    /// back the same way (timed out, exit -1, no result document), yet they mean opposite things,
+    /// and only a kill that interrupted WORK earns a closing turn
+    /// (<see cref="ClosingTurn.ClosingTurn_Rule"/>). So it is MARKED where it is known — by the
+    /// stream executor, which is the only place that still knows — and never guessed at later.
+    ///
+    /// <para>
+    /// TWO PRODUCERS, both in the stream executor, both meaning "the model was never asked the
+    /// question this turn is about". The first is the SILENCE kill: the heartbeat caught a process
+    /// that had said nothing for the silence limit, so it was not working. The second is the BOOT:
+    /// a session whose role command alone outlived the turn timeout never received its brief at all
+    /// (adversarial review, 2026-09-09 — it returned as an ordinary deadline kill, so it was given a
+    /// closing turn that resumed a transcript containing nothing but the boot, and the brief the
+    /// session had never seen was marked delivered).
+    /// </para>
     /// </summary>
-    bool KilledOnSilence { get; }
+    bool NothingToClose { get; }
 
     /// <summary>The CLI's own verdict (<c>is_error</c>); false when the JSON was absent.</summary>
     bool IsError { get; }

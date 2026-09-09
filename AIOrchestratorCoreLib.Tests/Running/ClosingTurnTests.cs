@@ -185,7 +185,14 @@ public class ClosingTurnTests
     {
         // The stream executor runs its closing turn on the print rung below it, because the living
         // process is dead by then. Wired with no rung below, it can do nothing but say so.
-        using var harness = new PrintRunnerTestHarness("implementer:stream", turnTimeoutMinutes: TIMEOUT_MINUTES);
+        //
+        // TEN SECONDS, NOT FIVE, AND THE ROOM IS FOR THE BOOT. This test needs the WORK turn to be the
+        // one killed at the deadline; a boot killed at the deadline now runs no closing turn at all
+        // (nothing was asked, so there is nothing to close — ITurnResult.NothingToClose, added
+        // 2026-09-09), and then the line this asserts on is never written. At a five-second turn
+        // timeout the boot is a cold `dotnet FakeClaude.dll` start racing that deadline under a
+        // parallel suite, and it lost once in nine runs on 2026-09-09.
+        using var harness = new PrintRunnerTestHarness("implementer:stream", turnTimeoutMinutes: 10.0 / 60);
         var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer, runner: SessionRunners.Stream);
         harness.Write_Scenario("""{"turns":[{"result":"online"},{"result":"too late","delay_ms":30000}],"default":{"result":"online"}}""");
 
