@@ -8069,6 +8069,13 @@ internal sealed class BridgeEngineModel(
             + "turn was cut short by a usage limit, redo that step now. If you were genuinely finished and waiting, "
             + "say so in one line and go back to waiting — do NOT invent new work to look busy.";
 
+        // THE OVERRIDE THE HELP TEXT PROMISES. Appending fresh traffic below wakes a session that was
+        // idle for the ordinary reason; it does nothing for one the dispatcher is refusing to run
+        // before an appointment (IPrintTurnDispatcher.Clear_LimitDeferrals's own doc explains why that
+        // appointment can also just be wrong). This must run before or after the appends indifferently —
+        // it only ever touches RetryNotBeforeUtc, never a channel.
+        _printTurns.Clear_LimitDeferrals();
+
         var wokenSessions = 0;
         var wokenOrchestrations = 0;
         List<string> notWoken = [];

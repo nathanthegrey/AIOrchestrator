@@ -32,7 +32,10 @@ namespace AIOrchestratorCoreLib.Running.PrintTurnDispatcher;
 /// <c>turn_ended</c> entry, and persists the cursors. A failed attempt (timeout, non-zero exit,
 /// <c>is_error</c>) is counted and retried after a backoff under the SAME request id; at
 /// <see cref="MAX_ATTEMPTS"/> the session stalls — an alert entry, no further attempts — until the
-/// pending set changes.
+/// pending set changes. ONE FAILURE IS NOT AN ATTEMPT: a usage-limit refusal that names its reset
+/// buys an appointment instead (<see cref="Record_UsageLimit_IfNamed"/>), because three tries a
+/// minute apart cannot outlast a quota window and spending them on one leaves the session with
+/// nothing left when it reopens.
 ///
 /// Idempotency: a request id already in the executed list is skipped without running. The prompt
 /// of the first resumed turn after a bridge start lists the executed turns, so a transcript that
@@ -60,6 +63,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     const string RUNNER_ENV_VAR = PrintTurn_Words.RUNNER_ENV_VAR;
     const string TURN_ENDED_SUBJECT = PrintTurn_Words.TURN_ENDED_SUBJECT;
     const string TURN_STALLED_SUBJECT = PrintTurn_Words.TURN_STALLED_SUBJECT;
+    const string TURN_LIMITED_SUBJECT = PrintTurn_Words.TURN_LIMITED_SUBJECT;
     const string MISADDRESSED_SUBJECT = PrintTurn_Words.MISADDRESSED_SUBJECT;
     const int ENTRY_APPEND_ATTEMPTS = 3;
     const int ENTRY_APPEND_RETRY_MILLISECONDS = 300;
@@ -215,6 +219,43 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 if (_warnedBrokenSessions.Add($"{registered.OrchId}/{registered.MemberId}"))
                     _log.Log_Error(registered.OrchId, $"Print dispatcher: '{registered.MemberId}' could not be considered — it is skipped from now on and this is NOT repeated; fix or delete its {PrintSessionState_Store.STATE_FILE_NAME} and restart the app", ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// THE /resume OVERRIDE — see <see cref="IPrintTurnDispatcher.Clear_LimitDeferrals"/> for why it
+    /// exists. Reuses <see cref="Discover_RegisteredSessions"/> so this asks the exact question
+    /// <see cref="Tick"/> asks ("which sessions does this dispatcher own"), never a second one that
+    /// could drift from it. A state file that cannot be read is left alone and reported the same way
+    /// <see cref="Tick"/> already reports one — this is not the place to invent a second failure mode
+    /// for the same broken file.
+    /// </summary>
+    public void Clear_LimitDeferrals()
+    {
+        foreach (var registered in Discover_RegisteredSessions())
+        {
+            IPrintSessionState? state;
+
+            try
+            {
+                state = PrintSessionState_Store.Read_OrNull(registered.StateFile);
+            }
+            catch (Exception ex)
+            {
+                if (_warnedBrokenSessions.Add($"{registered.OrchId}/{registered.MemberId}"))
+                    _log.Log_Error(registered.OrchId, $"/resume: '{registered.MemberId}' could not be considered — it is skipped from now on and this is NOT repeated; fix or delete its {PrintSessionState_Store.STATE_FILE_NAME} and restart the app", ex);
+
+                continue;
+            }
+
+            if (state?.RetryNotBeforeUtc == null)
+                continue;
+
+            var waitingUntil = state.RetryNotBeforeUtc.Value;
+
+            PrintSessionState_Store.Write(registered.StateFile, PrintSessionState_Factory.CreateFrom_Existing_LimitDeferralCleared(state));
+
+            _log.Log_Info(registered.OrchId, $"'{registered.MemberId}' was waiting on a usage limit until {waitingUntil:HH:mm} UTC — /resume cleared it");
         }
     }
 
@@ -411,6 +452,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // Stalled after MAX_ATTEMPTS: nothing runs until the pending set changes — which is what "new
         // traffic arrives" means once a cursor is a set of identities rather than a number.
         if (state.FailedAttempts >= MAX_ATTEMPTS && signature == tracker.StalledOnSignature)
+            return;
+
+        // A QUOTA IS NOT A BACKOFF. The turn has an appointment written in its state file (see
+        // Record_Failure and IPrintSessionState.RetryNotBeforeUtc) and nothing runs before it —
+        // including a turn woken by NEW traffic, because an entry landing in a channel does not give
+        // the account its tokens back, and a session that tried anyway would spend an attempt to be
+        // told the same thing again. Read from the STATE and not from the tracker, so a bridge
+        // restarted inside the window keeps the appointment.
+        if (state.RetryNotBeforeUtc != null && nowLocal.ToUniversalTime() < state.RetryNotBeforeUtc.Value)
             return;
 
         if (tracker.LastFailureAt != null && nowLocal - tracker.LastFailureAt.Value < _retryBackoff)
@@ -977,6 +1027,9 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             tracker.StalledOnSignature = null;
         }
 
+        if (Record_UsageLimit_IfNamed(stateFile, state, pending, tracker, result, requestId))
+            return;
+
         var failed = PrintSessionState_Factory.CreateFrom_Existing_AttemptFailed(state);
         PrintSessionState_Store.Write(stateFile, failed);
         tracker.LastFailureAt = DateTime.Now;
@@ -999,6 +1052,69 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
 
         _log.Log_Warning(state.OrchId, $"Turn {requestId} attempt {attempt} {outcome}{(note == null ? string.Empty : $" ({note})")} — retry after {_retryBackoff.TotalSeconds:F0} s; {Tail(result.RawStderr, 200)}");
+    }
+
+    /// <summary>
+    /// A QUOTA REFUSAL IS AN APPOINTMENT, NOT A FAILED ATTEMPT. Returns whether this failure was one:
+    /// true means the turn has been scheduled and the caller must not count, back off or stall it.
+    ///
+    /// <para>
+    /// MEASURED on the VPS 2026-09-08/09. <c>claude</c> refuses for quota with
+    /// <c>api_error_status: 429</c> and a result of "You've hit your weekly limit · resets 5am
+    /// (Europe/Berlin)". The dispatcher treated that like any other error — three attempts
+    /// <see cref="_retryBackoff"/> apart, then a stall until new traffic arrived — so the three
+    /// tries were spent inside the first three minutes of a window that had hours to run, and the
+    /// orchestration sat dead for 167 to 509 minutes (twice, for a whole night). Three retries a
+    /// minute apart cannot outlast a quota; waiting for the stated reset can.
+    /// </para>
+    /// <para>
+    /// DECISION 21: A GUARD THAT CANNOT EVALUATE ITS PREDICATE SAYS SO AND ALLOWS. When the refusal
+    /// names no clock this parser is sure of, the answer is false and EVERYTHING stays as it was —
+    /// the counter, the backoff, the stall, the alert — plus one line in
+    /// <c>orchestrator.log.jsonl</c> naming the text that could not be read. Nothing goes to the
+    /// owner's phone for it (decision 15): there is nothing they can do about wording.
+    /// </para>
+    /// <para>
+    /// THE APPOINTMENT IS IN THE STATE FILE, not in <paramref name="tracker"/>, so a bridge restart
+    /// inside the window keeps it; the tracker's failure stamp is CLEARED so the two waits cannot
+    /// both apply. Decision 8 is untouched: this schedules the PENDING turn under its existing
+    /// request id, and every other guard — the pending-set signature, the executed-id skip, the
+    /// coalesce window — is left exactly where it was, so a request closed or executed in the
+    /// meantime is still never re-run.
+    /// </para>
+    /// </summary>
+    bool Record_UsageLimit_IfNamed(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId)
+    {
+        if (!LimitReset_Parser.Looks_LikeUsageLimit(result.ResultText, result.ApiErrorStatus))
+            return false;
+
+        var reading = LimitReset_Parser.Read_OrNull(result.ResultText, result.ApiErrorStatus, DateTime.UtcNow);
+
+        if (reading == null)
+        {
+            _log.Log_Warning(state.OrchId, $"Turn {requestId} looks like a usage limit (api_error_status: {Describe_ApiErrorStatus(result)}) but no reset time could be read from it, so it keeps the ordinary {_retryBackoff.TotalSeconds:F0} s backoff and its {MAX_ATTEMPTS} attempts — unread text: '{Tail(result.ResultText ?? string.Empty, 200)}'");
+            return false;
+        }
+
+        var retryAtUtc = reading.ResetsAtUtc + PrintTurn_Words.LIMIT_RESET_MARGIN;
+
+        PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_LimitDeferred(state, retryAtUtc));
+
+        // The backoff must not ALSO hold this turn: the appointment is the whole schedule now, and a
+        // stall signature left standing would refuse to run the turn when the window reopens.
+        tracker.LastFailureAt = null;
+        tracker.StalledOnSignature = null;
+
+        _log.Log_Info(state.OrchId, $"Turn {requestId} hit a usage limit — retry scheduled at {retryAtUtc:HH:mm} UTC (from {reading.Describe_Source()})");
+
+        ChannelAppender.Append_AppEntry(
+            state.ChannelFilePath,
+            Stall_Audience(state),
+            $"{TURN_LIMITED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — resumes {retryAtUtc:HH:mm} UTC",
+            $"Turn {requestId} was refused for a usage limit and is scheduled to run again at {retryAtUtc:yyyy-MM-dd HH:mm} UTC, read from {reading.Describe_Source()}. Nothing is lost and nothing else is needed: the attempt was NOT counted against the {MAX_ATTEMPTS}-attempt limit, and the same traffic is still pending under the same request id.\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\napi_error_status: {Describe_ApiErrorStatus(result)}",
+            DateTime.Now);
+
+        return true;
     }
 
     /// <summary>
