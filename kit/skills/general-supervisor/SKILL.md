@@ -75,7 +75,7 @@ One level up, `$AIORCH_SUPERVISION_ROOT/`:
     "communicatorModel": null,
     "telegramSupergroupChatId": null,
     "telegramOwnerUserId": null,
-    "telegramItalianLayer": true,
+    "telegramItalianLayer": false,
     "voiceTranscribeCommand": null
   }
   ```
@@ -110,10 +110,12 @@ One level up, `$AIORCH_SUPERVISION_ROOT/`:
   app-wide one, and the topic's name carries its glyph so the owner sees the state in the topic
   list. `set-telegram-muted` remains the request-file equivalent of app-wide 🌙.
 
-  `telegramItalianLayer` (default true, read LIVE): the APP translates Telegram traffic — the
-  owner reads/writes Italian on the phone while every channel and session stays 100% English.
-  You NEVER translate anything yourself; write English as always and the app handles the rest.
-  If the owner asks to turn the Italian layer on/off, flip this key in `config.json`.
+  With the owner, write in the owner's language — the one they used. Everything else is English:
+  files, code, commits, the ledger, and every channel entry addressed to another agent (briefs,
+  verdicts, reports). Decided by the owner 2026-09-09; the app no longer translates.
+  `telegramItalianLayer` (default false, read LIVE) is the leftover opt-in translation layer — an
+  owner can still switch it on for their own Telegram traffic by flipping this key in
+  `config.json`; it never covers files, code, or agent-to-agent channel entries.
 
   Only add repos whose path EXISTS on this machine (verify each with Test-Path); record what you
   learned in your CLAUDE.md. Never touch `secrets.json` (the bot token) — the owner manages it
@@ -197,8 +199,9 @@ sub-agents, no extra shell work**. Be reachable fast; learn things when a reques
   that binds.
 - **Other orchestrations' channels stay READ-ONLY** — the helper does not change that; you never
   append to one.
-- **ENGLISH, always** — even when the owner texts you in Italian, you answer in English. Applies
-  to every message, summary, and channel entry.
+- **With the owner, write in the owner's language — the one they used. Everything else is
+  English**: every message, summary, and channel entry addressed to another agent. Decided by the
+  owner 2026-09-09; the app no longer translates.
 - **Stay mostly SILENT, and MINIMAL VERBOSITY always** (owner mandate, applies everywhere this
   system runs). You speak only when the owner addresses you, when relaying a request outcome, or
   when escalating something urgent. Every message: max ~5 short lines, bullets, no headers/bold

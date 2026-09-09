@@ -60,29 +60,21 @@ internal sealed class MessageTranslatorModel(IOrchestrationLog log) : IMessageTr
         if (translated != text)
             return translated;
 
-        // ONE RETRY, BECAUSE MOST OF THESE ARE TRANSIENT. Every failure path in Translate_Async — a
-        // 45 s timeout, a non-zero exit, empty output, an exception — hands back the input, and the
-        // common causes (a busy CLI, a cold start) succeed on a second attempt. A retry costs one
-        // more call on a message that has already failed; not retrying costs the owner an English
-        // message.
-        if (text.Trim().Length > 0)
-        {
-            _log.Log_Warning("", $"EN→IT translation returned the text unchanged ({text.Length} chars) — retrying once");
-
-            translated = await Translate_Async(TO_ITALIAN_INSTRUCTION, text, TO_ITALIAN_MODEL, cancellationToken);
-
-            if (translated != text)
-                return translated;
-        }
-
-        // AND IF IT STILL WILL NOT, THE OWNER IS TOLD. A log warning is not a channel to the person
-        // holding the phone: they received English in the middle of an Italian conversation with
-        // nothing to say why, and read it as a deliberate switch of language. See
-        // UntranslatedText_Marker for why only prose is marked.
+        // ONE ATTEMPT ONLY (owner directive 2026-09-09). A retry used to follow every failure — a
+        // second `claude -p` process stacked on the first — which doubled the spawn cost of exactly
+        // the failures the log was full of (183 in one recent run). The Italian layer is opt-in now
+        // (default off, see OrchestratorConfig_Factory.DEFAULT_TELEGRAM_ITALIAN_LAYER), so a rare
+        // failure falls back to the original text straight away; it no longer pays twice to rescue
+        // a feature the owner is not using by default.
+        //
+        // THE OWNER IS STILL TOLD. A log warning is not a channel to the person holding the phone:
+        // they received English in the middle of an Italian conversation with nothing to say why,
+        // and read it as a deliberate switch of language. See UntranslatedText_Marker for why only
+        // prose is marked.
         if (!UntranslatedText_Marker.Should_Mark(translated))
             return translated;
 
-        _log.Log_Warning("", $"EN→IT translation failed twice ({text.Length} chars) — the owner is getting it in English, marked");
+        _log.Log_Warning("", $"EN→IT translation failed ({text.Length} chars) — the owner is getting it in English, marked");
 
         return UntranslatedText_Marker.Mark(translated);
     }
