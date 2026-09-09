@@ -160,6 +160,7 @@ public static class Invocation_Logger
             ["settings"] = args.Settings,
             ["model"] = args.Model,
             ["permission_mode"] = args.PermissionMode,
+            ["max_budget_usd"] = args.MaxBudgetUsd,
             ["env"] = environment,
         };
 

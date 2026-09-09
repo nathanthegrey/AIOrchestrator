@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.ClosingTurn;
 using AIOrchestratorCoreLib.Running.StatePack;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
@@ -198,7 +199,21 @@ public class PrintTurnDispatcherTests
         dispatcher.Tick(DateTime.Now);
         Assert.Equal(0, dispatcher.InFlightCount);
         Assert.Equal(invocationsAtStall, harness.Read_Invocations().Count);
-        Assert.Equal(PrintTurn_Words.MAX_ATTEMPTS, invocationsAtStall);
+
+        // 2026-09-09: each deadline kill now also runs a closing turn on the killed transcript
+        // (ClosingTurn_Rule.Is_DeadlineKill), and this scenario's uniform 8 s delay makes that
+        // closing turn outlive its own (clamped) timeout too — so every one of the three killed
+        // attempts is TWO invocations, not one: the work turn, then its closing turn. The outcome
+        // this test exists to pin — killed, retried, stalled with an alert on the third — is
+        // unchanged; only the invocation count moved, from MAX_ATTEMPTS to MAX_ATTEMPTS * 2. Split
+        // the recorded invocations by the flag that marks a closing turn (--max-budget-usd, present
+        // only on Execute_ClosingTurn_Async's command line) rather than just asserting a bigger
+        // number, so this pins WHICH invocations they were.
+        var closingInvocations = harness.Read_Invocations().Where(invocation => PrintRunnerTestHarness.Args(invocation).Contains(ClosingTurn_Words.BUDGET_FLAG)).ToList();
+        var workInvocations = harness.Read_Invocations().Where(invocation => !PrintRunnerTestHarness.Args(invocation).Contains(ClosingTurn_Words.BUDGET_FLAG)).ToList();
+        Assert.Equal(PrintTurn_Words.MAX_ATTEMPTS, workInvocations.Count);
+        Assert.Equal(PrintTurn_Words.MAX_ATTEMPTS, closingInvocations.Count);
+        Assert.Equal(PrintTurn_Words.MAX_ATTEMPTS * 2, invocationsAtStall);
 
         var entries = ChannelEntry_Parser.Parse_All(harness.Read_Channel(orchId, memberId));
         Assert.Equal(3, entries.Count(entry => entry.Subject.Contains($"{PrintTurn_Words.TURN_ENDED_SUBJECT} {memberId} turn 1 — timeout")));

@@ -32,6 +32,14 @@ public static class TurnLog_Store
     public const string KIND_KEY = "aiorch_kind";
     public const string KIND_TURN = "turn";
     public const string KIND_EVENT = "event";
+
+    /// <summary>
+    /// A CLOSING TURN, not a turn: the one short print turn that resumes a transcript the deadline
+    /// killed and asks it where it got to. It carries the killed turn's request id with
+    /// <c>-closing</c> on the end, so /tail shows the pair together and nothing has to compare costs
+    /// between two records that look like two attempts at the same work.
+    /// </summary>
+    public const string KIND_CLOSING_TURN = "closing";
     public const string REQUEST_ID_KEY = "aiorch_request_id";
     public const string AT_KEY = "aiorch_at";
 
@@ -62,6 +70,17 @@ public static class TurnLog_Store
     /// <summary>One whole print turn: its result document, or what came back instead of one.</summary>
     public static void Append_TurnResult(string logFile, string requestId, ITurnResult result)
     {
+        Append_TurnResult(logFile, requestId, result, KIND_TURN);
+    }
+
+    /// <summary>The closing turn's result, tagged <see cref="KIND_CLOSING_TURN"/> — same record, different word.</summary>
+    public static void Append_ClosingTurnResult(string logFile, string requestId, ITurnResult result)
+    {
+        Append_TurnResult(logFile, requestId, result, KIND_CLOSING_TURN);
+    }
+
+    static void Append_TurnResult(string logFile, string requestId, ITurnResult result, string kind)
+    {
         var record = StreamTurn.StreamEvent_Reader.Parse_OrNull(result.RawStdout) ?? new JsonObject
         {
             ["type"] = "result",
@@ -75,7 +94,7 @@ public static class TurnLog_Store
             ["stderr_tail"] = Tail(result.RawStderr, 2000),
         };
 
-        Append(logFile, Stamp(record, KIND_TURN, requestId));
+        Append(logFile, Stamp(record, kind, requestId));
     }
 
     /// <summary>
