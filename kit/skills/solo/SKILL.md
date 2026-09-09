@@ -136,7 +136,8 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   appending with a bare redirect is stopped by nothing here — a protocol to follow, not a boundary
   that binds.
 - **APPEND ONLY — never `Write` the channel file.** A whole-file write destroys entries.
-- **ENGLISH always**, even when the owner writes in Italian (the app translates for their phone).
+- **With the owner, write in their language — the one they used.** Everything else stays English:
+  files, code, commits, the ledger. Decided by the owner 2026-09-09; the app no longer translates.
 - **THE ❓ ON THE TOPIC NAME IS YOURS TO SET AND YOURS TO CLEAR — it is never inferred.** It goes on
   when you write a `QUESTION:` line or `BLOCKED ON OWNER`, and it comes off when the owner replies
   **or when you write `ANSWERED`** in a subject or at the start of a body line.
