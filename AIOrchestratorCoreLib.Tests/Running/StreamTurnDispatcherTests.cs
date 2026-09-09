@@ -255,6 +255,44 @@ public class StreamTurnDispatcherTests
     }
 
     [Fact]
+    public async Task ASecondTurnAfterAQuietGap_IsNotKilledForTheGap()
+    {
+        // The measured production signature (2026-09-09): silence is a per-TURN clock, but the
+        // heartbeat used to be stamped only at construction and on bytes received — never when a
+        // new prompt is sent. An idle gap between two owner messages, longer than the silence
+        // limit, left the NEXT turn reading a stale heartbeat from the turn before and being
+        // declared silent before it had even been given a chance to answer.
+        using var harness = new PrintRunnerTestHarness("implementer:stream", turnTimeoutMinutes: 5, streamSilenceSeconds: 0.3);
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer, runner: SessionRunners.Stream);
+
+        List<string> logged = [];
+        harness.Log.EntryLogged += entry => logged.Add(entry.Message);
+
+        harness.Write_Scenario("""{"default":{"result":"ack\n\nbody"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Append_Supervisor(harness, orchId, memberId, "BRIEF", "first");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
+
+        // The quiet stretch: well past the 300 ms silence limit, and nobody has asked the process
+        // anything since its last answer — exactly the shape of the idle gap between two owner
+        // messages on the VPS.
+        Thread.Sleep(800);
+
+        Append_Supervisor(harness, orchId, memberId, "GO AHEAD", "second");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 2, PrintRunnerTestHarness.GENEROUS),
+            $"the second turn never completed. Log:\n{string.Join("\n", logged)}");
+
+        await dispatcher.Stop_Async();
+
+        // The bug kills the healthy process for a gap it did not cause: caught here by the
+        // transport-failure log line the kill always writes, and by the reboot a killed process
+        // forces — ONE process the whole test, or the fix did not take.
+        Assert.DoesNotContain(logged, message => message.Contains("said nothing for", StringComparison.Ordinal));
+        Assert.Single(Lines(harness, STREAM_START));
+    }
+
+    [Fact]
     public async Task TheSupervisor_RunsInTheStream_AndIsWokenByTheOwnerChannel()
     {
         // The role this whole runner exists for. It is NOT print-runnable (the print table has never
