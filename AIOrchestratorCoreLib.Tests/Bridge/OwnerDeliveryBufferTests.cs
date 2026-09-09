@@ -356,4 +356,92 @@ public class OwnerDeliveryBufferTests
         // And it must not go out on the aggregation window either.
         Assert.Empty(buffer.Take_ReadyDeliveries(start.AddSeconds(40)));
     }
+    /// <summary>
+    /// A FINISHED MESSAGE WAITS FOR NOTHING (owner decision, 2026-09-09).
+    ///
+    /// Measured on the VPS that day: 11–12 s median from the owner's Telegram message to the entry
+    /// landing in the supervisor's channel, of which the aggregation window was six. The window was
+    /// being served by EVERY message so that the occasional burst could arrive as one turn — and the
+    /// owner's ruling was that a message which is plainly over ("restart the crew.") must not pay for
+    /// the ones that are not.
+    ///
+    /// <para>
+    /// Taken at the very instant of arrival on purpose: zero idle seconds is the whole claim. Under
+    /// the old rule this delivery could not exist before T0+3.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ACompleteSingleMessage_IsReadyWithNoWaitAtAll()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(3);
+
+        buffer.Add_Segment("chan-a", "restart the crew.", T0);
+
+        var ready = buffer.Take_ReadyDeliveries(T0);
+
+        Assert.Equal("restart the crew.", Assert.Contains("chan-a", ready).Text);
+        Assert.False(buffer.Has_PendingDeliveries());
+    }
+
+    /// <summary>
+    /// THE OTHER HALF, and without it the one above would be satisfied by a buffer that had simply
+    /// stopped waiting for anybody: an unfinished line is exactly what the window exists for, and it
+    /// still serves every second of it.
+    /// </summary>
+    [Fact]
+    public void AnUnfinishedMessage_StillServesTheWholeWindow()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(3);
+
+        buffer.Add_Segment("chan-a", "and then we should", T0);
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(2)));
+        Assert.Single(buffer.Take_ReadyDeliveries(T0.AddSeconds(3)));
+    }
+
+    /// <summary>
+    /// TWO FINISHED SENTENCES ARE NOT A SINGLE COMPLETE MESSAGE. The second one is evidence that the
+    /// first was not the whole thought, so the burst aggregates as it always did — which is why the
+    /// fast path asks about the SEGMENT COUNT and not only about the text.
+    /// </summary>
+    [Fact]
+    public void TwoFinishedSentencesInABurst_StillAggregate()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(3);
+
+        buffer.Add_Segment("chan-a", "restart the crew.", T0);
+        buffer.Add_Segment("chan-a", "and tell me what it says.", T0.AddSeconds(1));
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(2)));
+
+        Assert.Equal(
+            "restart the crew.\n\nand tell me what it says.",
+            buffer.Take_ReadyDeliveries(T0.AddSeconds(4))["chan-a"].Text);
+    }
+
+    /// <summary>
+    /// ⏸ STILL WINS OVER THE FAST PATH — the condition the owner attached to the change.
+    ///
+    /// A hold in force means nothing goes out until GO, and a finished sentence is no exception: the
+    /// receipt says ⏸ holding, and a message escaping under it would be the silent lapse of
+    /// 2026-08-20 all over again, arriving by a new route. The fast path therefore sits BELOW the hold
+    /// check, and this is what says so.
+    /// </summary>
+    [Fact]
+    public void AHoldStopsEvenAFinishedMessage()
+    {
+        var buffer = OwnerDeliveryBuffer_Factory.Create(3);
+
+        buffer.Hold("chan-a", T0);
+        buffer.Add_Segment("chan-a", "restart the crew.", T0.AddSeconds(1));
+
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddSeconds(1)));
+        Assert.Empty(buffer.Take_ReadyDeliveries(T0.AddMinutes(10)));
+        Assert.True(buffer.Is_Holding("chan-a"));
+
+        buffer.Release("chan-a");
+
+        Assert.Equal("restart the crew.", buffer.Take_ReadyDeliveries(T0.AddMinutes(10))["chan-a"].Text);
+    }
 }

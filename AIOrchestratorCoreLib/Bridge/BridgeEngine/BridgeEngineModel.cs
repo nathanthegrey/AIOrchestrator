@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Bridge.ChannelChangeWaker;
 using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
@@ -94,6 +95,14 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     const int ORPHAN_CONFIRM_MINUTES = 6;
 
+    /// <summary>
+    /// The CEILING on how long an append can go unnoticed — not the rate the loop runs at. It stays
+    /// 2000 because it is the safety net: <see cref="IChannelChangeWaker"/> ends the wait early when the
+    /// filesystem says a channel was written, and filesystem notification is best-effort everywhere
+    /// (inotify runs out of watches on a Linux box with many folders, a network filesystem reports
+    /// nothing, a container can have no backend at all). Where the watcher never fires, this loop
+    /// behaves EXACTLY as it did before it existed.
+    /// </summary>
     const int MIRROR_TICK_MILLISECONDS = 2000;
 
     /// <summary>How far back /log reads to find the whole of the last turn. A turn is tens of events; this is generous.</summary>
@@ -140,27 +149,40 @@ internal sealed class BridgeEngineModel(
     /// <summary>Below this age /cost prints no burn rate — dividing by minutes invents a number.</summary>
     const double MINIMUM_BURN_RATE_HOURS = 0.25;
 
-    /// <summary>The owner often texts several messages in a row — quiet time before delivery as ONE entry.</summary>
     /// <summary>
-    /// Short ON PURPOSE: most messages arrive alone, and a long window makes every one of them feel
-    /// slow. The multi-message case is covered explicitly by WAIT … GO instead of by making
-    /// everyone wait (owner directive).
-    /// </summary>
-    /// <summary>
-    /// How long a message waits before it is delivered, so a burst of texts arrives as ONE turn.
+    /// The owner often texts several messages in a row — quiet time before delivery as ONE entry, so a
+    /// burst arrives on the session as one turn instead of one turn each.
     ///
+    /// <para>
+    /// Short ON PURPOSE: most messages arrive alone, and a long window makes every one of them feel
+    /// slow. The multi-message case is covered explicitly by WAIT … GO instead of by making everyone
+    /// wait (owner directive).
+    /// </para>
+    /// <para>
     /// FOUR SECONDS WAS TOO SHORT TO BE HELD. WAIT can only stop a message that is still in the
     /// buffer, and four seconds is less than it takes to realise you have more to say and type a
     /// word — measured on the owner's machine, a WAIT five seconds behind its message arrived after
-    /// the take and stopped nothing.
-    ///
-    /// SIX, because the ⏸ button changed what the window has to be long enough FOR. It went to eight
-    /// while holding meant typing; with a tap sitting under the receipt the owner set it back down
-    /// themselves (2026-08-15) — "with the button we can reduce the window". The number is a balance
-    /// between how long a hold takes to express and how long every message waits, and the button
-    /// moved the first half of that.
+    /// the take and stopped nothing. It went to eight.
+    /// </para>
+    /// <para>
+    /// SIX, because the ⏸ button changed what the window has to be long enough FOR. Eight was the
+    /// number for a hold that meant typing; with a tap sitting under the receipt the owner set it back
+    /// down themselves (2026-08-15) — "with the button we can reduce the window". The number is a
+    /// balance between how long a hold takes to express and how long every message waits, and the
+    /// button moved the first half of that.
+    /// </para>
+    /// <para>
+    /// THREE, and the balance changed again on 2026-09-09 because the window is no longer served by
+    /// everybody. Measured on the VPS that day: 11–12 s median from the owner's text to the entry
+    /// landing in the supervisor's channel, six of them here — and the owner asked for the wait to
+    /// shrink. A message that is plainly over now skips this window ENTIRELY
+    /// (<see cref="OwnerMessageComplete_Decider"/>, asked below the ⏸ check so a hold still stops
+    /// everything), which leaves the window covering only what it was ever for: a burst of typing that
+    /// has not finished yet. Three seconds is what that costs, and it is paid by unfinished lines
+    /// rather than by every message.
+    /// </para>
     /// </summary>
-    const int OWNER_AGGREGATION_SECONDS = 6;
+    const int OWNER_AGGREGATION_SECONDS = 3;
 
     const string GLOBAL_ORCH_ID = "";
 
@@ -1058,6 +1080,12 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Run_MirrorLoop_Async(CancellationToken cancellationToken)
     {
+        // OWNED BY THE LOOP, so it dies with it: this method is relaunched by Run_Supervised_Async after
+        // a fault, and a watcher outliving the loop that reads it would be a handle nobody wakes.
+        using var waker = ChannelChangeWaker_Factory.Create(
+            _paths.Root,
+            line => _log.Log_Warning(GLOBAL_ORCH_ID, line));
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -1075,7 +1103,13 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                await Task.Delay(MIRROR_TICK_MILLISECONDS, cancellationToken);
+                // WAS A BARE Task.Delay, until 2026-09-09. Measured on the VPS that day: 11–12 s median
+                // from the owner's Telegram message to their supervisor's turn starting, and this wait
+                // is on that path TWICE — the tick that writes their message into the channel is not
+                // the tick that carries the answer back. It now ends on a channel write as well as on
+                // the tick; everything else in this loop is unchanged, and on a machine whose watcher
+                // never fires so is this.
+                await waker.Wait_ForChangeOrTick_Async(MIRROR_TICK_MILLISECONDS, cancellationToken);
             }
             catch (OperationCanceledException)
             {
