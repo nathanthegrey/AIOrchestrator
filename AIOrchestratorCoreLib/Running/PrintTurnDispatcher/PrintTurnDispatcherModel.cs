@@ -469,7 +469,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var source in sources)
         {
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(source.ChannelFilePath));
+            var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
 
             if (!known.TryGetValue(source.Key, out var cursor))
             {
@@ -848,7 +848,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 continue;
 
             var delivered = pending.Where(item => SOURCE_KEYS.Equals(item.Source.Key, source.Key)).Select(item => item.Entry).ToList();
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(source.ChannelFilePath));
+            var entries = ChannelHistory_Cache.Read_Entries(source.ChannelFilePath);
 
             advanced.Add(TurnCursor_Factory.CreateFrom_Delivered(cursor, state.Role, entries, delivered));
         }

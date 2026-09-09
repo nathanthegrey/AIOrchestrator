@@ -167,6 +167,34 @@ internal sealed class BridgeEngineModel(
     readonly ISupervisionPaths _paths = paths;
     readonly IOrchestratorConfigProvider _configProvider = configProvider;
     readonly IOrchestrationSessionStore _store = store;
+
+    /// <summary>
+    /// THE TICK'S OWN ROSTER, loaded once at the top of <see cref="Execute_MirrorTick_Async"/> and
+    /// dropped when it ends. Null outside a tick, which is what <see cref="Sessions_ThisTick"/> reads
+    /// to fall back to the store.
+    ///
+    /// <para>
+    /// WHY: thirteen sweeps inside one tick each asked the store for every orchestration, so a
+    /// three-orchestration root enumerated the supervision folder and read three <c>session.json</c>
+    /// files thirteen times every two seconds — for a roster that no code between them can change.
+    /// </para>
+    /// <para>
+    /// IT CHANGES NO BEHAVIOUR, and that is not an assumption. A session created or closed WHILE a
+    /// tick runs is already only seen by the NEXT tick for every sweep that ran before the change:
+    /// the tick is one sequential await chain and the roster it reads is whatever the disk held at
+    /// the moment each sweep asked. Fixing the moment to the tick's start moves that boundary by
+    /// less than one tick and makes the sweeps agree with each other, which they previously did only
+    /// by luck.
+    /// </para>
+    /// <para>
+    /// ONLY THE TICK'S OWN SWEEPS READ IT. Every method that takes this snapshot has exactly one
+    /// caller — the tick — so nothing reached from the poll loop (a Telegram command, a request file)
+    /// can be handed it. Those keep calling the store, which is the point: a command that has just
+    /// created an orchestration must see it, and a snapshot taken by a tick already in flight would
+    /// not contain it.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<IOrchestrationSession>? _sessionsThisTick;
     readonly IOrchestrationLauncher _launcher = launcher;
     readonly IOrchestrationLog _log = log;
     readonly IChannelTailer _tailer = tailer;
@@ -430,6 +458,30 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _reportedStaleInProgress = [];
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
+
+    /// <summary>
+    /// THE CURSOR AS IT WAS LAST WRITTEN TO DISK — the thing a new one has to differ from before the
+    /// file is rewritten. Null until the first write of this process, which is why that first write
+    /// always happens whatever the cursor holds.
+    ///
+    /// <para>
+    /// WHY A COMPARISON AND NOT A DIRTY FLAG. The persisted offsets are not a field anyone assigns:
+    /// <see cref="IChannelTailer.Get_OffsetsSnapshot"/> DERIVES each one, per file, as the cursor
+    /// minus the bytes that are pending and the bytes that are unconfirmed. Three moving parts, in a
+    /// dozen mutation sites inside the tailer's poll, and a flag missing from any one of them is a
+    /// cursor that silently stops being saved — the one failure this file's own class remark calls a
+    /// silent one-way hole in the mirror. A comparison cannot be incomplete: it asks the same
+    /// question the file answers.
+    /// </para>
+    /// <para>
+    /// IT COSTS A DICTIONARY WALK OVER THE OPEN CHANNELS and saves an atomic file write — a temp file,
+    /// a flush and a rename — on every tick that mirrored nothing, which on a quiet orchestration is
+    /// most of them. The tick was rewriting this file thirty times a minute to store bytes identical
+    /// to the ones already there.
+    /// </para>
+    /// </summary>
+    IReadOnlyDictionary<string, long>? _persistedOffsets;
+    long _persistedUpdateId;
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
 
     /// <summary>
@@ -950,6 +1002,18 @@ internal sealed class BridgeEngineModel(
             // In-flight print turns die with the bridge (process trees killed); their state was not
             // advanced, so the same entries are pending at the next start.
             await _printTurns.Stop_Async();
+
+            // THE LAST WRITE, FORCED. Every other call skips a cursor identical to the one on disk,
+            // which is right thirty times a minute and wrong exactly once: if the remembered cursor
+            // has drifted from the file for any reason, no later tick exists to correct it. The
+            // write costs nothing here and what it protects against is BridgeState_Store's silent
+            // one-way hole — entries appended before the next start never mirrored at all.
+            Persist_BridgeState(force: true);
+
+            // The buffered turn-log lines are the trace of the turns that were running when the app
+            // stopped, which is the tail most worth having. Same guarantee as every append: it never
+            // throws, because losing the tail is never worth failing the shutdown.
+            Running.TurnLog.TurnLog_Store.Flush_All();
         }
     }
 
@@ -1094,6 +1158,29 @@ internal sealed class BridgeEngineModel(
         // unaffected; a spent allowance means blocked channels fail fast and retry next tick, which
         // is a defined path (logged, and the owner's message goes back in its buffer).
         using var tickAllowance = ChannelWrite_Lock.Open_TickAllowance(ChannelWrite_Lock.DEFAULT_TICK_ALLOWANCE);
+
+        // ONE ROSTER FOR THE WHOLE TICK — see _sessionsThisTick. Taken here, before anything reads
+        // it, and released in the finally so that a tick which throws cannot leave a stale roster
+        // behind for the next one.
+        _sessionsThisTick = _store.Load_All();
+
+        try
+        {
+            await Execute_MirrorTick_Inside_Snapshot_Async(cancellationToken);
+        }
+        finally
+        {
+            _sessionsThisTick = null;
+        }
+    }
+
+    /// <summary>
+    /// The tick itself. Split from <see cref="Execute_MirrorTick_Async"/> for one reason only: the
+    /// roster snapshot has to be released on every exit path, including the exceptional ones, and a
+    /// try/finally wrapped around a two-hundred-line body would have re-indented all of it.
+    /// </summary>
+    async Task Execute_MirrorTick_Inside_Snapshot_Async(CancellationToken cancellationToken)
+    {
 
         // ABOVE EVERYTHING THAT SPENDS THE ACCOUNT, and above the DND gate far below. A pause is
         // not a message: it is the app deciding not to spend an allowance it is about to exhaust,
@@ -1542,7 +1629,7 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient == null)
             return;
 
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null)
                 continue;
@@ -1586,7 +1673,7 @@ internal sealed class BridgeEngineModel(
             // The other direction — the owner spoke and the SESSION went quiet — is already covered
             // by the reply nudge, which wakes the session instead of asking them to.
             if (!Status.OwnerOwesReply_Decider.Decide(
-                    ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId)))))
+                    ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId))))
                 continue;
 
             // THE SEVENTH SITE THAT NAMED A SUPERVISOR, and the one SpeakerLabel_Formatter's summary
@@ -1678,7 +1765,7 @@ internal sealed class BridgeEngineModel(
             if (!File.Exists(channelFile))
                 continue;
 
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var entries = ChannelHistory_Cache.Read_Entries(channelFile);
             var channelQuietFor = Nudge_Decider.Measure_QuietFor(entries, now);
 
             // A CHANNEL THAT CANNOT BE DATED CONTRIBUTES NOTHING TO THE MINIMUM, and skipping is the
@@ -1753,7 +1840,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Nudge_IdleImplementers_Async(CancellationToken cancellationToken)
     {
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null)
                 continue;
@@ -1772,7 +1859,7 @@ internal sealed class BridgeEngineModel(
                 if (!File.Exists(channelFile))
                     continue;
 
-                var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+                var entries = ChannelHistory_Cache.Read_Entries(channelFile);
                 var memberKey = $"{session.OrchId}/{member.MemberId}";
 
                 if (entries.Count == 0)
@@ -2258,7 +2345,7 @@ internal sealed class BridgeEngineModel(
             if (!File.Exists(channelFile))
                 continue;
 
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+            var entries = ChannelHistory_Cache.Read_Entries(channelFile);
 
             if (!Nudge_Decider.Owes_MemberAVerdict(entries))
                 continue;
@@ -2426,7 +2513,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Check_LedgerHealth_Async(CancellationToken cancellationToken)
     {
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null)
                 continue;
@@ -2671,7 +2758,7 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient == null || budgetTokens == null || budgetTokens.Value <= 0)
             return;
 
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null)
                 continue;
@@ -3081,7 +3168,7 @@ internal sealed class BridgeEngineModel(
         // supervisor's entry no longer last and the verdict was missed entirely.
         if (supervisorEntryIndexes.Count > 0)
         {
-            var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(append.Channel.FilePath));
+            var entries = ChannelHistory_Cache.Read_Entries(append.Channel.FilePath);
 
             foreach (var index in supervisorEntryIndexes)
             {
@@ -6400,7 +6487,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Refresh_ProgressArtefacts()
     {
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null)
                 continue;
@@ -8179,7 +8266,7 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient == null)
             return;
 
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
@@ -8465,7 +8552,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Report_GuardsNotInForce()
     {
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null)
                 continue;
@@ -8552,7 +8639,7 @@ internal sealed class BridgeEngineModel(
 
     void Flag_IdleMembers()
     {
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null)
                 continue;
@@ -8580,7 +8667,7 @@ internal sealed class BridgeEngineModel(
                 if (!File.Exists(channelFile))
                     continue;
 
-                var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+                var entries = ChannelHistory_Cache.Read_Entries(channelFile);
 
                 if (!Status.Retirement_Advisor.Should_SuggestClosing(entries, Nudge_Decider.Has_BeenBriefed(channelFile), DateTime.Now))
                     continue;
@@ -8664,7 +8751,7 @@ internal sealed class BridgeEngineModel(
         // Whose move it is, read once for this whole status block: the supervisor row and a solo's
         // member row are the same conversation, so they must not answer it differently.
         var ownerOwesReply = Status.OwnerOwesReply_Decider.Decide(
-            ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId))));
+            ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId)));
 
         var supervisorContextSuffix = Build_ContextSuffix_ForSupervisor(supervisorUsage);
         var supervisorLine = Is_Working(
@@ -8983,7 +9070,7 @@ internal sealed class BridgeEngineModel(
 
         var memberId = $"imp-{digits[0]}";
         var channelFile = Channels.MemberChannel_Locator.Get_ChannelFile(_paths, session.OrchId, memberId);
-        var entries = ChannelEntry_Parser.Parse_All(UsageTotals_Reader.Read_Text_Safe(channelFile));
+        var entries = ChannelHistory_Cache.Read_Entries(channelFile);
 
         if (entries.Count == 0)
             return $"{memberId}: no traffic yet";
@@ -9996,7 +10083,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Break_SilentDeadlock_Async(CancellationToken cancellationToken)
     {
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
@@ -10136,7 +10223,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Sync_MeetingFlags()
     {
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             // A closed orchestration is never in a meeting, whatever its last presence said.
             var presence = session.ClosedUtc == null ? session.OwnerPresence : OwnerPresenceModes.Remote;
@@ -10274,7 +10361,7 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     void Expire_StaleAwaitingAnswerFlags()
     {
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null)
                 continue;
@@ -11497,7 +11584,7 @@ internal sealed class BridgeEngineModel(
         // straddles a boundary split the batch across two slots — the trickle, in miniature.
         var now = DateTime.Now;
 
-        foreach (var session in _store.Load_All())
+        foreach (var session in Sessions_ThisTick())
         {
             if (session.ClosedUtc != null || session.TelegramTopicId == null)
                 continue;
@@ -11734,7 +11821,7 @@ internal sealed class BridgeEngineModel(
         if (OwnerPresence_Policy.Suppresses_SupervisorAttention(Resolve_Presence(ChannelDiscovery.GENERAL_ORCH_ID)))
             return true;
 
-        return _store.Load_All().Any(session =>
+        return Sessions_ThisTick().Any(session =>
             session.ClosedUtc == null && OwnerPresence_Policy.Suppresses_SupervisorAttention(session.OwnerPresence));
     }
 
@@ -11827,8 +11914,7 @@ internal sealed class BridgeEngineModel(
                 return Telegram.OwnerReplyStates.Blocking;
         }
 
-        var ownerEntries = ChannelEntry_Parser.Parse_All(
-            UsageTotals_Reader.Read_Text_Safe(_paths.Get_OwnerChannelFile(session.OrchId)));
+        var ownerEntries = ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId));
 
         // A QUESTION, not merely the last word. OwnerOwesReply_Decider answers "whose move is it",
         // which is true after every report the session writes — including its answer to the owner —
@@ -13279,12 +13365,66 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    void Persist_BridgeState()
+    /// <summary>
+    /// The orchestrations this pass should reason about: the tick's own snapshot while a tick is
+    /// running, and a fresh read from the store otherwise.
+    ///
+    /// The fallback is not defensive padding — it is the contract. Every sweep that calls this has
+    /// the tick as its only caller today, and the day one of them is also called from a Telegram
+    /// command it must read the disk rather than a roster some other thread happens to be holding.
+    /// </summary>
+    IReadOnlyList<IOrchestrationSession> Sessions_ThisTick()
+    {
+        return _sessionsThisTick ?? _store.Load_All();
+    }
+
+    /// <summary>
+    /// Writes the mirror cursor — but ONLY when it says something the file does not already say.
+    ///
+    /// <para>
+    /// <paramref name="force"/> is for shutdown, and it is not belt and braces: the skip above is
+    /// only ever correct while <see cref="_persistedOffsets"/> is what the file holds, and the one
+    /// thing that can break that is a write that failed. <c>Atomic_FileWriter</c> throws on failure
+    /// and this method does not catch — so a failed write leaves the remembered cursor UNCHANGED and
+    /// the next tick tries again — but the last write of the process has no next tick, so it does not
+    /// get to rely on that.
+    /// </para>
+    /// </summary>
+    void Persist_BridgeState(bool force = false)
     {
         lock (_stateLock)
         {
-            BridgeState_Store.Save(_paths, _tailer.Get_OffsetsSnapshot(), _lastUpdateId);
+            var offsets = _tailer.Get_OffsetsSnapshot();
+
+            if (!force && _persistedUpdateId == _lastUpdateId && Is_SameCursor(_persistedOffsets, offsets))
+                return;
+
+            BridgeState_Store.Save(_paths, offsets, _lastUpdateId);
+
+            // AFTER the write, never before: remembering a cursor the disk never took is how the
+            // skip turns into a lost cursor rather than a saved write.
+            _persistedOffsets = offsets;
+            _persistedUpdateId = _lastUpdateId;
         }
+    }
+
+    /// <summary>
+    /// Whether two cursors would produce the same file. Same count and same value for every key —
+    /// a channel that disappeared from the snapshot changes the count, so no key needs checking in
+    /// the other direction.
+    /// </summary>
+    static bool Is_SameCursor(IReadOnlyDictionary<string, long>? persisted, IReadOnlyDictionary<string, long> current)
+    {
+        if (persisted == null || persisted.Count != current.Count)
+            return false;
+
+        foreach (var pair in current)
+        {
+            if (!persisted.TryGetValue(pair.Key, out var persistedOffset) || persistedOffset != pair.Value)
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>

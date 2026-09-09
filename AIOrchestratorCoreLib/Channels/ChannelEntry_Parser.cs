@@ -52,6 +52,49 @@ public static partial class ChannelEntry_Parser
         return entries;
     }
 
+    /// <summary>
+    /// HOW MANY ENTRIES the text holds, WITHOUT BUILDING ANY OF THEM. Same splitting and same header
+    /// pattern as <see cref="Parse_All"/> — it is that method with the entry construction removed —
+    /// so the two can never answer differently about the same text.
+    ///
+    /// <para>
+    /// IT EXISTS FOR ONE CALLER AND ONE QUESTION: <see cref="Channel_Compactor"/> asks, of every
+    /// channel, on every 2-second tick, whether the file is over its threshold — and the answer is
+    /// "no" for every short-lived orchestration in the system. Paying <see cref="Parse_All"/> for that
+    /// no meant allocating an entry object, a line list and four substrings per entry, for every
+    /// channel, thirty times a minute, to throw all of it away.
+    /// </para>
+    /// <para>
+    /// IT IS A PRE-FILTER, NOT THE DECISION. The compactor still parses before it archives anything:
+    /// what leaves the live file has to be the entries themselves, and a count is not evidence about
+    /// them.
+    /// </para>
+    /// </summary>
+    public static int Count_Entries(string channelText)
+    {
+        if (string.IsNullOrEmpty(channelText))
+            return 0;
+
+        var count = 0;
+        var remaining = channelText.AsSpan();
+
+        while (!remaining.IsEmpty)
+        {
+            var lineBreak = remaining.IndexOf('\n');
+            var line = lineBreak < 0 ? remaining : remaining[..lineBreak];
+
+            if (Header_Regex().IsMatch(line.TrimEnd('\r')))
+                count++;
+
+            if (lineBreak < 0)
+                break;
+
+            remaining = remaining[(lineBreak + 1)..];
+        }
+
+        return count;
+    }
+
     public static int Get_NextIndex(string channelText)
     {
         var entries = Parse_All(channelText);
