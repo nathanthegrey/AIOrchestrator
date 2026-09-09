@@ -4,8 +4,9 @@ Questo file racconta a chi non ha seguito giorno per giorno **che cosa abbiamo c
 e per quale ragione**. Racconta idee e decisioni, non codice: chi vuole il dettaglio tecnico ha i
 messaggi di commit e le spec in `docs/superpowers/specs/`.
 
-Base: `ours/integration` sopra `master`. Alla data di questo file sono **76 commit** raggruppati in
-**22 rami `stage/*`**, ognuno tenuto integrabile su `master` per conto proprio.
+Base: `ours/integration` sopra `master`. Al 2026-09-09 sono **80 commit** raggruppati in **23 rami
+`stage/*`**, ognuno tenuto integrabile su `master` per conto proprio. Tutto quello che c'è qui è
+girato in produzione sul server dal 2026-09-09, con la suite verde (2756 test, 9 saltati, 0 rossi).
 
 ---
 
@@ -42,7 +43,9 @@ Un lettore che scopre il prezzo da solo, dopo, smette di fidarsi del resto del f
 > **Dove.** I rami `stage/*`, per chi poi vuole andare a vedere.
 
 **Dove metterla.** In fondo alla sezione tematica giusta. Se nessuna sezione va bene, se ne apre
-una nuova; l'ordine dentro una sezione non ha significato.
+una nuova; l'ordine dentro una sezione non ha significato. La sezione 6 è l'unica che parla di
+lavoro non ancora fatto: chi ci scrive dentro mette la data, e chi finisce una di quelle cose la
+sposta su, in una voce vera.
 
 **Se un cambiamento successivo ne annulla uno precedente**, non si cancella la voce vecchia: si
 riscrive dicendo che cosa è stato ritirato e perché. La storia di una decisione cambiata vale più
@@ -311,6 +314,11 @@ voce sola indirizzata dove gli pare. Un supervisore ucciso mentre rispondeva al 
 scrivere il rapporto altrove, e la domanda del proprietario risultava consegnata senza che restasse
 nessuno a occuparsene. Adesso si consuma solo ciò a cui si è davvero risposto.
 
+**Un limite che non limita, detto perché non ci si conti.** Il turno di chiusura ha un tetto di
+spesa dichiarato, ma quel tetto è controllato **dopo** il passo, non prima: misurato, con un tetto
+di 0,0001 dollari ne sono stati spesi 0,11. Quello che davvero delimita il turno di chiusura è il
+suo tempo massimo, non il tetto.
+
 **Dove.** `stage/7f-timeout-closing-turn`, `stage/7j-closing-turn-fixes`.
 
 ### Uno stop svuota prima di uccidere
@@ -387,6 +395,26 @@ misura presa prima e dopo, sullo stesso punto, sono opinioni.
 
 **Dove.** `stage/4b-state-pack`.
 
+### Implementatori e revisori ripartono puliti a ogni turno
+
+**Com'era.** Ogni sessione continuava la conversazione precedente, quindi si portava dietro tutto
+quello che aveva già letto e detto, turno dopo turno.
+
+**Cos'è adesso.** Implementatori e revisori ricominciano da zero a ogni turno, e ricevono in mano il
+pacchetto di stato descritto qui sopra. È una modifica di configurazione, non di codice: è
+l'interruttore che accende tutto il lavoro di questa sezione.
+
+**Perché e quanto.** L'83% del contesto consumato sul server era roba trascinata dai turni
+precedenti — pagata di nuovo a ogni chiamata, senza che nessuno l'avesse chiesta. Dopo il
+cambiamento, misurato: i token per chiamata di un membro passano da 345 mila a circa 100 mila e
+restano stabili; su un compito breve, il costo per consegna scende di circa 4,7 volte.
+
+**Dove è finito il costo che resta.** Non è sparito: si è spostato **dentro** i turni lunghi. Il 41%
+dei token dei membri in una serata sta in turni arrivati fino alla scadenza dei trenta minuti. È il
+prossimo pezzo di lavoro (vedi la sezione 6).
+
+**Dove.** configurazione del server, e `stage/4b-state-pack` per il pacchetto che la rende possibile.
+
 ---
 
 ## 4. Velocità e costo dell'app
@@ -449,6 +477,26 @@ soldi e le revisioni profonde; nel dubbio si sale di un livello — e la scelta 
 proprietario **insieme alla ragione**, così vede per che cosa sta pagando.
 
 **Dove.** `stage/1j-implementer-model`.
+
+### Un'impostazione che si legge una volta sola è un'impostazione che mente
+
+**Com'era.** Il modello del supervisore generale veniva fissato alla prima registrazione della
+sessione e non veniva più riletto. La configurazione diceva un modello, la sessione ne stava usando
+un altro dal giorno prima, e nessun riavvio poteva cambiarla.
+
+**Cos'è adesso.** Il modello viene riconciliato con la configurazione all'inizio di ogni turno, cioè
+nel punto in cui serve davvero, e la riconciliazione viene scritta nel registro.
+
+**Perché era sfuggito.** Tutte le altre sessioni ripassano da un punto che rilegge la
+configurazione — un membro lo fa quando viene aggiunto o fatto ripartire — e il supervisore generale
+è l'unico che non ci ripassa mai, apposta: non c'è un processo da sorvegliare, quindi non viene mai
+fatto ripartire. Un caso speciale corretto da una parte lascia scoperta la lettura dall'altra.
+
+**Il principio, che vale oltre questo caso.** Un valore va riconciliato nel punto in cui produce
+effetto, non nel punto in cui è comodo leggerlo. Altrimenti il sistema mostra un'impostazione e ne
+applica un'altra, e chi la cambia crede di aver cambiato qualcosa.
+
+**Dove.** `stage/4f-general-model-refresh`.
 
 ---
 
@@ -575,3 +623,36 @@ arrivati al proprietario nella forma «l'app si è mangiata il mio messaggio». 
 l'unico controllo che ha trovato qualcosa.
 
 **Dove.** raccontata in `docs/superpowers/specs/2026-09-09-report-lavoro-e-runbook.md`.
+
+---
+
+## 6. Che cosa stiamo facendo adesso
+
+Questa sezione è l'unica che parla al futuro, quindi invecchia in fretta: **aggiornata al
+2026-09-09**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
+
+**Dov'è il costo che resta.** Le sessioni fresche hanno tolto di mezzo il contesto trascinato da un
+turno all'altro; adesso la spesa è concentrata **dentro** i turni lunghi, quelli che arrivano fino
+alla scadenza. Il prossimo intervento è un consiglio dato a metà turno — «arriva a un punto stabile,
+salva, racconta» — mentre la scadenza resta la rete dura di prima. È un suggerimento, non un
+divieto: chi lavora deve poter decidere che il punto stabile è più in là.
+
+**Le altre cose in fila:** un riassunto di risveglio per il supervisore, così i messaggi meccanici
+non gli comprano un turno intero; il modello scelto direttamente nell'incarico invece che nella
+configurazione, e la chiave del revisore separata da quella dell'implementatore, che oggi sono la
+stessa; e infine il supervisore fresco anche lui, con il suo pacchetto — che è già costruito e sta
+lì spento.
+
+**Cose aperte, dette perché non sembrino risolte.**
+- I guadagni misurati sono **misurati prima della messa in produzione**: sul server, dopo, non sono
+  ancora stati rifatti. Sono attesi, non verificati.
+- Il file di istruzioni del progetto principale è stato modificato benché sia territorio di chi ha
+  scritto l'originale: andrà risolto al prossimo allineamento.
+
+**Una lezione di processo, che vale più di una funzione.** Il 2026-09-09 due filoni di lavoro sono
+andati avanti in parallelo sugli stessi file, e **la stessa funzione è stata costruita due volte** —
+il turno di chiusura, da due parti che non sapevano l'una dell'altra. Ha vinto la versione migliore
+e l'altra è stata tenuta solo come traccia, ma sono ore buttate. Da lì la regola: chi sta per
+mettere mano a un pezzo lo dichiara prima, in un file che gli altri leggono, con l'elenco dei file
+che intende toccare. Il costo del coordinamento è di gran lunga inferiore al costo di scoprirlo
+dopo.
