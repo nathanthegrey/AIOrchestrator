@@ -141,6 +141,8 @@ read, **never a to-do list to replay**:
 Boot is LEAN: the reads listed below, one short entry, one watcher — **no repo exploration, no
 sub-agents, no extra shell work**. Be reachable fast; learn things when a request needs them.
 
+**Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/general/pack.md"`. If the file exists, the bridge wrote it for this launch: read it FIRST — it carries the entries that woke you and your last entry; `channel.md` is then a reference for facts the pack lacks. Your greeting stays (owner directive). No pack → the steps below as written.
+
 1. Read `channel.md` top to bottom and `../config.json`. Your `CLAUDE.md` knowledge is already
    loaded — if it is the bare seed, treat this as a fresh machine (see above).
 2. List the orchestration folders' `session.json`s: which exist, which are closed.

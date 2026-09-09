@@ -234,17 +234,22 @@ public class ClaudeCliContractLiveTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// What the fresh-mode PrintRunner relies on and the 2026-09-05 study never measured: a slash
-    /// command as the POSITIONAL prompt and an instruction on STDIN in the same invocation. Two
-    /// questions, one run: does the command still expand, and does the stdin text reach the model?
-    /// The evidence is saved whatever the answer — a "no" here changes the fresh-turn design, it does
-    /// not get argued away.
+    /// HOW A POSITIONAL SLASH COMMAND AND STDIN MEET — measured 2026-09-09 on 2.1.263 (haiku): the CLI
+    /// APPENDS the stdin text to the positional prompt in the same message, so the slash command's
+    /// <c>$ARGUMENTS</c> is "positional-arg-1\nAdditional instruction…" — the whole stdin. Both halves
+    /// reached the model (the probe wrote both files and replied DONE); neither was ignored or
+    /// prepended. This is the fourth outcome the 4a preamble did not foresee, and the reason the fresh
+    /// turn's memory travels in a FILE (`pack.md`, stage 4b) with NOTHING on stdin: a skill that
+    /// interpolates <c>$ARGUMENTS</c> into a path (solo, communicator) would otherwise read the bridge's
+    /// prose as part of the path. The assertion pins the measured shape; a CLI that starts separating
+    /// the two would make it fail loudly, which is what a contract test is for.
     /// </summary>
     [LiveFact]
-    public void Print_SlashCommandPositional_PlusStdinInstruction_BothReachTheModel()
+    public void Print_SlashCommandPositional_PlusStdin_IsAppendedIntoArguments_AndBothExecute()
     {
         var probe = new ProbeWorkspace("live-positional-plus-stdin");
         var sessionId = Guid.NewGuid().ToString();
+        const string stdinInstruction = "Additional instruction arriving on stdin, part of the same message: after the slash command's own steps, also use the Bash tool to run exactly: echo STDIN_OK > stdin-out.txt   Then reply DONE.";
 
         try
         {
@@ -252,14 +257,17 @@ public class ClaudeCliContractLiveTests(ITestOutputHelper output)
                 ["-p", "--model", MODEL, "--output-format", "json", "--dangerously-skip-permissions", "--name", "aiorch-contract-ps", "--session-id", sessionId,
                  "/probe-hello positional-arg-1"],
                 probe.ProbeFolder,
-                stdin: "Additional instruction arriving on stdin, part of the same message: after the slash command's own steps, also use the Bash tool to run exactly: echo STDIN_OK > stdin-out.txt   Then reply DONE.",
+                stdin: stdinInstruction,
                 PRINT_TIMEOUT);
 
             probe.Save_Evidence("positional-plus-stdin.txt", run.Describe());
             _output.WriteLine(run.Describe());
 
             Assert.True(run.ExitCode == 0, run.Describe());
-            Assert.Equal("SLASH_ROLE_OK positional-arg-1", probe.Read_ProbeFile_OrEmpty("slash-out.txt"));
+
+            var slashOut = probe.Read_ProbeFile_OrEmpty("slash-out.txt");
+            Assert.StartsWith("SLASH_ROLE_OK positional-arg-1", slashOut);
+            Assert.Contains("Additional instruction arriving on stdin", slashOut);
             Assert.Equal("STDIN_OK", probe.Read_ProbeFile_OrEmpty("stdin-out.txt"));
         }
         finally

@@ -52,6 +52,8 @@ any code.
 
 ## Boot sequence — LEAN
 
+**Fresh start? Look for your PACK first.** Run `ls "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/pack.md"`. If the file exists, the bridge started you FRESH (no memory of earlier turns) and wrote it for you: read it FIRST — it carries the entries that woke you, your last report, the whole ledger (PLAN.md), the last owner-channel entries and the code state. Then treat the channel as a reference for facts the pack lacks, not as a to-do list, and skip the greeting in step 2 (the channel already carries your earlier entries). No pack → the steps below as written.
+
 1. Read the channel top to bottom. **You may be resuming** — it is the full history; an unanswered
    trailing `FROM owner` entry is your task.
 2. Append a SHORT greeting: subject `solo online — <repo> — <last two folders>`, empty body.

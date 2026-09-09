@@ -49,13 +49,13 @@ public static class PrintTurnPrompt_Builder
         "Do not file the online greeting your boot sequence describes — this channel already carries your earlier entries, and a greeting per turn is noise on the owner's phone.";
 
     /// <summary>
-    /// HOW THE ROLE COMMAND AND THIS PROMPT MEET IS NOT MEASURED. The fresh turn passes the role command
-    /// as the positional prompt and this text on stdin — a combination the 2026-09-05 study never ran,
-    /// and the live test written for it (<c>Print_SlashCommandPositional_PlusStdinInstruction_BothReachTheModel</c>)
-    /// hit the account's weekly limit on 2026-09-08 before it could answer. Three outcomes are possible
-    /// and this line makes all three safe: stdin ignored → today's behaviour (role command only);
-    /// both delivered → the intended one; stdin prepended so the slash command is no longer first and
-    /// does not expand → the session reads this and runs its role command itself, via the Skill tool.
+    /// MEASURED 2026-09-09 (2.1.263): stdin is APPENDED to the positional prompt in the same message,
+    /// so this text landed inside the slash command's <c>$ARGUMENTS</c> — the fourth outcome the three
+    /// below did not foresee (stdin ignored / both delivered / stdin prepended). The fresh turn's memory
+    /// therefore travels in a FILE (<see cref="StatePack.StatePack_Builder"/>) and nothing goes on stdin;
+    /// <see cref="Build_FreshSession"/> is no longer called by the executor and stays only until the next
+    /// stage removes it with its tests. The live test that pinned the shape:
+    /// <c>Print_SlashCommandPositional_PlusStdin_IsAppendedIntoArguments_AndBothExecute</c>.
     /// </summary>
     public const string FRESH_SESSION_ROLE_FALLBACK = "If your role command {0} has not run at the start of this message, invoke it now with the Skill tool before acting on anything below.";
 
