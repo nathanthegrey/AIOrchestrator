@@ -158,6 +158,82 @@ public class ChannelChangeWakerTests : IDisposable
         Assert.Single(lines);
     }
 
+    /// <summary>
+    /// A WATCH THAT IS LOST IS NOTICED, SAID ONCE, AND RE-ARMED — and this is the finding whose subject
+    /// is a platform this machine is not.
+    ///
+    /// <para>
+    /// Probed on macOS on 2026-09-09: deleting and recreating the supervision root cost the merged waker
+    /// nothing at all — it was reacting again 306 ms later, and it logged NOTHING, so nobody would have
+    /// known either way. On Linux, which is what the VPS runs, inotify drops the watch descriptor when
+    /// the watched directory goes and .NET does not re-add it; the merged waker had no re-arm path, so
+    /// the optimisation would have died silently for the life of the mirror loop and the bridge would
+    /// have fallen back to its 2 s tick with no line to say so. THE LINUX HALF IS INFERRED, NOT MEASURED
+    /// HERE — what this test can pin on any platform is that the loss is DETECTED, reported exactly once,
+    /// and followed by a watch that works.
+    /// </para>
+    /// <para>
+    /// It fails on the merged code for the first of those three: no line was ever written.
+    /// </para>
+    /// </summary>
+    [RequiresFileSystemWatcherEventsFact]
+    [Trait("Speed", "Slow")]
+    public async Task ARootDeletedAndRecreated_IsNoticedOnceAndTheWatchComesBack()
+    {
+        List<string> lines = [];
+
+        using var waker = ChannelChangeWaker_Factory.Create(_root, line => { lock (lines) lines.Add(line); });
+
+        // One wait first, so the watcher is armed and its first validity check is behind us.
+        await waker.Wait_ForChangeOrTick_Async(50, CancellationToken.None);
+
+        Directory.Delete(_root, recursive: true);
+
+        // Long enough for a validity check to see the root MISSING, which is one of the two detectors;
+        // the other (a creation stamp that has moved) covers the case where both halves happen inside
+        // one check period, so the test does not depend on which of them fires.
+        await Drive_Waits_Async(waker, TimeSpan.FromMilliseconds(ChannelChangeWaker_Factory.VALIDITY_CHECK_MILLISECONDS + 500));
+
+        Directory.CreateDirectory(Path.Combine(_root, "orch-1"));
+
+        await Drive_Waits_Async(waker, TimeSpan.FromMilliseconds((2 * ChannelChangeWaker_Factory.VALIDITY_CHECK_MILLISECONDS) + 500));
+
+        Assert.Single(lines);
+        Assert.Contains("armed again", lines[0], StringComparison.OrdinalIgnoreCase);
+
+        // THE HALF THAT MATTERS ON THE VPS: the replacement watch actually watches. A re-arm that only
+        // logged would be a line saying the optimisation is back when it is not.
+        var stopwatch = Stopwatch.StartNew();
+        var wait = waker.Wait_ForChangeOrTick_Async(A_TICK_NOBODY_REACHES, CancellationToken.None);
+
+        await Task.Delay(200);
+        File.AppendAllText(Path.Combine(_root, "orch-1", "owner-channel.md"), "\n## [1] FROM supervisor — x\nbody\n");
+
+        await wait;
+
+        Assert.True(
+            stopwatch.ElapsedMilliseconds < 2_000,
+            $"after the re-arm the wait ran for {stopwatch.ElapsedMilliseconds} ms — the replacement watch is not watching.");
+
+        // Said ONCE: a folder that stays replaced would otherwise write this line every check.
+        await Drive_Waits_Async(waker, TimeSpan.FromMilliseconds((2 * ChannelChangeWaker_Factory.VALIDITY_CHECK_MILLISECONDS) + 500));
+
+        Assert.Single(lines);
+    }
+
+    /// <summary>
+    /// Runs the waker's wait in short ticks for <paramref name="forHowLong"/>, which is the only way the
+    /// validity check is reached: it runs between full waits and nowhere else, so a test that merely
+    /// slept would exercise nothing.
+    /// </summary>
+    static async Task Drive_Waits_Async(IChannelChangeWaker waker, TimeSpan forHowLong)
+    {
+        var until = DateTime.UtcNow + forHowLong;
+
+        while (DateTime.UtcNow < until)
+            await waker.Wait_ForChangeOrTick_Async(100, CancellationToken.None);
+    }
+
     /// <summary>A cancelled tick ends the wait the way the loop above it already knows how to catch.</summary>
     [Fact]
     public async Task ACancelledToken_EndsTheWaitAsACancellation()

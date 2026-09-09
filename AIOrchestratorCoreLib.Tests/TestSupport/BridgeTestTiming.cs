@@ -61,6 +61,16 @@ internal static class BridgeTestTiming
     public const int TICK_LOCK_ALLOWANCE_MILLISECONDS = 150;
 
     /// <summary>
+    /// TWO TICKS, which is EXACTLY what the tailer's old quiet-poll count came to at this tick — the
+    /// growth poll starts the quiet stretch and the second poll after it releases the trailing entry,
+    /// the same poll that used to be the second quiet one. Production waits four seconds
+    /// (<c>ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS</c>) and no engine test asserts that
+    /// number; what they assert is that an appended entry eventually reaches the phone, which survives
+    /// intact at a hundredth of the period like every other number in this file.
+    /// </summary>
+    public const int TRAILING_ENTRY_QUIET_MILLISECONDS = 2 * TICK_MILLISECONDS;
+
+    /// <summary>
     /// The engine's own start-up before its first tick body completes — one config load, one
     /// session-store load, the tailer registering the channel files it has never seen. Generous on
     /// purpose: this is the only part of a window that is not tick-proportional, and the suite runs
@@ -71,7 +81,8 @@ internal static class BridgeTestTiming
     public static IBridgeEngineTiming Fast()
     {
         return BridgeEngineTiming_Factory.Create_Custom(
-            TICK_MILLISECONDS, AGGREGATION_SECONDS, RETRY_BACKOFF_SECONDS, TICK_LOCK_ALLOWANCE_MILLISECONDS);
+            TICK_MILLISECONDS, AGGREGATION_SECONDS, RETRY_BACKOFF_SECONDS, TICK_LOCK_ALLOWANCE_MILLISECONDS,
+            TRAILING_ENTRY_QUIET_MILLISECONDS);
     }
 
     /// <summary>
@@ -81,7 +92,8 @@ internal static class BridgeTestTiming
     public static IBridgeEngineTiming Fast_WithRetryBackoff(int retryBackoffSeconds)
     {
         return BridgeEngineTiming_Factory.Create_Custom(
-            TICK_MILLISECONDS, AGGREGATION_SECONDS, retryBackoffSeconds, TICK_LOCK_ALLOWANCE_MILLISECONDS);
+            TICK_MILLISECONDS, AGGREGATION_SECONDS, retryBackoffSeconds, TICK_LOCK_ALLOWANCE_MILLISECONDS,
+            TRAILING_ENTRY_QUIET_MILLISECONDS);
     }
 
     /// <summary>

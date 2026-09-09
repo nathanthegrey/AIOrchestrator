@@ -74,6 +74,66 @@ public class OwnerMessageCompleteDeciderTests
     }
 
     /// <summary>
+    /// THE FULL STOP THAT IS NOT AN ENDING — the rule was wrong in the EXPENSIVE direction, and the two
+    /// directions are not worth the same.
+    ///
+    /// <para>
+    /// A false "incomplete" costs the owner three seconds. A false "complete" takes the message out of
+    /// the buffer at once, which costs the ⏸ button its window and, when the rest of the thought is
+    /// still coming, a whole extra supervisor turn at roughly a million input tokens. So where the rule
+    /// cannot tell, it waits.
+    /// </para>
+    /// <para>
+    /// THE PAIR THAT MADE IT OBVIOUS: <c>hold on...</c> read as FINISHED while <c>hold on…</c> read as
+    /// unfinished — the same intent, typed with three dots or with U+2026, given opposite verdicts by an
+    /// accident of which character the phone keyboard produced.
+    /// </para>
+    /// </summary>
+    [Theory]
+    // An ellipsis is a pause, in either spelling. The single character already read as unfinished; the
+    // three dots did not, which is the half that was wrong.
+    [InlineData("hold on...")]
+    [InlineData("hold on…")]
+    [InlineData("thinking....")]
+    [InlineData("hold on ...")]
+    // An abbreviation's dot is not a sentence's dot, and mid-sentence is exactly where the owner is
+    // about to type the rest.
+    [InlineData("we should split it, e.g.")]
+    [InlineData("check the parser, i.e.")]
+    [InlineData("restart the crew, etc.")]
+    [InlineData("compare it with the other one, cf.")]
+    [InlineData("it is the same shape, vs.")]
+    [InlineData("let us meet at 5 p.m.")]
+    [InlineData("dividilo in due, ecc.")]
+    [InlineData("guarda a pag.")]
+    // An initial is a name that has not finished arriving.
+    [InlineData("ask J.")]
+    public void ADotThatIsNotAnEnding_IsNotComplete(string text)
+    {
+        Assert.False(
+            OwnerMessageComplete_Decider.Is_Complete(text),
+            $"'{text}' was read as a finished thought — it skips the window and the ⏸ button both");
+    }
+
+    /// <summary>
+    /// THE CONTROL. Being conservative about dots must not swallow the feature: an ordinary sentence
+    /// that happens to contain an abbreviation, or to end in a word that merely LOOKS short, is still
+    /// finished and must still go straight through.
+    /// </summary>
+    [Theory]
+    [InlineData("we should split it, e.g. the parser and the writer.")]
+    [InlineData("meet me at 5 p.m. in the usual place.")]
+    [InlineData("restart the crew, etc. — you know what I mean!")]
+    [InlineData("ask J. Rossi about it?")]
+    [InlineData("is it done...?")]
+    public void ASentenceThatMerelyCONTAINSAnAbbreviation_IsStillComplete(string text)
+    {
+        Assert.True(
+            OwnerMessageComplete_Decider.Is_Complete(text),
+            $"'{text}' is a finished sentence and should not have made the owner wait");
+    }
+
+    /// <summary>
     /// EMPTY IS NOT COMPLETE, and the reason is not tidiness: an empty text has no last character to
     /// read, so a decider that answered "true" here would answer it from an index that does not
     /// exist. A caption-less photo and a stripped-down forward both arrive as one.

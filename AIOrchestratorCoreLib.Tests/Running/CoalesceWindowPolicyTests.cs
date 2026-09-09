@@ -7,7 +7,7 @@ using Xunit;
 namespace AIOrchestratorCoreLib.Tests.Running;
 
 /// <summary>
-/// WHO PAYS THE COALESCE WINDOW AND WHO DOES NOT (owner decision, 2026-09-09).
+/// WHO PAYS THE WHOLE COALESCE WINDOW AND WHO PAYS A BREATH (owner decision, 2026-09-09).
 ///
 /// <para>
 /// The dispatcher waits <c>DEFAULT_COALESCE_WINDOW</c> — three seconds — for the pending set to stop
@@ -19,9 +19,15 @@ namespace AIOrchestratorCoreLib.Tests.Running;
 /// <para>
 /// For the OWNER it is three seconds of a person waiting on their phone, on top of the aggregation
 /// window and a mirror tick — 11–12 s median end to end, measured on the VPS the same day. So the
-/// window is WAIVED when the pending set contains something the owner wrote on an owner channel, and
-/// kept for everything else. Entries that happen to land in the same pass still ride along: the
-/// waiver skips the WAIT, it does not narrow the turn.
+/// window is SHORTENED to <c>CoalesceWindow_Policy.OWNER_BREATH_MILLISECONDS</c> when the pending set
+/// contains something the owner wrote on an owner channel, and kept in full for everything else.
+/// </para>
+/// <para>
+/// SHORTENED AND NOT WAIVED, since 2026-09-09 evening. Waiving it started the turn on the first pass,
+/// and a turn that has started cannot take what lands next: driven through the real dispatcher, an
+/// owner entry followed by a member report a second later bought TWO supervisor turns — the very cost
+/// the window exists to avoid, now charged after every owner message. The breath is what lets the
+/// report ride along.
 /// </para>
 /// <para>
 /// THE TWO HALVES ARE PINNED SEPARATELY BELOW — author, and channel — because a case that could be
@@ -33,16 +39,34 @@ public class CoalesceWindowPolicyTests
     static readonly ITurnSource OWNER = TurnSource_Factory.Create_Owner("/o/owner-channel.md");
     static readonly ITurnSource IMP = TurnSource_Factory.Create_Spoke("imp-1", "/o/imp-1/channel.md");
 
+    /// <summary>The configured window these cases are resolved against — production's three seconds.</summary>
+    static readonly TimeSpan WINDOW = TimeSpan.FromSeconds(3);
+
+    static readonly TimeSpan BREATH = TimeSpan.FromMilliseconds(CoalesceWindow_Policy.OWNER_BREATH_MILLISECONDS);
+
     static IChannelEntry Entry(string author, string subject)
     {
         return ChannelEntry_Parser.Parse_All($"## [1] FROM {author} — 2026-09-09 10:05 — {subject}\n\nbody\n")[0];
     }
 
-    /// <summary>The owner's phone line: the one case that skips the wait.</summary>
+    /// <summary>The owner's phone line: the one case that gets the short window.</summary>
     [Fact]
-    public void AnOwnerEntryOnTheOwnerChannel_WaivesTheWindow()
+    public void AnOwnerEntryOnTheOwnerChannel_GetsTheBreath()
     {
-        Assert.True(CoalesceWindow_Policy.Is_Waived([new PendingEntry(OWNER, Entry("owner", "restart the crew"))]));
+        Assert.Equal(BREATH, CoalesceWindow_Policy.Resolve_Window([new PendingEntry(OWNER, Entry("owner", "restart the crew"))], WINDOW));
+    }
+
+    /// <summary>
+    /// AND NEVER LONGER THAN THE CONFIGURED WINDOW. A deployment that coalesces faster than a breath
+    /// must not be SLOWED by the rule that exists to speed the owner up — this is the one direction the
+    /// policy may never move a caller in.
+    /// </summary>
+    [Fact]
+    public void AWindowShorterThanTheBreath_IsLeftAlone()
+    {
+        var tiny = TimeSpan.FromMilliseconds(200);
+
+        Assert.Equal(tiny, CoalesceWindow_Policy.Resolve_Window([new PendingEntry(OWNER, Entry("owner", "restart the crew"))], tiny));
     }
 
     /// <summary>
@@ -51,29 +75,29 @@ public class CoalesceWindowPolicyTests
     /// that stops the waiver from quietly becoming "no coalescing at all".
     /// </summary>
     [Fact]
-    public void MemberTraffic_StillServesTheWindow()
+    public void MemberTraffic_StillServesTheWholeWindow()
     {
-        Assert.False(CoalesceWindow_Policy.Is_Waived(
+        Assert.Equal(WINDOW, CoalesceWindow_Policy.Resolve_Window(
         [
             new PendingEntry(IMP, Entry("implementer", "task done")),
             new PendingEntry(IMP, Entry("implementer", "and the next one")),
-        ]));
+        ], WINDOW));
     }
 
     /// <summary>
     /// THE OWNER'S MESSAGE DOES NOT WAIT BEHIND A BUSY CREW. One owner entry in the set is enough,
-    /// and the members' entries ride the very same turn — the waiver skips the WAIT, it does not
+    /// and the members' entries ride the very same turn — the breath shortens the WAIT, it does not
     /// narrow what the turn reads.
     /// </summary>
     [Fact]
-    public void OneOwnerEntryAmongMemberReports_WaivesTheWindowForAllOfThem()
+    public void OneOwnerEntryAmongMemberReports_GivesAllOfThemTheBreath()
     {
-        Assert.True(CoalesceWindow_Policy.Is_Waived(
+        Assert.Equal(BREATH, CoalesceWindow_Policy.Resolve_Window(
         [
             new PendingEntry(IMP, Entry("implementer", "task done")),
             new PendingEntry(OWNER, Entry("owner", "stop everything")),
             new PendingEntry(IMP, Entry("implementer", "and the next one")),
-        ]));
+        ], WINDOW));
     }
 
     /// <summary>
@@ -82,9 +106,9 @@ public class CoalesceWindowPolicyTests
     /// owner CHANNEL is not by itself evidence that the owner is waiting.
     /// </summary>
     [Fact]
-    public void AMemberEntryOnTheOwnerChannel_DoesNotWaiveIt()
+    public void AMemberEntryOnTheOwnerChannel_KeepsTheWholeWindow()
     {
-        Assert.False(CoalesceWindow_Policy.Is_Waived([new PendingEntry(OWNER, Entry("implementer", "task done"))]));
+        Assert.Equal(WINDOW, CoalesceWindow_Policy.Resolve_Window([new PendingEntry(OWNER, Entry("implementer", "task done"))], WINDOW));
     }
 
     /// <summary>
@@ -95,15 +119,15 @@ public class CoalesceWindowPolicyTests
     /// supervisor, solo and general.
     /// </summary>
     [Fact]
-    public void AnOwnerEntryTypedIntoASpoke_DoesNotWaiveIt()
+    public void AnOwnerEntryTypedIntoASpoke_KeepsTheWholeWindow()
     {
-        Assert.False(CoalesceWindow_Policy.Is_Waived([new PendingEntry(IMP, Entry("owner", "do this one first"))]));
+        Assert.Equal(WINDOW, CoalesceWindow_Policy.Resolve_Window([new PendingEntry(IMP, Entry("owner", "do this one first"))], WINDOW));
     }
 
-    /// <summary>Nothing pending is not a waiver — the boot turn has its own reason to run.</summary>
+    /// <summary>Nothing pending is not the owner — the boot turn has its own reason to run.</summary>
     [Fact]
-    public void AnEmptyPendingSet_DoesNotWaiveIt()
+    public void AnEmptyPendingSet_KeepsTheWholeWindow()
     {
-        Assert.False(CoalesceWindow_Policy.Is_Waived([]));
+        Assert.Equal(WINDOW, CoalesceWindow_Policy.Resolve_Window([], WINDOW));
     }
 }

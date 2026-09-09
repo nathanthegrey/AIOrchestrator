@@ -1,7 +1,7 @@
 namespace AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 
 /// <summary>
-/// THE THREE PERIODS THE BRIDGE ENGINE WAITS OUT, as something a test can shrink.
+/// THE PERIODS THE BRIDGE ENGINE WAITS OUT, as something a test can shrink.
 ///
 /// <para>
 /// This is NOT a production mode and it is NOT config: <see cref="BridgeEngineTiming_Factory.Create_Production"/>
@@ -32,6 +32,21 @@ public interface IBridgeEngineTiming
 
     /// <summary>Pause before a channel whose mirror send failed is attempted again.</summary>
     int MirrorRetryBackoffSeconds { get; }
+
+    /// <summary>
+    /// How long a channel file must have stopped growing before the tailer releases its LAST entry —
+    /// <c>ChannelTailer_Factory.TRAILING_ENTRY_QUIET_MILLISECONDS</c> in production, and the reasoning
+    /// for the number lives there.
+    /// <para>
+    /// HERE BECAUSE A TEST PAYS IT IN WALL CLOCK, once per mirrored entry, exactly like the tick above:
+    /// an engine-driving test that appends an entry and waits for it on the phone would sit through four
+    /// real seconds for a guarantee it does not assert. It is the one period on this interface that is
+    /// not a sleep — the tailer reads it as a deadline — which is why the tailer also takes an
+    /// <c>IClock</c>; this knob is for the tests that drive the real loop and therefore have no clock to
+    /// step.
+    /// </para>
+    /// </summary>
+    int TrailingEntryQuietMilliseconds { get; }
 
     /// <summary>
     /// The whole of one mirror tick's WAITING on contended channel writes — what the tick hands to

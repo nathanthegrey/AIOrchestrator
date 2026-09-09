@@ -129,7 +129,13 @@ public static class BridgeEngine_Factory
     {
         // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
         var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
-        var tailer = ChannelTailer_Factory.Create(fileOffsets);
+        // The quiet period comes from the TIMING and not from the tailer's own default, for the reason
+        // every other period on IBridgeEngineTiming is there: an engine-driving test pays it in wall
+        // clock once per mirrored entry. Production resolves it back to the tailer's constant.
+        var tailer = ChannelTailer_Factory.Create(
+            fileOffsets,
+            TimeSpan.FromMilliseconds(timing.TrailingEntryQuietMilliseconds),
+            clock);
 
         var watchdog = SessionWatchdog_Factory.Create(paths, configProvider, store, launcher, log);
         var transcriber = Transcription.VoiceTranscriber.VoiceTranscriber_Factory.Create(log);
