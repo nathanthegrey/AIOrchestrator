@@ -86,15 +86,6 @@ public partial class MainWindow : Window
                 SilenceAllCheckBox.IsChecked = silenced;
         });
 
-        // Persisted, unlike the two modes above — so it starts from config rather than from off.
-        ItalianLayerCheckBox.IsChecked = configProvider.Get_Current().TelegramItalianLayer;
-
-        engine.ItalianLayerChanged += enabled => Dispatcher.BeginInvoke(() =>
-        {
-            if (ItalianLayerCheckBox.IsChecked != enabled)
-                ItalianLayerCheckBox.IsChecked = enabled;
-        });
-
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(REFRESH_INTERVAL_SECONDS) };
         _refreshTimer.Tick += (_, _) => Refresh_Orchestrations();
         _refreshTimer.Start();
@@ -457,11 +448,6 @@ public partial class MainWindow : Window
     void SilenceAllCheckBox_Changed(object sender, RoutedEventArgs e)
     {
         _engine.Set_SilenceAllTopics(SilenceAllCheckBox.IsChecked == true);
-    }
-
-    void ItalianLayerCheckBox_Changed(object sender, RoutedEventArgs e)
-    {
-        _engine.Set_ItalianLayer(ItalianLayerCheckBox.IsChecked == true);
     }
 
     void ShowSessionButton_Click(object sender, RoutedEventArgs e)

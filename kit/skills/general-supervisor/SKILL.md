@@ -75,7 +75,6 @@ One level up, `$AIORCH_SUPERVISION_ROOT/`:
     "communicatorModel": null,
     "telegramSupergroupChatId": null,
     "telegramOwnerUserId": null,
-    "telegramItalianLayer": false,
     "voiceTranscribeCommand": null
   }
   ```
@@ -88,8 +87,7 @@ One level up, `$AIORCH_SUPERVISION_ROOT/`:
   YOU as canned English requests ("make a summary…", "list every pending question…"); `/dnd`
   (mute), `/progress` (PLAN.md ledgers), `/tokens` (usage totals), `/cost` (the same lifetime
   figures read as money — per session, with the burn rate), `/limits` (5-hour and weekly windows)
-  and `/italian` (toggle the translation layer) are answered by the app itself and never involve
-  you.
+  are answered by the app itself and never involve you.
 
   **`/tail <session>` and `/log <session>` are the owner's window into a session that has NO
   terminal.** `/tail` says what it is doing right now — tools called, last text, outcome, cost;
@@ -112,10 +110,8 @@ One level up, `$AIORCH_SUPERVISION_ROOT/`:
 
   With the owner, write in the owner's language — the one they used. Everything else is English:
   files, code, commits, the ledger, and every channel entry addressed to another agent (briefs,
-  verdicts, reports). Decided by the owner 2026-09-09; the app no longer translates.
-  `telegramItalianLayer` (default false, read LIVE) is the leftover opt-in translation layer — an
-  owner can still switch it on for their own Telegram traffic by flipping this key in
-  `config.json`; it never covers files, code, or agent-to-agent channel entries.
+  verdicts, reports). Decided by the owner 2026-09-09; the app no longer translates — the
+  translation layer and its `/italian` toggle were removed the same day.
 
   Only add repos whose path EXISTS on this machine (verify each with Test-Path); record what you
   learned in your CLAUDE.md. Never touch `secrets.json` (the bot token) — the owner manages it

@@ -9,7 +9,6 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Time.Clock;
-using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 
@@ -126,7 +125,7 @@ public class StartOrchestrationDefaultShapeTests : IDisposable
 
         var engine = BridgeEngine_Factory.Create_WithDecisionState(
             _paths, configProvider, _store, launcher, _log, new CapturingTelegram_Fake(),
-            MessageTranslator_Factory.Create(_log), EngineStateStore_Factory.Create_InMemory(),
+            EngineStateStore_Factory.Create_InMemory(),
             Clock_Factory.Create_System(),
             BridgeTestTiming.Fast());
 
@@ -146,7 +145,7 @@ public class StartOrchestrationDefaultShapeTests : IDisposable
 
         File.WriteAllText(
             _paths.ConfigFile,
-            $$"""{"repos":[{"name":"Repo","path":{{System.Text.Json.JsonSerializer.Serialize(_tempRepo)}}}],"telegramSupergroupChatId":{{SUPERGROUP_CHAT_ID}},"telegramOwnerUserId":{{OWNER_USER_ID}},"telegramItalianLayer":false{{defaults}}}""");
+            $$"""{"repos":[{"name":"Repo","path":{{System.Text.Json.JsonSerializer.Serialize(_tempRepo)}}}],"telegramSupergroupChatId":{{SUPERGROUP_CHAT_ID}},"telegramOwnerUserId":{{OWNER_USER_ID}}{{defaults}}}""");
 
         // The provider reloads on the write stamp, and two writes inside one filesystem tick would
         // otherwise serve the stale config — the same guard PrintRunnerTestHarness needs.

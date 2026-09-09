@@ -261,9 +261,8 @@ public class LongEntriesFoldOnThePhoneTests : IDisposable
 
     IBridgeEngine Build_Engine()
     {
-        return BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
-            _paths, _configProvider, _store, _launcher, _log, _telegram, new EchoTranslator_Fake(),
-            BridgeTestTiming.Fast());
+        return BridgeEngine_Factory.Create_WithTelegramClient(
+            _paths, _configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
     void Write_Config(string? telegramBlock)
@@ -271,7 +270,7 @@ public class LongEntriesFoldOnThePhoneTests : IDisposable
         File.WriteAllText(
             _paths.ConfigFile,
             $"{{\"repos\":[],{telegramBlock}\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
-            + $"\"telegramOwnerUserId\":{OWNER_USER_ID},\"telegramItalianLayer\":false}}");
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
     }
 
     /// <summary>
