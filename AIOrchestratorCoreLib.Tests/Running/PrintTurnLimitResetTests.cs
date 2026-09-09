@@ -62,6 +62,35 @@ public class PrintTurnLimitResetTests
     }
 
     /// <summary>
+    /// WHY A MULTI-MEMBER WAIT RAN OUT, in the terms that settle it: for every member its executed
+    /// turns, its spent attempts and its appointment, and then the orchestration log.
+    ///
+    /// <para>
+    /// EXECUTED TURNS ARE IN HERE BECAUSE LEAVING THEM OUT COST A ROUND (2026-09-09). The first cut
+    /// of this message reported the deferred member's appointment and attempts only — and "no
+    /// appointment, no attempt spent" reads exactly the same whether the turn never ran at all or
+    /// ran and SUCCEEDED. It had succeeded: the fake had crashed on the invocation log two other
+    /// members were writing, and the dispatcher's third attempt drew the scenario's default turn.
+    /// The log is appended for the same reason — it is the only place the fake's own stderr
+    /// survives, and it is what finally named the crash.
+    /// </para>
+    /// </summary>
+    static string Describe_Wait(PrintRunnerTestHarness harness, string orchId, params string[] memberIds)
+    {
+        var members = memberIds.Select(memberId => Describe_Member(harness, orchId, memberId));
+
+        return $"{string.Join("; ", members)}\nlog:\n{Read_Log(harness, orchId)}";
+    }
+
+    static string Describe_Member(PrintRunnerTestHarness harness, string orchId, string memberId)
+    {
+        var state = harness.Read_State(SessionRoles.Implementer, orchId, memberId);
+
+        return $"{memberId}: executed {state.ExecutedTurns.Count}, attempts {state.FailedAttempts}, "
+            + $"appointment {state.RetryNotBeforeUtc?.ToString("o") ?? "none"}";
+    }
+
+    /// <summary>
     /// <see cref="PrintRunnerTestHarness.Drive_Until"/> with the clock pushed forward — the only way
     /// to reach a reset instant hours away without waiting for it. The dispatcher takes the time as an
     /// argument precisely so a test can say when it is.
@@ -452,7 +481,8 @@ public class PrintTurnLimitResetTests
             dispatcher,
             () => harness.Read_State(SessionRoles.Implementer, orchId, deferredMember).RetryNotBeforeUtc != null
                 && harness.Read_State(SessionRoles.Implementer, orchId, normalMember).ExecutedTurns.Count == 1,
-            PrintRunnerTestHarness.GENEROUS));
+            PrintRunnerTestHarness.GENEROUS),
+            Describe_Wait(harness, orchId, deferredMember, normalMember));
 
         var normalStateFile = PrintSessionState_Store.Get_StateFile(harness.Paths, SessionRoles.Implementer, orchId, normalMember);
         var normalBefore = File.ReadAllText(normalStateFile);
