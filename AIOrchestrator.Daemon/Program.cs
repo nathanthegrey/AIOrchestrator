@@ -1,5 +1,6 @@
 using AIOrchestrator.Daemon;
 using AIOrchestratorCoreLib.Composition.HostOptions;
+using AIOrchestratorCoreLib.Running;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -39,6 +40,12 @@ var builder = Host.CreateApplicationBuilder(args);
 // The orchestrator's own log goes to stdout through ConsoleLog_Writer; the host's framework
 // logger is kept for the lifetime's own problems only, so a start-up failure is never silent.
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+// THE HOST MUST NOT CUT THE DRAIN. Measured 2026-09-09 (three restarts): the dispatcher logged
+// "draining 2 in-flight turn(s) (up to 31 min)" and systemd logged "Deactivated successfully" 30 s
+// later every time — HostOptions.ShutdownTimeout at its default. Sized for the default turn timeout;
+// BridgeHost_Service says so at startup if the configured one outgrows it (ShutdownGrace_Rule).
+builder.Services.Configure<HostOptions>(hostOptions => hostOptions.ShutdownTimeout = ShutdownGrace_Rule.HOST_SHUTDOWN_TIMEOUT);
 
 builder.Services.AddSystemd();
 builder.Services.AddWindowsService(serviceOptions => serviceOptions.ServiceName = BridgeHost_Service.SERVICE_NAME);
