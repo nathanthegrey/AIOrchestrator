@@ -47,6 +47,30 @@ public interface ITurnExecutor
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// ONE SHORT TURN ON A TRANSCRIPT THE DEADLINE KILLED — "write where you are and stop". It is
+    /// always PRINT-SHAPED (<c>claude -p --resume &lt;killed id&gt; --max-budget-usd …</c>) whatever the
+    /// session's transport is, because a stream session's living process was killed along with its
+    /// turn and <c>--max-budget-usd</c> works only with <c>--print</c> — so the stream executor runs
+    /// it on the rung below rather than growing a second process seam of its own.
+    ///
+    /// <para>
+    /// NULL means this executor cannot run one — the only honest answer for a transport with no
+    /// print rung wired beneath it. The dispatcher then says so in one line and falls back to
+    /// today's behaviour (the attempt counts, the pending set is retried): decision 21, a component
+    /// that cannot evaluate its predicate says which one and does not invent a result.
+    /// </para>
+    /// </summary>
+    Task<ITurnResult?> Execute_ClosingTurn_Async(
+        IPrintSessionState state,
+        IRoleRunnerConfig roleConfig,
+        string resumeSessionId,
+        string closingRequestId,
+        IReadOnlyList<TurnSource.ITurnSource> sources,
+        IReadOnlyDictionary<string, string> environment,
+        TimeSpan timeout,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Releases whatever the executor is holding for this session — a resident process, in the only
     /// implementation that holds anything. Called when a turn's transport failed and the next
     /// attempt must start clean, and when the session is closed.

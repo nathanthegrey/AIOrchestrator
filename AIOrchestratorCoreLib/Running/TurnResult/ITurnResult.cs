@@ -10,6 +10,18 @@ public interface ITurnResult
     int ExitCode { get; }
     bool TimedOut { get; }
 
+    /// <summary>
+    /// WHICH KILL THIS WAS, when <see cref="TimedOut"/> is set — and the reason it is a field rather
+    /// than something inferred from the elapsed time. The heartbeat kills a process that has said
+    /// nothing for the silence limit (2 minutes by default) and the deadline kills a turn that
+    /// outlived the turn timeout (30 minutes): both come back timed out, with exit -1 and no result
+    /// document, so from here they are indistinguishable — yet one produced no bytes at all and the
+    /// other was working. Only the deadline kill earns a closing turn
+    /// (<see cref="ClosingTurn.ClosingTurn_Rule"/>), so the silence kill is MARKED where it is known,
+    /// by the stream executor, and never guessed at later.
+    /// </summary>
+    bool KilledOnSilence { get; }
+
     /// <summary>The CLI's own verdict (<c>is_error</c>); false when the JSON was absent.</summary>
     bool IsError { get; }
     string? Subtype { get; }

@@ -2,6 +2,7 @@ using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Running.ClosingTurn;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
@@ -872,8 +873,147 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return;
         }
 
+        // A DEADLINE KILL IS NOT AN ORDINARY FAILURE. The turn was working when the 30 minutes ran
+        // out (measured: 32–92 tool calls, 7–30 M input tokens), so it gets one short turn to say
+        // where it got to instead of having its entries re-run from scratch — the retry that
+        // discarded ~14 hours of work in the 2026-09-07/09 window.
+        if (ClosingTurn_Rule.Is_DeadlineKill(result))
+        {
+            await Close_Down_KilledTurn_Async(stateFile, state, pending, sources, tracker, configs, roleConfig, executor, environment, result, requestId, turnNumber, attempt, sessionId, cancellationToken);
+            return;
+        }
+
         Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, null);
     }
+
+    /// <summary>
+    /// THE CLOSING TURN: <c>claude -p --resume &lt;the killed transcript&gt; --max-budget-usd 2.00</c>
+    /// with "write where you are and stop", ONE attempt, its own short timeout — then the killed
+    /// turn is recorded as executed and its entries stop being pending. The report is itself new
+    /// traffic for the counterpart, so the next turn starts from the channel (and, in fresh mode,
+    /// from a new session id) rather than replaying a brief the model has already half-answered.
+    /// Spec section C1.3.
+    ///
+    /// <para>
+    /// THE ATTEMPT IS NOT SPENT when this works. A deadline kill that got its closing turn is a turn
+    /// that ENDED, not one that failed: counting it would walk a session towards its stall for doing
+    /// the one thing this path exists to make possible, and the 60-second backoff would delay traffic
+    /// that is no longer pending anyway.
+    /// </para>
+    /// <para>
+    /// EVERY BRANCH THAT CANNOT DO ITS JOB SAYS WHICH ONE, AND FALLS BACK TO TODAY'S BEHAVIOUR
+    /// (decision 21): a transport with no print rung to run it on, a closing turn that is itself
+    /// killed or refused, a reply that cannot be appended. Then the attempt counts and the entries
+    /// are retried exactly as before this stage existed — worse than a report, and no worse than
+    /// last week.
+    /// </para>
+    /// <para>
+    /// IN TRANSCRIPT MODE THE NEXT TURN STILL RESUMES THE KILLED TRANSCRIPT. Only Fresh mode mints a
+    /// new session id, and only Fresh mode is where the "fresh start" half of C1.3 lands; a
+    /// transcript-mode role keeps today's continuity, which is what its configuration asked for.
+    /// </para>
+    /// </summary>
+    async Task Close_Down_KilledTurn_Async(
+        string stateFile,
+        IPrintSessionState state,
+        IReadOnlyList<PendingEntry> pending,
+        IReadOnlyList<ITurnSource> sources,
+        SessionTracker tracker,
+        IRunnerConfigs configs,
+        RoleRunnerConfig.IRoleRunnerConfig roleConfig,
+        ITurnExecutor executor,
+        IReadOnlyDictionary<string, string> environment,
+        ITurnResult killed,
+        string requestId,
+        int turnNumber,
+        int attempt,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        // FIRST, because the closing turn takes minutes and this is the record of what already
+        // happened. The failure branches below therefore ask Record_Failure NOT to write it again.
+        Append_TurnEnded(state, requestId, attempt, pending, killed, TurnOutcomes.TIMEOUT, KILLED_AT_DEADLINE_NOTE);
+
+        var closingRequestId = ClosingTurn_Words.Build_RequestId(requestId);
+        var closingTimeout = ClosingTurn_Rule.Resolve_Timeout(configs.TurnTimeout);
+
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            _log.Log_Warning(state.OrchId, $"Turn {requestId} was killed at the deadline but this session has no transcript id to resume — no closing turn is possible, so its entries stay pending and are retried as before");
+            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            return;
+        }
+
+        _log.Log_Info(state.OrchId, $"Turn {requestId} was killed at the deadline after {killed.Elapsed.TotalMinutes:F1} min — running closing turn {closingRequestId} on session {sessionId} (up to {closingTimeout.TotalMinutes:F1} min, {ClosingTurn_Words.BUDGET_FLAG} {ClosingTurn_Words.Describe_Budget(ClosingTurn_Words.BUDGET_USD)})");
+
+        ITurnResult? closing;
+
+        try
+        {
+            closing = await executor.Execute_ClosingTurn_Async(state, roleConfig, sessionId, closingRequestId, sources, environment, closingTimeout, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // The app is stopping: nothing is recorded and the entries are pending at the next
+            // start, exactly as for a work turn cancelled at the same moment.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(state.OrchId, $"Closing turn {closingRequestId} could not be started — the killed turn's entries stay pending and are retried as before", ex);
+            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            return;
+        }
+
+        if (closing == null)
+        {
+            _log.Log_Warning(state.OrchId, $"'{state.MemberId}' runs on the {SessionRunner_Names.Get_Word(executor.Kind)} transport, which has no print rung wired beneath it: no closing turn can be run for {requestId}, so its entries stay pending and are retried as before");
+            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            return;
+        }
+
+        var closingOutcome = TurnOutcomes.Describe(closing);
+
+        if (!TurnOutcomes.Is_Success(closing))
+        {
+            _log.Log_Warning(state.OrchId, $"Closing turn {closingRequestId} reported nothing ({closingOutcome}, exit {closing.ExitCode}) — no state was written, so the killed turn's entries stay pending and are retried as before; {Tail(closing.RawStderr, 200)}");
+            Append_TurnEnded(state, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_FAILED_NOTE);
+            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            return;
+        }
+
+        if (!await Write_Reply_Async(state, sources, closing.ResultText))
+        {
+            _log.Log_Error(state.OrchId, $"Closing turn {closingRequestId} reported but its entry could not be appended — the channel stayed locked, so the killed turn's entries stay pending and are retried as before", null);
+            Append_TurnEnded(state, closingRequestId, 1, pending, closing, TurnOutcomes.ERROR, "closing turn — the state was reported but its entry could not be appended (channel locked)");
+            Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
+            return;
+        }
+
+        Append_TurnEnded(state, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_NOTE);
+
+        // ONE record for the pair, under the KILLED turn's number and request id — which is what
+        // makes those entries stop being pending, and what stops the same request id ever running
+        // again. The cost is the closing turn's: a turn killed at the deadline reports none of its
+        // own (no result document), and the money that was spent on this turn number after the kill
+        // is exactly what the closing turn spent.
+        var firstIndex = pending.Count == 0 ? 0 : pending[0].Entry.Index;
+        var lastIndex = pending.Count == 0 ? 0 : pending[^1].Entry.Index;
+        var executed = ExecutedTurn_Factory.Create(turnNumber, requestId, firstIndex, lastIndex, DateTime.UtcNow, TurnOutcomes.TIMEOUT, killed.TotalCostUsd ?? closing.TotalCostUsd, sessionId);
+
+        PrintSessionState_Store.Write(stateFile, PrintSessionState_Factory.CreateFrom_Existing_TurnExecuted(state, executed, sessionId, Advance_Cursors(state, sources, pending)));
+        tracker.LastFailureAt = null;
+        tracker.FirstTurnSinceStart = false;
+
+        _log.Log_Info(state.OrchId, $"Closing turn {closingRequestId} ended — {closingOutcome}, {Describe_Cost(closing)}, {closing.Elapsed.TotalSeconds:F1} s wall; the killed turn's entries are delivered and the next turn for '{state.MemberId}' starts from the channel");
+    }
+
+    /// <summary>What the killed turn's own record says it is now waiting for.</summary>
+    const string KILLED_AT_DEADLINE_NOTE = "killed at the deadline while working — a closing turn was run to write where it got to, and these entries are not re-run";
+
+    const string CLOSING_TURN_NOTE = "closing turn — where the killed turn got to, not a new answer to those entries";
+
+    const string CLOSING_TURN_FAILED_NOTE = "closing turn — no state was reported, so the killed turn's entries are retried as before";
 
     /// <summary>
     /// EVERY DELIVERED ENTRY IS RECORDED, whichever channel it came from and whether or not the session
@@ -992,11 +1132,18 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return allLanded;
     }
 
-    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note)
+    /// <param name="turnEndedAlreadyAppended">
+    /// True only on the closing-turn path, which wrote the killed turn's record BEFORE spending
+    /// minutes on the closing turn. Everything else about a failure — the attempt counter, the
+    /// missing-transcript recovery, the runner change, the stall alert — is identical, and that is
+    /// the point of routing through here rather than growing a second failure path.
+    /// </param>
+    void Record_Failure(string stateFile, IPrintSessionState state, IReadOnlyList<PendingEntry> pending, SessionTracker tracker, ITurnResult result, string requestId, int attempt, ITurnExecutor executor, string? note, bool turnEndedAlreadyAppended = false)
     {
         var outcome = note == null ? TurnOutcomes.Describe(result) : TurnOutcomes.ERROR;
 
-        Append_TurnEnded(state, requestId, attempt, pending, result, outcome, note);
+        if (!turnEndedAlreadyAppended)
+            Append_TurnEnded(state, requestId, attempt, pending, result, outcome, note);
 
         // THE TRANSCRIPT IS NOT THERE, AND THE CLI SAID SO. The id is claimed BEFORE the process starts,
         // so a first turn that dies before the CLI creates the transcript — an invalid --model, an auth

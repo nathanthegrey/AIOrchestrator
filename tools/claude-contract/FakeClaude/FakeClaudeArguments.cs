@@ -22,6 +22,16 @@ public sealed class FakeClaudeArguments
     public string? Settings { get; private set; }
     public string? Model { get; private set; }
     public string? PermissionMode { get; private set; }
+
+    /// <summary>
+    /// <c>--max-budget-usd &lt;amount&gt;</c> — present in the real CLI's help on 2.1.266 ("Maximum
+    /// dollar amount to spend on API calls (only works with --print)"). Parsed so the flag's VALUE is
+    /// not mistaken for the positional prompt: unparsed, the fake refused the flag as unknown and then
+    /// read "2.00" as the prompt, which is the closing turn's whole command line misread twice over.
+    /// What the fake does NOT simulate is the budget being reached — that behaviour is unmeasured, and
+    /// this fake never pretends to know an unmeasured shape.
+    /// </summary>
+    public string? MaxBudgetUsd { get; private set; }
     public bool DangerouslySkipPermissions { get; private set; }
     public IReadOnlyList<string> DisallowedTools => _disallowedTools;
     public string? PositionalPrompt { get; private set; }
@@ -95,6 +105,9 @@ public sealed class FakeClaudeArguments
                     break;
                 case "--permission-mode":
                     parsed.PermissionMode = Take_Value(args, ref i);
+                    break;
+                case "--max-budget-usd":
+                    parsed.MaxBudgetUsd = Take_Value(args, ref i);
                     break;
                 case "--disallowedTools":
                     // Variadic: everything up to the next flag or the terminator is a tool name.
