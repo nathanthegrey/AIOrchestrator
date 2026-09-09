@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Running;
+using AIOrchestratorCoreLib.Running.StatePack;
 using AIOrchestratorCoreLib.Running.ExecutedTurn;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Sessions;
@@ -336,18 +337,16 @@ public class PrintTurnDispatcherTests
 
         Assert.NotEqual(invocations[0]["session_id"]!.GetValue<string>(), invocations[1]["session_id"]!.GetValue<string>());
 
-        // A fresh turn is TOLD what is pending (2026-09-08) instead of re-reading the channel to find
-        // out; the general keeps its per-launch greeting, which is an owner directive.
+        // A fresh turn is TOLD what is pending — in its PACK, not on stdin (2026-09-09: stdin is appended
+        // into the slash command's $ARGUMENTS). The general keeps its per-launch greeting, an owner directive.
         foreach (var invocation in invocations)
-        {
-            var stdin = invocation["stdin"]!.GetValue<string>();
-            Assert.Contains(PrintTurnPrompt_Builder.FRESH_SESSION_PREAMBLE, stdin);
-            Assert.DoesNotContain(PrintTurnPrompt_Builder.FRESH_SESSION_NO_GREETING, stdin);
-            Assert.DoesNotContain(PrintTurnPrompt_Builder.ALREADY_EXECUTED_PREFIX, stdin);
-        }
-        Assert.Contains("status?", invocations[0]["stdin"]!.GetValue<string>());
-        Assert.Contains("and now?", invocations[1]["stdin"]!.GetValue<string>());
-        Assert.DoesNotContain("status?", invocations[1]["stdin"]!.GetValue<string>());
+            Assert.True(string.IsNullOrEmpty(invocation["stdin"]?.GetValue<string>()), "a fresh turn passes nothing on stdin");
+
+        var pack = harness.Read_Pack_OrNull(SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, "general");
+        Assert.NotNull(pack);
+        Assert.StartsWith(StatePack_Builder.TITLE_PREFIX, pack);
+        Assert.Contains("and now?", pack);
+        Assert.DoesNotContain("status?", pack);
 
         // The general's entries are signed 'supervisor' — the word its channel has always carried.
         var entries = ChannelEntry_Parser.Parse_All(File.ReadAllText(harness.Paths.GeneralChannelFile));
@@ -355,7 +354,7 @@ public class PrintTurnDispatcherTests
     }
 
     [Fact]
-    public async Task FreshMode_HandsAMemberItsPendingEntriesOnStdin_AndTellsItNotToGreet()
+    public async Task FreshMode_HandsAMemberItsPendingEntriesInAPack_AndNothingOnStdin()
     {
         using var harness = new PrintRunnerTestHarness("implementer", resumeForMembers: "fresh");
         var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
@@ -364,7 +363,8 @@ public class PrintTurnDispatcherTests
 
         Append_Supervisor(harness, orchId, memberId, "BRIEF — split the barrel", "two commits");
         Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
-        Append_Supervisor(harness, orchId, memberId, "second brief", "more");
+        var firstPack = harness.Read_Pack_OrNull(SessionRoles.Implementer, orchId, memberId);
+        Append_Supervisor(harness, orchId, memberId, "second thought", "more");
         Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 2, PrintRunnerTestHarness.GENEROUS));
         await dispatcher.Stop_Async();
 
@@ -376,19 +376,25 @@ public class PrintTurnDispatcherTests
             var args = PrintRunnerTestHarness.Args(invocation);
             Assert.Contains("--session-id", args);
             Assert.DoesNotContain("--resume", args);
-            Assert.StartsWith("/", args[^1]);
-
-            var stdin = invocation["stdin"]!.GetValue<string>();
-            Assert.Contains(PrintTurnPrompt_Builder.FRESH_SESSION_PREAMBLE, stdin);
-            Assert.Contains(PrintTurnPrompt_Builder.FRESH_SESSION_NO_GREETING, stdin);
-            Assert.Contains("If your role command `", stdin);
-            Assert.DoesNotContain(PrintTurnPrompt_Builder.ALREADY_EXECUTED_PREFIX, stdin);
+            // The role command is the WHOLE positional prompt — $ARGUMENTS stays `<orch>/<member>`.
+            Assert.Equal($"/implementer {orchId}/{memberId}", args[^1]);
+            Assert.True(string.IsNullOrEmpty(invocation["stdin"]?.GetValue<string>()), "a fresh turn passes nothing on stdin");
         }
 
         Assert.NotEqual(invocations[0]["session_id"]!.GetValue<string>(), invocations[1]["session_id"]!.GetValue<string>());
-        Assert.Contains("BRIEF — split the barrel", invocations[0]["stdin"]!.GetValue<string>());
-        Assert.Contains("second brief", invocations[1]["stdin"]!.GetValue<string>());
-        Assert.DoesNotContain("BRIEF — split the barrel", invocations[1]["stdin"]!.GetValue<string>());
+
+        // The pack of the first turn carried the brief as the pending entry; the pack of the second
+        // carries the new entry as pending AND the brief as the brief — the file is replaced, not appended.
+        Assert.NotNull(firstPack);
+        Assert.Contains("BRIEF — split the barrel", firstPack);
+        var secondPack = harness.Read_Pack_OrNull(SessionRoles.Implementer, orchId, memberId);
+        Assert.NotNull(secondPack);
+        Assert.Contains("second thought", secondPack);
+        Assert.Contains("## Your brief", secondPack);
+        Assert.Contains("BRIEF — split the barrel", secondPack);
+        Assert.Contains("## Your last report", secondPack);
+        Assert.Contains("ack", secondPack);
+        Assert.Equal(1, secondPack.Split(StatePack_Builder.TITLE_PREFIX).Length - 1);
     }
 
     [Fact]

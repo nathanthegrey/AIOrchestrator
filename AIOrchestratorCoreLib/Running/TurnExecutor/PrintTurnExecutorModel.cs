@@ -2,6 +2,7 @@ using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.PrintTurnRunner;
 using AIOrchestratorCoreLib.Running.RoleRunnerConfig;
+using AIOrchestratorCoreLib.Running.StatePack;
 using AIOrchestratorCoreLib.Running.TurnLog;
 using AIOrchestratorCoreLib.Running.TurnResult;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -37,24 +38,45 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         CancellationToken cancellationToken)
     {
         var arguments = PrintTurnCommand_Builder.Build_Arguments(state, roleConfig, sessionId, resumeTranscript, null);
-        // A resumed turn has always taken its entries on stdin. A FRESH turn (ResumeModes.Fresh) used
-        // to take nothing — the role command alone — and spent most of its calls reading channel files
-        // to rediscover what the bridge had just decided was pending (measured 2026-09-08: 7.8 of 9.2
-        // calls per general-supervisor turn). It now gets the same entries, with a preamble that says
-        // what it is. The FIRST turn of a transcript-mode session stays positional-only: its boot
-        // sequence (read the channel, greet once) is right for a session that will live on.
+        // A resumed turn takes its entries on stdin, as it always has. A FRESH turn takes NOTHING on
+        // stdin: measured 2026-09-09 (claude 2.1.263), stdin is appended to the positional prompt in
+        // the same message, so a slash command's $ARGUMENTS swallows it — `solo` and `communicator`
+        // interpolate $ARGUMENTS into paths verbatim. Its memory travels in a FILE instead: the pack,
+        // written beside the files the role reads at boot (StatePack_Locator), holding the pending
+        // entries, the brief, the last own report, the ledger lines and the git state. The skill's boot
+        // sequence says "if pack.md exists, read it first". A boot turn (nothing pending) writes none:
+        // the role command's own boot sequence is the right thing there.
         var fresh = roleConfig.Resume == ResumeModes.Fresh;
-        var prompt = resumeTranscript
-            ? PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources)
-            : fresh && pending.Count > 0
-                ? PrintTurnPrompt_Builder.Build_FreshSession(requestId, SessionRole_Names.Build_RoleCommand(state.Role, state.OrchId, state.MemberId), pending, sources, greetsOnBoot: state.Role == SessionRoles.General)
-                : null;
+        string? prompt = null;
+
+        if (resumeTranscript)
+            prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
+        else if (fresh && pending.Count > 0)
+            Write_StatePack(state, requestId, pending, sources);
 
         var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
 
         TurnLog_Store.Append_TurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), requestId, result);
 
         return result;
+    }
+
+    /// <summary>
+    /// Reads what the bridge holds and writes the pack. Guarded as a whole on top of the reader's own
+    /// per-section guards: a pack that cannot be written must not stop the turn — the session then
+    /// finds no pack and falls back to its boot sequence, which is today's behaviour, not a failure.
+    /// </summary>
+    void Write_StatePack(IPrintSessionState state, string requestId, IReadOnlyList<PendingEntry> pending, IReadOnlyList<TurnSource.ITurnSource> sources)
+    {
+        try
+        {
+            var inputs = StatePackInputs_Reader.Read(_paths, state, requestId, pending, sources);
+            StatePack_Writer.Write(StatePack_Locator.Get_File(_paths, state.Role, state.OrchId, state.MemberId), StatePack_Builder.Build(inputs));
+        }
+        catch
+        {
+            // Swallowed by design — see the summary. The session's boot sequence covers the gap.
+        }
     }
 
     public void Release(string orchId, string memberId)
