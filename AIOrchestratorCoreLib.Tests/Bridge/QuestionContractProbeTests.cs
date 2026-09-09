@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Bridge;
 using AIOrchestratorCoreLib.Bridge.BridgeEngine;
+using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
@@ -35,6 +36,20 @@ public class QuestionContractProbeTests : IDisposable
         + "RECOMMEND: Start it — the matrix values are numbers, not layout.\n"
         + "RISK: low\n"
         + "ROW: FIN-D-277a";
+
+    /// <summary>
+    /// A SECOND question with its own option labels, deliberately: the Telegram fake records every
+    /// button it has ever seen and resolves a label to the FIRST match, so two questions offering
+    /// "Start it" would make a probe about which question a tap closed unable to tell them apart.
+    /// </summary>
+    const string SECOND_QUESTION =
+        "The perf branch is green.\n"
+        + "QUESTION: Merge wf-perf into master now?\n"
+        + "OPTION: Merge it\n"
+        + "OPTION: Hold\n"
+        + "RECOMMEND: Hold — you asked to read every merge to master first.\n"
+        + "RISK: low\n"
+        + "ROW: FIN-D-277b";
 
     readonly string _tempRoot;
     readonly string _tempRepo;
@@ -136,8 +151,11 @@ public class QuestionContractProbeTests : IDisposable
         Assert.Contains("📎 FIN-D-277a", question, StringComparison.Ordinal);
         Assert.DoesNotContain("🔐", question, StringComparison.Ordinal);
 
+        // ONE app button, not two. "❔ Explain the options" and "💬 Let's talk" were the same
+        // gesture under two labels once the talk tap started closing its question.
         Assert.NotNull(_telegram.Find_ButtonFor(OwnerPush_Policy.TALK_LABEL));
-        Assert.NotNull(_telegram.Find_ButtonFor(OwnerPush_Policy.MORE_DETAIL_LABEL));
+        Assert.Null(_telegram.Find_ButtonFor("Explain the options"));
+        Assert.Null(_telegram.Find_ButtonFor("❔"));
     }
 
     [Fact]
@@ -154,9 +172,22 @@ public class QuestionContractProbeTests : IDisposable
         Assert.Contains("declared by the asker", _log.Dump(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// THE OWNER'S REQUEST, 2026-09-09: *"Let's talk does nothing when I tap it — it stays there,
+    /// all the other options stay too. Make it behave like the other buttons: buttons disappear,
+    /// the message says 'ok, tell me what you have in mind'."*
+    ///
+    /// <para>
+    /// This test replaces <c>LetsTalk_KeepsTheQuestionOpen_AndATypedReplyDoesNotCloseIt_UntilATapDoes</c>,
+    /// which asserted the behaviour being removed. The old contract was deliberate — discussing a
+    /// decision should not take the question off the phone — and it failed in use: the only feedback
+    /// was Telegram's transient toast, so the owner tapped this button twelve times in one afternoon
+    /// on <c>fincanva-5</c>, four of them inside a minute.
+    /// </para>
+    /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task LetsTalk_KeepsTheQuestionOpen_AndATypedReplyDoesNotCloseIt_UntilATapDoes()
+    public async Task LetsTalk_ClosesItsQuestionLikeAnyOption_EditsTheMessage_AndRecordsNoChoice()
     {
         var orchId = await Start_Async();
         Append_Supervisor(orchId, COMPLETE_QUESTION);
@@ -177,30 +208,166 @@ public class QuestionContractProbeTests : IDisposable
             await Run_Until_Async(() => Channel(orchId).Contains("wants to talk this decision through", StringComparison.Ordinal), 20_000),
             $"the supervisor never received the request.{Environment.NewLine}{_log.Dump()}");
 
-        // STILL OPEN, and marked as under discussion — the whole point of the button.
-        var afterTalk = Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
-        Assert.Equal(questionMessageId, afterTalk.MessageId);
-        Assert.True(afterTalk.InDiscussion, "the question was not marked as under discussion");
-        Assert.NotNull(_telegram.Find_ButtonFor("Start it"));
+        // THE QUESTION IS CLOSED, like any other tap.
+        Assert.Empty(_engineState.Load_OrEmpty().OpenQuestions);
 
-        // Their words while discussing are conversation, not a vote.
-        _telegram.Queue_Updates(Build_OwnerMessageJson("what does waiting actually cost me", updateId: 3020, messageId: 88));
+        // AND THE MESSAGE SAYS SO — editing it is also what drops the keyboard.
+        var edited = _telegram.Find_EditedContaining(OwnerPush_Policy.TALK_ACKNOWLEDGEMENT)
+            ?? throw new Exception($"the question message was never edited.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        Assert.Contains("Start the FIN-D-277a build now?", edited, StringComparison.Ordinal);
+
+        // NO CHOICE WAS MADE, so nothing may be stamped as one — neither an option nor the
+        // instruction text the supervisor received.
+        Assert.DoesNotContain("✅", edited, StringComparison.Ordinal);
+        Assert.False(_telegram.Has_Edited_Containing("✅ Start it"), _telegram.Dump_Sent());
+        Assert.False(_telegram.Has_Edited_Containing("wants to talk this decision through"), _telegram.Dump_Sent());
+
+        // The whole group went with it: the option beside it can no longer be tapped.
+        var startIt = _telegram.Find_ButtonFor("Start it")
+            ?? throw new Exception("the option payload is gone from the fake");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, questionMessageId, updateId: 3020));
 
         Assert.True(
-            await Run_Until_Async(() => Channel(orchId).Contains("what does waiting actually cost me", StringComparison.Ordinal), 20_000),
-            $"the owner's message never reached the channel.{Environment.NewLine}{_log.Dump()}");
+            await Run_Until_Async(() => _log.Dump().Contains("Callback REFUSED", StringComparison.Ordinal), 20_000),
+            $"a consumed option was still live.{Environment.NewLine}{_log.Dump()}");
 
-        Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Empty(_engineState.Load_OrEmpty().OpenQuestions);
+    }
 
-        // And a real option still closes it.
-        var startIt = _telegram.Find_ButtonFor("Start it")
-            ?? throw new Exception("the option is gone");
+    /// <summary>
+    /// A TAP ANSWERS ITS OWN QUESTION AND NOTHING ELSE — the root defect, which was never confined
+    /// to one button.
+    ///
+    /// <para>
+    /// Every tap is routed as an owner message, and that routing binds a message to a question
+    /// whenever exactly one is open. The tapped question is removed BEFORE routing, so "exactly one
+    /// other question open" is the ordinary case — the log recorded a second question going out
+    /// while one was still open three times on the afternoon of 2026-09-09. At 17:53 the owner
+    /// tapped a high-risk option on one question and at 17:55 tapped "Let's talk" on another; the
+    /// talk text bound to the orphaned-processes question and stamped it <c>✅ answered:</c>. Nobody
+    /// ever decided it.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("Start it")]
+    [InlineData(OwnerPush_Policy.TALK_LABEL)]
+    [Trait("Speed", "Slow")]
+    public async Task ATapOnOneQuestion_LeavesTheOtherOpen_TappableAndUnstamped(string buttonToTap)
+    {
+        var orchId = await Start_Async();
 
-        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, questionMessageId, updateId: 3030));
+        // BOTH APPENDED BEFORE THE ENGINE RUNS, deliberately. Appending the second question after a
+        // pass has already written an App entry of its own leaves it unread by the tailer — see the
+        // PARKED note in docs/superpowers/plans/2026-09-09-stage-8a-a-tap-closes-its-message.md;
+        // that is a mirror-cursor question, and this probe is about taps.
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
+
+        Assert.True(
+            await Run_Until_Async(
+                () => _telegram.Find_ButtonFor("Start it") != null && _telegram.Find_ButtonFor("Merge it") != null,
+                25_000),
+            $"both questions never reached the phone.{Environment.NewLine}=== CHANNEL ==={Environment.NewLine}{Channel(orchId)}{Environment.NewLine}{_log.Dump()}");
+
+        // The ids come from the registry rather than from "the last message with buttons": two
+        // questions are in flight and only their own text says which is which.
+        var open = _engineState.Load_OrEmpty().OpenQuestions;
+
+        var firstMessageId = open.Single(question => question.Text.Contains("Start the FIN-D-277a build now?", StringComparison.Ordinal)).MessageId;
+        var secondMessageId = open.Single(question => question.Text.Contains("Merge wf-perf into master now?", StringComparison.Ordinal)).MessageId;
+
+        Assert.NotEqual(firstMessageId, secondMessageId);
+        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
+
+        var tapped = _telegram.Find_ButtonFor(buttonToTap)
+            ?? throw new Exception($"the '{buttonToTap}' button never reached the phone");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(tapped, firstMessageId, updateId: 3040));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().OpenQuestions.Count == 1, 20_000),
+            $"the tap did not close exactly its own question.{Environment.NewLine}{_log.Dump()}");
+
+        // THE SURVIVOR IS THE ONE NOBODY TOUCHED.
+        var stillOpen = Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Equal(secondMessageId, stillOpen.MessageId);
+
+        // AND IT WAS NOT STAMPED. "✅ answered:" is the signature of a typed answer being bound to
+        // it, which is precisely what a tap must never be read as.
+        Assert.False(_telegram.Has_Edited_Containing("✅ answered:"), _telegram.Dump_Sent());
+        Assert.Null(_telegram.Find_EditedContaining("Merge wf-perf into master now?"));
+
+        // STILL TAPPABLE: its keyboard is live, and tapping it closes it with its own choice.
+        var mergeIt = _telegram.Find_ButtonFor("Merge it")
+            ?? throw new Exception("the second question's option is gone");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(mergeIt, secondMessageId, updateId: 3050));
 
         Assert.True(
             await Run_Until_Async(() => _engineState.Load_OrEmpty().OpenQuestions.Count == 0, 20_000),
-            $"the tap did not close the question.{Environment.NewLine}{_log.Dump()}");
+            $"the second question's keyboard was dead.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.True(_telegram.Has_Edited_Containing("✅ Merge it"), _telegram.Dump_Sent());
+    }
+
+    /// <summary>
+    /// THE LAPSED READ-BACK READS THE REGISTRY BEFORE IT SPEAKS. It used to log "the question is
+    /// still open" unconditionally; at ~16:03Z on 2026-09-09 it said that about a question that had
+    /// been stamped closed minutes earlier, which sends whoever reads the log looking for a question
+    /// that is not there.
+    ///
+    /// <para>
+    /// The sequence is the one that happened: a high-risk option is tapped (the question stays open
+    /// on purpose while the code is outstanding), the owner then answers in WRITING — which closes
+    /// it — and the code is never typed, so the window lapses on a question that is already gone.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AReadBackThatLapsesOnAClosedQuestion_NamesWhatClosedIt()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION.Replace("RISK: low", "RISK: high", StringComparison.Ordinal));
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        var startIt = _telegram.Find_ButtonFor("Start it")
+            ?? throw new Exception("the option never reached the phone");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, questionMessageId, updateId: 3060));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().PendingConfirmations.Count == 1, 20_000),
+            $"the high-risk tap did not open a read-back.{Environment.NewLine}{_log.Dump()}");
+
+        // The question is deliberately still open while the code is outstanding.
+        Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+
+        // Answered in writing instead — which closes it, and leaves the code orphaned.
+        _telegram.Queue_Updates(Build_OwnerMessageJson("go ahead and start it", updateId: 3070, messageId: 91));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().OpenQuestions.Count == 0, 20_000),
+            $"the typed answer did not close the question.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromMinutes(15));
+
+        Assert.True(
+            await Run_Until_Async(
+                () => _log.Dump().Contains(QuestionClosure_Wording.TYPED_ANSWER, StringComparison.Ordinal),
+                20_000),
+            $"the lapse never named the closure.{Environment.NewLine}{_log.Dump()}");
+
+        var dump = _log.Dump();
+        Assert.Contains("already closed", dump, StringComparison.Ordinal);
+        Assert.DoesNotContain("nothing was taken, and the question is still open", dump, StringComparison.Ordinal);
     }
 
     string Channel(string orchId) => File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));
@@ -226,11 +393,11 @@ public class QuestionContractProbeTests : IDisposable
         return session.OrchId;
     }
 
-    void Append_Supervisor(string orchId, string body)
+    void Append_Supervisor(string orchId, string body, int entryNumber = 3)
     {
         File.AppendAllText(
             _paths.Get_OwnerChannelFile(orchId),
-            $"\n## [3] FROM supervisor — {DateTime.Now:yyyy-MM-dd HH:mm} — a question\n{body}\n");
+            $"\n## [{entryNumber}] FROM supervisor — {DateTime.Now:yyyy-MM-dd HH:mm} — a question\n{body}\n");
     }
 
     static string Build_OwnerMessageJson(string text, long updateId, long messageId)

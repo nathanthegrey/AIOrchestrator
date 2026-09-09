@@ -91,6 +91,22 @@ public static class QuestionPrompt_Builder
         return $"{questionText}\n\n🔐 You are about to: {chosenLabel}\n\nReply with the code {code} within {expiryMinutes} minutes to confirm. Anything else leaves it undone.";
     }
 
+    /// <summary>
+    /// The question message after the owner tapped "💬 Let's talk": the question stays visible, with
+    /// the acknowledgement under it in place of a choice.
+    ///
+    /// <para>
+    /// A TAP THAT CHANGES NOTHING READS AS A BUTTON THAT DOES NOTHING. That was the defect — the
+    /// only feedback on this button was Telegram's transient toast, so the owner tapped it twelve
+    /// times in one afternoon and could not tell whether any of them had landed. It records no
+    /// choice, because none was made; what it records is that the app heard them.
+    /// </para>
+    /// </summary>
+    public static string Build_TalkText(string questionText)
+    {
+        return $"{questionText}\n\n{Bridge.OwnerPush_Policy.TALK_ACKNOWLEDGEMENT}";
+    }
+
     /// <summary>The record left on a question that nobody answered before its deadline.</summary>
     public static string Build_TimedOutText(string questionText, string outcome)
     {

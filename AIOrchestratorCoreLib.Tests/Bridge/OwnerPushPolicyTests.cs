@@ -165,19 +165,44 @@ public class OwnerPushPolicyTests
 
     /// <summary>
     /// The button label is what fits on a phone; the text the supervisor receives is the actual
-    /// instruction. They MUST differ — a supervisor told only "❔ Explain the options" would have to
-    /// guess what was being asked of it, and it must know to re-ask afterwards.
+    /// instruction. They MUST differ — a supervisor told only "💬 Let's talk" would have to guess
+    /// what was being asked of it, and it must know to re-ask afterwards.
+    ///
+    /// <para>
+    /// THE RE-ASK IS THE PART THAT INVERTED. The instruction used to end with "do NOT ask it again",
+    /// which was right only while the tap left the question live on the phone. It closes the
+    /// question now, so a supervisor obeying the old sentence leaves the decision permanently
+    /// untaken — which is what happened on 2026-09-09 to an orphaned-processes question.
+    /// </para>
     /// </summary>
     [Fact]
-    public void TheExplainButton_SendsAFullInstruction_NotItsOwnLabel()
+    public void TheTalkButton_SendsAFullInstruction_NotItsOwnLabel_AndEndsByReAsking()
     {
-        Assert.NotEqual(OwnerPush_Policy.MORE_DETAIL_LABEL, OwnerPush_Policy.MORE_DETAIL_REQUEST);
-        Assert.True(OwnerPush_Policy.MORE_DETAIL_LABEL.Length <= 30, "the label has to fit a phone button");
+        Assert.NotEqual(OwnerPush_Policy.TALK_LABEL, OwnerPush_Policy.TALK_REQUEST);
+        Assert.True(OwnerPush_Policy.TALK_LABEL.Length <= 30, "the label has to fit a phone button");
 
-        Assert.Contains("recommend", OwnerPush_Policy.MORE_DETAIL_REQUEST);
-        Assert.Contains("costs to get wrong", OwnerPush_Policy.MORE_DETAIL_REQUEST);
-        Assert.Contains("ask the question again", OwnerPush_Policy.MORE_DETAIL_REQUEST);
-        Assert.Contains("short", OwnerPush_Policy.MORE_DETAIL_REQUEST, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("recommend", OwnerPush_Policy.TALK_REQUEST);
+        Assert.Contains("costs to get wrong", OwnerPush_Policy.TALK_REQUEST);
+        Assert.Contains("ask the question again", OwnerPush_Policy.TALK_REQUEST);
+        Assert.Contains("briefly", OwnerPush_Policy.TALK_REQUEST, StringComparison.OrdinalIgnoreCase);
+
+        // The inverted order it replaces, in the exact words that shipped.
+        Assert.DoesNotContain("do NOT ask it again", OwnerPush_Policy.TALK_REQUEST, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The owner's own wording for what the message must say after the tap: *"the message says 'ok,
+    /// tell me what you have in mind'"*. Short, because it is an acknowledgement rather than a
+    /// second question.
+    /// </summary>
+    [Fact]
+    public void TheTalkAcknowledgement_IsWhatTheMessageBecomes_AndItRecordsNoChoice()
+    {
+        Assert.Contains("Ok", OwnerPush_Policy.TALK_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+        Assert.Contains("what you have in mind", OwnerPush_Policy.TALK_ACKNOWLEDGEMENT, StringComparison.Ordinal);
+
+        // ✅ is the record of a CHOICE, and no choice was made by tapping this.
+        Assert.DoesNotContain("✅", OwnerPush_Policy.TALK_ACKNOWLEDGEMENT, StringComparison.Ordinal);
     }
 
     [Fact]

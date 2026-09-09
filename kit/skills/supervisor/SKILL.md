@@ -438,16 +438,22 @@ thought across several of them hoping to be noticed.
   **Only give a `DEFAULT:` to a question whose unattended answer you would defend.** It spends the
   owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
   anything that costs money.
-- **The app adds TWO buttons to every question — you write neither, and they behave differently.**
+- **The app adds ONE button to every question — "💬 Let's talk" — and you write none of them.**
 
-  "❔ Explain the options" is a RE-ASK: it spends the buttons, so you answer SHORT and then **ask the
-  question again** with fresh `QUESTION:`/`OPTION:` lines. Treat a tap there as signal that your
-  question was not answerable as written — make the re-ask clearer, not longer.
+  A tap there CLOSES the question, exactly like every other button: the keyboard goes and the
+  message they tapped becomes "💬 Ok — tell me what you have in mind." What reaches you is a request
+  to explain the decision — what each option means in practice, what differs between them, what it
+  costs to get wrong, which one you recommend and why — in prose, briefly. Answer whatever they ask
+  next.
 
-  "💬 Let's talk" does NOT spend anything: the question stays on their phone with its buttons live,
-  and it is marked as under discussion, so nothing they type while you talk will be filed as their
-  answer. Reply in prose, briefly, and **do not ask it again** — a second copy of a live question is
-  the waterfall this whole protocol exists to prevent. It closes when they tap an option.
+  **Then, once the discussion has settled, ASK IT AGAIN** with fresh `QUESTION:`/`OPTION:` lines.
+  Nothing of that question is live on their phone while you talk, so the re-ask is not a second copy
+  of a live question — and a decision nobody re-asks is a decision that silently never gets taken.
+  That is not hypothetical: on 2026-09-09 the owner tapped this button on a pricing-table question
+  and nobody ever came back to it, because the instruction here used to say "do not ask it again".
+
+  Treat a tap here as signal that your question was not answerable as written — make the re-ask
+  clearer, not longer.
 
   The body above can be as long and thorough as the decision deserves; the question underneath must
   be short enough to answer from a lock screen.

@@ -231,46 +231,56 @@ public static class OwnerPush_Policy
     }
 
     /// <summary>
-    /// Added to EVERY question automatically. A question on a phone is compressed to a couple of
-    /// lines, so the owner regularly needs the reasoning behind it before they can choose — and
-    /// without a button the only way to ask is to type, which defeats the point of tappable options.
-    /// </summary>
-    public const string MORE_DETAIL_LABEL = "❔ Explain the options";
-
-    /// <summary>
-    /// What the SUPERVISOR actually receives when that button is tapped. It is deliberately fuller
-    /// than the label: the button is one tap, the instruction behind it has to be unambiguous, and
-    /// it must end by re-asking so the decision is not left dangling.
-    /// </summary>
-    /// <summary>
-    /// The way OUT of a question that is not answerable as asked, and the one button that does not
-    /// consume the question.
+    /// Added to EVERY question automatically, and it is now the ONLY button the app contributes.
     ///
     /// <para>
-    /// "Explain the options" is a re-ask: it spends the buttons and the supervisor asks again. That
-    /// is right when the wording was unclear, and wrong when the owner simply wants to discuss the
-    /// decision — measured on one topic on 2026-09-07, where the owner answered a question with a
-    /// question five times ("what are these methods? are they new?", "which part are you talking
-    /// about?") and each time the exchange had to be rebuilt around a question that was no longer
-    /// on the phone. Here the question stays put, with its buttons, until they tap one.
+    /// THERE WERE TWO, AND THE SECOND ONE EARNED ITS REMOVAL. "❔ Explain the options" spent the
+    /// buttons and asked the supervisor to explain and re-ask; "💬 Let's talk" left the question and
+    /// its keyboard exactly where they were. Once a tap on "Let's talk" also closes its question —
+    /// which is what the owner asked for, having tapped a mute button twelve times in one afternoon
+    /// — the two are the same gesture with two labels, and offering both only makes the owner
+    /// choose between synonyms before they can ask their real question.
+    /// </para>
+    /// <para>
+    /// A question on a phone is compressed to a couple of lines, so the owner regularly needs the
+    /// reasoning behind it before they can choose — and without a button the only way to ask is to
+    /// type, which defeats the point of tappable options.
     /// </para>
     /// </summary>
     public const string TALK_LABEL = "💬 Let's talk";
 
     /// <summary>
-    /// What the SUPERVISOR receives on that tap. It says explicitly not to re-ask, because the
-    /// question it would re-ask is still open — a second copy of a live question is exactly the
-    /// waterfall this policy exists to prevent.
+    /// What the SUPERVISOR actually receives when that button is tapped. It is deliberately fuller
+    /// than the label: the button is one tap, the instruction behind it has to be unambiguous.
+    ///
+    /// <para>
+    /// AND IT ENDS BY RE-ASKING, which is the reverse of what it said before. The old text ordered
+    /// the supervisor NOT to ask again, because the question was still live on the phone with its
+    /// buttons — a second copy would have been the waterfall this policy exists to prevent
+    /// (decision 14). The tap now closes the question, so there is no live copy left: a decision
+    /// nobody re-asks is a decision that silently never gets taken, which is exactly what happened
+    /// on 2026-09-09 to an orphaned-processes question the owner tapped and nobody ever decided.
+    /// </para>
     /// </summary>
     public const string TALK_REQUEST =
-        "The owner wants to talk this decision through before choosing. Reply in prose, briefly, and "
-        + "do NOT ask it again: the question is still on their phone with its buttons live, and it "
-        + "closes when they tap one.";
+        "The owner wants to talk this decision through before choosing. Their question closed when "
+        + "they tapped, so nothing is live on their phone right now. Explain it in prose, briefly: "
+        + "what each option actually means in practice, what differs between them, what it costs to "
+        + "get wrong, and which one you recommend and why. Answer whatever they ask next. Then, once "
+        + "the discussion has settled, ask the question again with fresh QUESTION:/OPTION: lines — "
+        + "otherwise the decision is left dangling.";
 
-    public const string MORE_DETAIL_REQUEST =
-        "Explain this decision before I choose: what each option actually means in practice, what "
-        + "differs between them, what it costs to get wrong, and which one you recommend and why. "
-        + "Keep it short. Then ask the question again.";
+    /// <summary>
+    /// What the question message is edited to on that tap — the owner's own words for it: *"the
+    /// message says 'ok, tell me what you have in mind'"*.
+    ///
+    /// <para>
+    /// IT IS ENGLISH, like every other string the app itself writes (owner's rule, 2026-09-09).
+    /// Decision 11 governs what a ROLE writes to the owner — that is in the owner's language — not
+    /// what is hardcoded here.
+    /// </para>
+    /// </summary>
+    public const string TALK_ACKNOWLEDGEMENT = "💬 Ok — tell me what you have in mind.";
 
     public static bool Carries_Question(string rawEntryText)
     {

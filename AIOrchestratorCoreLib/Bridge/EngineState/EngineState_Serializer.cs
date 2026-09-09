@@ -105,7 +105,7 @@ public static class EngineState_Serializer
                 ["questionText"] = button.QuestionText,
                 ["expiresUtc"] = Write_Instant(button.ExpiresUtc),
                 ["isHighRisk"] = button.IsHighRisk,
-                ["keepsGroupOpen"] = button.KeepsGroupOpen,
+                ["answersNothing"] = button.AnswersNothing,
             });
         }
 
@@ -124,7 +124,6 @@ public static class EngineState_Serializer
                 ["defaultOptionIndex"] = question.DefaultOptionIndex,
                 ["isHighRisk"] = question.IsHighRisk,
                 ["reminderSent"] = question.ReminderSent,
-                ["inDiscussion"] = question.InDiscussion,
             });
         }
 
@@ -229,7 +228,14 @@ public static class EngineState_Serializer
 
             // ABSENT READS AS FALSE, which is the honest default for a state file written before
             // this field existed: every button in it was an answer, and an answer consumes.
-            KeepsGroupOpen = Read_Bool_OrNull(entry["keepsGroupOpen"]) ?? false,
+            //
+            // AND THE OLD NAME IS STILL READ. `keepsGroupOpen` was the same button under the
+            // behaviour this replaced, so a state file written by the previous build maps onto the
+            // new record exactly rather than turning a "Let's talk" into an option whose whole
+            // instruction text gets stamped over the question as if it had been chosen.
+            AnswersNothing = Read_Bool_OrNull(entry["answersNothing"])
+                ?? Read_Bool_OrNull(entry["keepsGroupOpen"])
+                ?? false,
         };
     }
 
@@ -260,7 +266,11 @@ public static class EngineState_Serializer
             DefaultOptionIndex = isHighRisk ? null : Read_Int_OrNull(entry["defaultOptionIndex"]),
             IsHighRisk = isHighRisk,
             ReminderSent = Read_Bool_OrNull(entry["reminderSent"]) ?? false,
-            InDiscussion = Read_Bool_OrNull(entry["inDiscussion"]) ?? false,
+
+            // `inDiscussion` is no longer read. A file written by the previous build may carry it,
+            // and a question that was "under discussion" there is an ordinary open question here:
+            // under the new contract the tap that started the discussion already closed it, so
+            // there is nothing for the flag to mean and the extra key is simply ignored.
         };
     }
 
