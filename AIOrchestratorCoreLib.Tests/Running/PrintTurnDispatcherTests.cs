@@ -412,6 +412,52 @@ public class PrintTurnDispatcherTests
         Assert.Equal(1, secondPack.Split(StatePack_Builder.TITLE_PREFIX).Length - 1);
     }
 
+    /// <summary>
+    /// Measured 2026-09-09: config.json said one model for the general supervisor and its session had
+    /// been running another since the day before. Every other bridge-driven session is re-registered
+    /// at some point and reconciles its model there; a print-run general never is (the watchdog exempts
+    /// it, having no process to check), so the model captured at first registration was frozen for the
+    /// life of the state file and no restart could apply an owner's decision.
+    /// </summary>
+    [Fact]
+    public async Task TheGeneralsModel_IsReReadFromTheConfig_AtTheStartOfATurn()
+    {
+        using var harness = new PrintRunnerTestHarness("general");
+        harness.Register_General();
+        Assert.Equal("sonnet", harness.Read_State(SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, "general").Model);
+
+        harness.Set_ConfigValue("generalSupervisorModel", "haiku");
+        harness.Write_Scenario("""{"default":{"result":"general supervisor online\n\nnothing open"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Assert.True(ChannelAppender.Append_OwnerEntry(harness.Paths.GeneralChannelFile, "status?", DateTime.Now));
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, "general").ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        var args = PrintRunnerTestHarness.Args(Assert.Single(harness.Read_Invocations()));
+        Assert.Equal("haiku", args[args.IndexOf("--model") + 1]);
+        Assert.Equal("haiku", harness.Read_State(SessionRoles.General, ChannelDiscovery.GENERAL_ORCH_ID, "general").Model);
+    }
+
+    [Fact]
+    public async Task AMembersModel_IsNotOverwrittenByTheRoleDefault()
+    {
+        using var harness = new PrintRunnerTestHarness("implementer");
+        var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer);
+        var registered = harness.Read_State(SessionRoles.Implementer, orchId, memberId).Model;
+
+        harness.Set_ConfigValue("implementerModel", "haiku");
+        harness.Write_Scenario("""{"default":{"result":"ack\n\ndone"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Append_Supervisor(harness, orchId, memberId, "BRIEF — go", "now");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        // A member's model is a per-member choice; only its re-registration may change it.
+        Assert.Equal(registered, harness.Read_State(SessionRoles.Implementer, orchId, memberId).Model);
+    }
+
     [Fact]
     public async Task TranscriptMode_FirstTurn_StaysPositionalOnly()
     {

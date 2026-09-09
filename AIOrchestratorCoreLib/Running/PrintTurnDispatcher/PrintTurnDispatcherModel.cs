@@ -929,6 +929,19 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
 
         var roleConfig = configs.Get_ForRole(state.Role);
+
+        // THE GENERAL'S MODEL IS RE-READ HERE, because nothing else ever re-reads it. Every other
+        // bridge-driven session passes through BridgeDrivenRunnerModel.Start again — a member is
+        // re-registered when it is added or respawned, and that path updates the model when config.json
+        // changed under it. A PRINT-RUN GENERAL never does: SessionWatchdog.Check_GeneralSupervisor
+        // returns early for it by design (it has no process to be alive), so Spawn_GeneralSupervisor
+        // is never called again and the model captured at first registration is frozen for the life of
+        // the state file. Measured 2026-09-09: config.json said `generalSupervisorModel: opus` (later
+        // sonnet) while the session had been running haiku since 2026-09-08 — an owner decision about
+        // models that no restart could apply. Refreshed at the START OF A TURN, which is the point of
+        // effect (decision 21), so the change lands on the next turn and is logged where it happens.
+        state = Refresh_GeneralModel_IfChanged(stateFile, state);
+
         var fresh = roleConfig.Resume == ResumeModes.Fresh;
         var hasHistory = state.ExecutedTurns.Count > 0;
 
@@ -1296,6 +1309,39 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// worse, would be a second opinion about what the file contains.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The general's configured model, applied to its registration when it differs. Members are left
+    /// alone: their model may legitimately differ from the role default (a per-member choice in
+    /// session.json, an orchestration override), and their re-registration path already reconciles it.
+    /// </summary>
+    IPrintSessionState Refresh_GeneralModel_IfChanged(string stateFile, IPrintSessionState state)
+    {
+        if (state.Role != SessionRoles.General)
+            return state;
+
+        string? configured;
+
+        try
+        {
+            configured = _configProvider.Get_Current().GeneralSupervisorModel;
+        }
+        catch
+        {
+            // A config that cannot be read is not a reason to skip a turn: keep what the state has.
+            return state;
+        }
+
+        if (string.Equals(configured, state.Model, StringComparison.Ordinal))
+            return state;
+
+        var refreshed = PrintSessionState_Factory.CreateFrom_Existing_Relaunched(state, state.WorkingDirectory, configured);
+        PrintSessionState_Store.Write(stateFile, refreshed);
+
+        _log.Log_Info(state.OrchId, $"General supervisor was registered with model '{state.Model ?? "(default)"}' and config.json now says '{configured ?? "(default)"}' — this turn runs on the configured one");
+
+        return refreshed;
+    }
+
     IReadOnlyList<ITurnCursor> Advance_Cursors(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> pending, IReadOnlySet<string>? answeredSourceKeys = null)
     {
         var byKey = state.Cursors.ToDictionary(cursor => cursor.SourceKey, SOURCE_KEYS);

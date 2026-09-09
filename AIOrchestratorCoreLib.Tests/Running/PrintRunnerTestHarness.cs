@@ -106,6 +106,17 @@ public sealed class PrintRunnerTestHarness : IDisposable
         File.SetLastWriteTimeUtc(Paths.ConfigFile, DateTime.UtcNow.AddSeconds(1));
     }
 
+    /// <summary>Sets one top-level key in config.json and moves its stamp forward, the way an owner editing the file does.</summary>
+    public void Set_ConfigValue(string key, string value)
+    {
+        var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Paths.ConfigFile)) as JsonObject
+            ?? throw new Exception($"config at {Paths.ConfigFile} is not a JSON object");
+
+        root[key] = value;
+        File.WriteAllText(Paths.ConfigFile, root.ToJsonString());
+        File.SetLastWriteTimeUtc(Paths.ConfigFile, DateTime.UtcNow.AddSeconds(2));
+    }
+
     public void Dispose()
     {
         try
