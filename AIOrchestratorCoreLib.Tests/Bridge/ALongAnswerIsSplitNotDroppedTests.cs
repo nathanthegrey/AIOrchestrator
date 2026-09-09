@@ -6,6 +6,7 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -175,7 +176,8 @@ public class ALongAnswerIsSplitNotDroppedTests : IDisposable
     IBridgeEngine Build_Engine()
     {
         return BridgeEngine_Factory.Create_WithTelegramClientAndTranslator(
-            _paths, _configProvider, _store, _launcher, _log, _telegram, new EchoTranslator_Fake());
+            _paths, _configProvider, _store, _launcher, _log, _telegram, new EchoTranslator_Fake(),
+            BridgeTestTiming.Fast());
     }
 
     /// <summary>
@@ -195,7 +197,7 @@ public class ALongAnswerIsSplitNotDroppedTests : IDisposable
         if (!File.Exists(channelFile))
             File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
 
-        await Run_Until_Async(engine, () => false, 4_000);
+        await Run_Until_Async(engine, () => false, BridgeTestTiming.Window_ForTicks(3));
 
         _telegram.Forget_Everything();
 

@@ -11,6 +11,7 @@ using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Time.Clock;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -126,7 +127,8 @@ public class StartOrchestrationDefaultShapeTests : IDisposable
         var engine = BridgeEngine_Factory.Create_WithDecisionState(
             _paths, configProvider, _store, launcher, _log, new CapturingTelegram_Fake(),
             MessageTranslator_Factory.Create(_log), EngineStateStore_Factory.Create_InMemory(),
-            Clock_Factory.Create_System());
+            Clock_Factory.Create_System(),
+            BridgeTestTiming.Fast());
 
         File.WriteAllText(Path.Combine(_paths.RequestsFolder, $"start-{Guid.NewGuid():N}.json"), requestJson);
 

@@ -10,6 +10,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -92,7 +93,8 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
 
         _engine = BridgeEngine_Factory.Create_WithDecisionState(
             _paths, _configProvider, _store, _launcher, _log, _telegram,
-            MessageTranslator_Factory.Create(_log), _engineState, _clock);
+            MessageTranslator_Factory.Create(_log), _engineState, _clock,
+            BridgeTestTiming.Fast());
     }
 
     public void Dispose()
@@ -289,7 +291,7 @@ public class HighRiskAndDeadlineProbeTests : IDisposable
         // past the resume time — only the guard can hold the count.
         _clock.Advance(TimeSpan.FromMinutes(2));
 
-        await Run_Until_Async(() => false, 6_000);
+        await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(10));
 
         Assert.Equal(alertsAfterTheFirst, _telegram.Count_Sent_Containing("Dispatch PAUSED"));
 

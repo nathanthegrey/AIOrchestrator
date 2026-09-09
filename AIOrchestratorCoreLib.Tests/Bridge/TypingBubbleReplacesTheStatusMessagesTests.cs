@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -63,7 +64,7 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast());
     }
 
     public void Dispose()
@@ -116,7 +117,7 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
             $"the answer never reached the phone, so this test reached nothing.{Environment.NewLine}{_log.Dump()}");
 
         // The turn-ended resolver runs on the mirror tick AFTER the answer is counted; give it several.
-        await Run_For_Async(8_000);
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(10));
 
         Assert.False(
             _telegram.Has_Sent_Containing("turn ended") || _telegram.Has_Sent_Containing("done for now"),
@@ -153,7 +154,7 @@ public class TypingBubbleReplacesTheStatusMessagesTests : IDisposable
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
         Seed_OwnerChannel(session.OrchId);
 
-        await Run_For_Async(4_000);
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(3));
 
         return session.OrchId;
     }

@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -27,9 +28,9 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 ///   - `Mirror_Append_Async` returns early when there is no Telegram client, ABOVE the code under
 ///     test. A file-only harness — which every other engine test uses — cannot reach this defect at
 ///     all, so the send must come from a fake client that can be made to fail.
-///   - `Is_MirrorAttemptDue` holds a failed channel back for MIRROR_RETRY_BACKOFF_SECONDS (30), and
+///   - `Is_MirrorAttemptDue` holds a failed channel back for the engine's retry backoff, and
 ///     the waiting flag is per-instance in-memory state. So both attempts must happen on the SAME
-///     engine, 30 s apart. A fresh engine starts with an empty flag set and would go red with or
+///     engine, a whole backoff apart. A fresh engine starts with an empty flag set and would go red with or
 ///     without the fix — a green that pins nothing.
 ///
 /// THE ANSWER TEXT CARRIES NO QUESTION MARK, NO QUESTION:/OPTION: MARKER AND NO BLOCKED MARKER, on
@@ -43,8 +44,24 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
     const long OWNER_USER_ID = 555000111;
     const long TOPIC_ID = 4242;
 
-    /// <summary>The engine holds a failed channel for 30 s; the margin is for a loaded machine.</summary>
-    const int RETRY_BACKOFF_WAIT_MILLISECONDS = 33_000;
+    /// <summary>
+    /// THE ONE FILE THAT SHORTENS THE BACKOFF, because the backoff is its subject. Everything above
+    /// still holds — the two attempts happen on the SAME engine, the second only after the hold has
+    /// expired, and the ORDER is exactly the order the assertions read. What changed is the number:
+    /// this test used to sleep 33 s of wall clock in front of production's 30 s hold, which was 49 s
+    /// of the suite's 98 s all by itself, and it proved nothing that three seconds does not.
+    ///
+    /// <para>
+    /// THREE RATHER THAN ONE, so <see cref="ATimedOutSend_IsNotReadAsShutdown_SoTheChannelStillGetsItsBackoff"/>
+    /// keeps its margin on BOTH sides: its window has to be long enough that the first attempt has
+    /// certainly happened and short enough that the hold has certainly not expired, and squeezing
+    /// the hold squeezes that window from both ends at once.
+    /// </para>
+    /// </summary>
+    const int RETRY_BACKOFF_SECONDS = 3;
+
+    /// <summary>The engine holds a failed channel for the backoff; the margin is for a loaded machine.</summary>
+    const int RETRY_BACKOFF_WAIT_MILLISECONDS = (RETRY_BACKOFF_SECONDS * 1000) + 500;
 
     /// <summary>Distinctive, and deliberately free of anything that would push on its own merits.</summary>
     const string ANSWER_TEXT = "Yes. The rebuild finished and the branch is clean.";
@@ -96,7 +113,7 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         var configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), _log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram);
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, _log, _telegram, BridgeTestTiming.Fast_WithRetryBackoff(RETRY_BACKOFF_SECONDS));
     }
 
     public void Dispose()
@@ -137,7 +154,7 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         Assert.False(_telegram.Has_Sent_Containing(ANSWER_TEXT), "the send was supposed to fail");
 
         // 3 — the retry. The tailer re-emits the unconfirmed append; the engine holds the channel for
-        // MIRROR_RETRY_BACKOFF_SECONDS first, which is what this wait is buying.
+        // RETRY_BACKOFF_SECONDS first, which is what this wait is buying.
         await Task.Delay(RETRY_BACKOFF_WAIT_MILLISECONDS);
         _telegram.Succeed_All_Sends();
 
@@ -154,7 +171,7 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         Append_SupervisorEntry(session.OrchId, 2, "progress", NARRATION_TEXT);
 
         Assert.False(
-            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 12_000),
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), BridgeTestTiming.Window_ForTicks(10)),
             "the answer was delivered but the owner's wait was never consumed, so ordinary narration "
             + "is still being pushed to their phone");
     }
@@ -178,9 +195,11 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         Append_SupervisorEntry(orchId, 1, "a question", TIMEOUT_TEXT);
         _telegram.Timeout_Sends_Containing(TIMEOUT_TEXT);
 
-        // Well past several mirror ticks (2 s each) but far short of the 30 s backoff, so a channel
-        // that was settled correctly cannot legitimately attempt twice inside this window.
-        await Run_For_Async(14_000);
+        // Well past several mirror ticks but far short of the backoff, so a channel that was settled
+        // correctly cannot legitimately attempt twice inside this window. BOTH HALVES OF THAT ARE
+        // LOAD-BEARING and both are now computed: Window_ForTicks covers the engine's start-up plus
+        // dozens of ticks, and RETRY_BACKOFF_SECONDS is several times longer than the whole window.
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(30));
 
         var attempts = _telegram.Count_Attempts_Containing(TIMEOUT_TEXT);
 
@@ -246,7 +265,7 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
         _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
         Seed_OwnerChannel(session.OrchId);
 
-        await Run_For_Async(4_000);
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(3));
 
         return session.OrchId;
     }

@@ -12,6 +12,7 @@ using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Translation.MessageTranslator;
 using Xunit;
 using Xunit.Abstractions;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -72,7 +73,8 @@ public class ANudgedMemberIsNeverRespawnedOnSilenceTests : IDisposable
 
         _engine = BridgeEngine_Factory.Create_WithDecisionState(
             _paths, configProvider, _store, _launcher, _log, null,
-            MessageTranslator_Factory.Create(_log), EngineStateStore_Factory.Create_InMemory(), _clock);
+            MessageTranslator_Factory.Create(_log), EngineStateStore_Factory.Create_InMemory(), _clock,
+            BridgeTestTiming.Fast());
     }
 
     public void Dispose()

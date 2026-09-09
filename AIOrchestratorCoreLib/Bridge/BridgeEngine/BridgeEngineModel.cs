@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
@@ -57,7 +58,8 @@ internal sealed class BridgeEngineModel(
     long initialLastUpdateId,
     IEngineStateStore engineStateStore,
     EngineStateSnapshot restoredState,
-    IClock clock) : IBridgeEngine
+    IClock clock,
+    IBridgeEngineTiming timing) : IBridgeEngine
 {
     /// <summary>In-memory inline-button registry cap — taps on evicted buttons get an "expired" toast.</summary>
     const int BUTTON_REGISTRY_CAP = 300;
@@ -94,18 +96,8 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     const int ORPHAN_CONFIRM_MINUTES = 6;
 
-    const int MIRROR_TICK_MILLISECONDS = 2000;
-
     /// <summary>How far back /log reads to find the whole of the last turn. A turn is tens of events; this is generous.</summary>
     const int TURN_LOG_SCAN_RECORDS = 400;
-
-    /// <summary>
-    /// Pause before re-sending a channel whose mirror send failed. The tailer re-emits an
-    /// unconfirmed append on EVERY poll — that is what makes the retry possible — so without this
-    /// the retry would be a 2-second hammer against an endpoint that is already failing, which is
-    /// precisely the shape that earns a bot a server-side throttle.
-    /// </summary>
-    const int MIRROR_RETRY_BACKOFF_SECONDS = 30;
 
     /// <summary>
     /// How long a failing channel keeps being retried before its entries are declared undeliverable
@@ -146,22 +138,6 @@ internal sealed class BridgeEngineModel(
     /// slow. The multi-message case is covered explicitly by WAIT … GO instead of by making
     /// everyone wait (owner directive).
     /// </summary>
-    /// <summary>
-    /// How long a message waits before it is delivered, so a burst of texts arrives as ONE turn.
-    ///
-    /// FOUR SECONDS WAS TOO SHORT TO BE HELD. WAIT can only stop a message that is still in the
-    /// buffer, and four seconds is less than it takes to realise you have more to say and type a
-    /// word — measured on the owner's machine, a WAIT five seconds behind its message arrived after
-    /// the take and stopped nothing.
-    ///
-    /// SIX, because the ⏸ button changed what the window has to be long enough FOR. It went to eight
-    /// while holding meant typing; with a tap sitting under the receipt the owner set it back down
-    /// themselves (2026-08-15) — "with the button we can reduce the window". The number is a balance
-    /// between how long a hold takes to express and how long every message waits, and the button
-    /// moved the first half of that.
-    /// </summary>
-    const int OWNER_AGGREGATION_SECONDS = 6;
-
     const string GLOBAL_ORCH_ID = "";
 
     readonly ISupervisionPaths _paths = paths;
@@ -430,7 +406,8 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, string> _reportedStaleInProgress = [];
     readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
-    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(OWNER_AGGREGATION_SECONDS);
+    readonly IBridgeEngineTiming _timing = timing;
+    readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(timing.OwnerAggregationSeconds);
 
     /// <summary>
     /// Announcements whose channel was locked. These are the one class of write a return check
@@ -1075,7 +1052,7 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                await Task.Delay(MIRROR_TICK_MILLISECONDS, cancellationToken);
+                await Task.Delay(_timing.MirrorTickMilliseconds, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -1093,7 +1070,7 @@ internal sealed class BridgeEngineModel(
         // tailer, compaction and the status push behind it. Uncontended writes charge ~0 ms and are
         // unaffected; a spent allowance means blocked channels fail fast and retry next tick, which
         // is a defined path (logged, and the owner's message goes back in its buffer).
-        using var tickAllowance = ChannelWrite_Lock.Open_TickAllowance(ChannelWrite_Lock.DEFAULT_TICK_ALLOWANCE);
+        using var tickAllowance = ChannelWrite_Lock.Open_TickAllowance(TimeSpan.FromMilliseconds(_timing.TickLockAllowanceMilliseconds));
 
         // ABOVE EVERYTHING THAT SPENDS THE ACCOUNT, and above the DND gate far below. A pause is
         // not a message: it is the app deciding not to spend an allowance it is about to exhaust,
@@ -1280,7 +1257,7 @@ internal sealed class BridgeEngineModel(
         if (!_mirrorRetryLastAttemptUtc.TryGetValue(channelFilePath, out var lastAttemptUtc))
             return true;
 
-        return DateTime.UtcNow - lastAttemptUtc >= TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS);
+        return DateTime.UtcNow - lastAttemptUtc >= TimeSpan.FromSeconds(_timing.MirrorRetryBackoffSeconds);
     }
 
     /// <summary>
@@ -1475,7 +1452,7 @@ internal sealed class BridgeEngineModel(
             // CRASH_LOOP_THRESHOLD and the counter resets only when the slot comes alive — so a
             // single 502 meant the owner was never told at all. Holding with a backoff answers the
             // throttle concern without paying for it in lost alerts (rev-6 F3, 2026-08-13).
-            if (hold.LastAttemptUtc != default && DateTime.UtcNow - hold.LastAttemptUtc < TimeSpan.FromSeconds(MIRROR_RETRY_BACKOFF_SECONDS))
+            if (hold.LastAttemptUtc != default && DateTime.UtcNow - hold.LastAttemptUtc < TimeSpan.FromSeconds(_timing.MirrorRetryBackoffSeconds))
                 continue;
 
             // The attempt is counted BEFORE it is made, so a send that throws still spends one — the
@@ -2872,7 +2849,7 @@ internal sealed class BridgeEngineModel(
         // already failing — the shape that earns a bot a server-side throttle. The failure stamp is
         // what holds it off, because the text has not changed and so cannot.
         if (_generalDashboardFailedAtUtc != null
-            && (DateTime.UtcNow - _generalDashboardFailedAtUtc.Value).TotalSeconds < MIRROR_RETRY_BACKOFF_SECONDS)
+            && (DateTime.UtcNow - _generalDashboardFailedAtUtc.Value).TotalSeconds < _timing.MirrorRetryBackoffSeconds)
             return;
 
         Load_GeneralDashboardMessageId_Once();
@@ -8017,7 +7994,7 @@ internal sealed class BridgeEngineModel(
                 // same class, two predicates, one commit. The predicate is now one predicate, and it
                 // lives somewhere it can be tested.
                 //
-                // BACKOFF REUSES MIRROR_RETRY_BACKOFF_SECONDS (30 s) rather than inventing a value: this
+                // BACKOFF REUSES MirrorRetryBackoffSeconds (30 s in production) rather than inventing a value: this
                 // file already has one retry window with that meaning, applied through
                 // Is_MirrorAttemptDue, and a second magic number would be worse than the one being
                 // explained. Thirty seconds takes a failing sync from ~30 attempts a minute to 2, and
@@ -8037,7 +8014,7 @@ internal sealed class BridgeEngineModel(
                 // it holds. Closing that wants a third memo keyed on the refused name, which is not
                 // taken here because nothing observable depends on it.
                 if (TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown)
-                    _topicNameRetryAfterUtc[session.OrchId] = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, MIRROR_RETRY_BACKOFF_SECONDS);
+                    _topicNameRetryAfterUtc[session.OrchId] = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, _timing.MirrorRetryBackoffSeconds);
                 else
                     _appliedTopicNames[session.OrchId] = wantedName;
 
@@ -8225,7 +8202,7 @@ internal sealed class BridgeEngineModel(
                 lastText,
                 Resolve_EffectiveMode(session.OrchId),
                 _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
-                MIRROR_RETRY_BACKOFF_SECONDS,
+                _timing.MirrorRetryBackoffSeconds,
                 Find_NewestTopicMessage_OrNull(session.TelegramTopicId),
                 _repostImpossibleOrchIds.Contains(session.OrchId),
                 Note_FiguresAndDescribe_UnchangedFor(session.OrchId, ledger),
@@ -11709,7 +11686,7 @@ internal sealed class BridgeEngineModel(
             // a refusal is the same honest-behaviour/dishonest-map trade documented at the sibling site:
             // an invalid name will not become valid by being sent again two seconds later.
             if (TopicNameSync_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.OutcomeUnknown)
-                _generalTopicNameRetryAfterUtc = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, MIRROR_RETRY_BACKOFF_SECONDS);
+                _generalTopicNameRetryAfterUtc = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, _timing.MirrorRetryBackoffSeconds);
             else
                 _appliedGeneralTopicName = desired;
 

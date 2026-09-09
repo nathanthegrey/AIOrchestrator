@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
+using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
 
 namespace AIOrchestratorCoreLib.Tests.GeneralSupervision;
 
@@ -64,7 +65,12 @@ public class CloseTapArchiveProbeTests : IDisposable
         var log = OrchestrationLog_Factory.Create(_paths);
 
         _launcher = OrchestrationLauncher_Factory.Create(_paths, configProvider, _store, new RecordingSpawner_Fake(), log);
-        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, log, _telegram);
+        // THE ONE ENGINE TEST THAT KEEPS THE SHIPPED TICK, and it has to. Two of the cases below read
+        // the decision prompt through Assert.Single(EditedTexts), so they depend on the general
+        // dashboard's own edit NOT landing inside the drive window — which is a statement about how
+        // many ticks fit in it, and shrinking the tick made it false (two edits, 2026-09-09). This
+        // class costs under a second at the shipped period, so there was nothing to buy here anyway.
+        _engine = BridgeEngine_Factory.Create_WithTelegramClient(_paths, configProvider, _store, _launcher, log, _telegram, BridgeEngineTiming_Factory.Create_Production());
     }
 
     public void Dispose()
