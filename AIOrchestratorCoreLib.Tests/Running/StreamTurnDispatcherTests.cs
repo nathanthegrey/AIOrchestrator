@@ -274,6 +274,9 @@ public class StreamTurnDispatcherTests
         Append_Supervisor(harness, orchId, memberId, "BRIEF", "first");
         Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
 
+        var loggedWhenTheFirstTurnEnded = logged.Count;
+        var startsWhenTheFirstTurnEnded = Lines(harness, STREAM_START).Count;
+
         // The quiet stretch: well past the 300 ms silence limit, and nobody has asked the process
         // anything since its last answer — exactly the shape of the idle gap between two owner
         // messages on the VPS.
@@ -288,8 +291,16 @@ public class StreamTurnDispatcherTests
         // The bug kills the healthy process for a gap it did not cause: caught here by the
         // transport-failure log line the kill always writes, and by the reboot a killed process
         // forces — ONE process the whole test, or the fix did not take.
-        Assert.DoesNotContain(logged, message => message.Contains("said nothing for", StringComparison.Ordinal));
-        Assert.Single(Lines(harness, STREAM_START));
+        // SCOPED TO WHAT HAPPENS AFTER THE GAP, and only that. The first version asserted over the whole
+        // run and went red under a full parallel suite (measured 2026-09-09): the silence limit is 300 ms
+        // and starting the FakeClaude process can take longer than that on a loaded machine, so turn 1
+        // was killed for its own start-up and the test blamed the gap. The bug this pins is that the
+        // SECOND turn must not be killed for a quiet stretch it did not cause — so the evidence is the
+        // log written after the first turn finished, and the process that served the second turn.
+        var afterFirstTurn = logged.Skip(loggedWhenTheFirstTurnEnded).ToList();
+
+        Assert.DoesNotContain(afterFirstTurn, message => message.Contains("said nothing for", StringComparison.Ordinal));
+        Assert.Equal(startsWhenTheFirstTurnEnded, Lines(harness, STREAM_START).Count);
     }
 
     [Fact]
