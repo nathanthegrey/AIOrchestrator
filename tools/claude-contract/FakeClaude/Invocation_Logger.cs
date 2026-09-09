@@ -29,15 +29,58 @@ public static class Invocation_Logger
     static readonly string[] LOGGED_ENVIRONMENT_PREFIXES = ["AIORCH_", "CLAUDECODE", "CLAUDE_CODE_"];
 
     /// <summary>
+    /// Five seconds of waiting out a busy log — one policy for the reader and the writer, because
+    /// they contend for the same handle and an asymmetry between them is what the crash below was.
+    /// </summary>
+    const int SHARING_RETRIES = 200;
+
+    /// <summary>Paired with <see cref="SHARING_RETRIES"/>; the two are only ever read together.</summary>
+    const int SHARING_RETRY_MILLISECONDS = 25;
+
+    /// <summary>
+    /// Runs <paramref name="operation"/>, waiting out the sharing violation another fake's
+    /// exclusive handle on the log causes. ONE policy for both callers: the appender takes the log
+    /// <see cref="FileShare.None"/> while it counts, so every other access to that file has to be
+    /// prepared to wait for it. When the wait is exhausted the exception escapes — a fake that
+    /// cannot read its own memory must say so rather than answer from an empty log.
+    /// </summary>
+    static T Retry_WhileShared<T>(Func<T> operation)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return operation();
+            }
+            catch (IOException) when (attempt < SHARING_RETRIES)
+            {
+                Thread.Sleep(SHARING_RETRY_MILLISECONDS);
+            }
+        }
+    }
+
+    /// <summary>
     /// Whether a process has already run under this <c>--session-id</c> — read from the log, which
     /// is this fake's whole memory. The real CLI refuses a re-claimed id (measured); so does this.
+    ///
+    /// <para>
+    /// RETRIED LIKE THE APPEND, and for the same reason (measured 2026-09-09, macOS). The appender
+    /// has held this file under <see cref="FileShare.None"/> since two turns first shared a working
+    /// directory; this read never did, so a plain <c>File.ReadAllLines</c> landing inside another
+    /// fake's append died with "used by another process" — UNHANDLED, exit 134, before a single
+    /// line was logged. Seven of eighteen concurrent invocations in one folder crashed that way. The
+    /// dispatcher read the corpse as an ordinary turn error and retried; the retry resumed a session
+    /// id the crash had never claimed, was refused, and the third attempt started fresh and drew the
+    /// scenario's DEFAULT turn — so a test that asked for a refusal silently got a success, which is
+    /// the worst possible shape for a test double to fail in.
+    /// </para>
     /// </summary>
     public static bool Has_ClaimedSessionId(string logPath, string sessionId)
     {
         if (!File.Exists(logPath))
             return false;
 
-        foreach (var line in File.ReadAllLines(logPath))
+        foreach (var line in Retry_WhileShared(() => File.ReadAllLines(logPath)))
         {
             if (line.Length == 0)
                 continue;
@@ -92,18 +135,11 @@ public static class Invocation_Logger
         if (!string.IsNullOrEmpty(folder))
             Directory.CreateDirectory(folder);
 
-        for (var attempt = 0; ; attempt++)
+        return Retry_WhileShared(() =>
         {
-            try
-            {
-                using var stream = new FileStream(logPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-                return Append_ToOpenLog(stream, rawArgs, args, prompt, workingDirectory, lineKind, stdin);
-            }
-            catch (IOException) when (attempt < 200)
-            {
-                Thread.Sleep(25);
-            }
-        }
+            using var stream = new FileStream(logPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            return Append_ToOpenLog(stream, rawArgs, args, prompt, workingDirectory, lineKind, stdin);
+        });
     }
 
     static (int Overall, int ForName) Append_ToOpenLog(FileStream stream, IReadOnlyList<string> rawArgs, FakeClaudeArguments args, string prompt, string workingDirectory, string lineKind, string? stdin)
