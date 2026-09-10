@@ -709,6 +709,28 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("deleteWebhook", new JsonObject { ["drop_pending_updates"] = dropPendingUpdates }, cancellationToken);
     }
 
+    public async Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken)
+    {
+        var reactions = new JsonArray();
+
+        if (emoji != null)
+            reactions.Add(new JsonObject { ["type"] = "emoji", ["emoji"] = emoji });
+
+        var payload = new JsonObject
+        {
+            ["chat_id"] = _supergroupChatId,
+            ["message_id"] = messageId,
+
+            // An EMPTY array clears the reaction — that is Telegram's own spelling for "remove",
+            // not an omitted field, and omitting it is a 400.
+            ["reaction"] = reactions,
+        };
+
+        // CONTROL, not Message: it creates nothing in the group. It changes a message that is
+        // already there, which is exactly what that bucket is for.
+        await Post_Async("setMessageReaction", payload, cancellationToken, TelegramCallClasses.Control);
+    }
+
     public async Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
