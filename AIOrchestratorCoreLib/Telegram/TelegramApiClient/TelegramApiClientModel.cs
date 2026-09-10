@@ -634,9 +634,17 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     /// </para>
     /// <para>
     /// The bucket is taken BEFORE the long poll begins and not held across it — a token buys the
-    /// right to start a poll, and the fifty seconds it then spends waiting are Telegram's, not
-    /// ours. The 429 retry uses the control ceiling (two seconds), so a rate-limited poll cannot
-    /// sit on the inbound loop for minutes while the owner's taps queue behind it.
+    /// right to start a poll, and the twenty seconds it then spends waiting
+    /// (<c>BridgeEngineModel.INBOUND_LONG_POLL_SECONDS</c>) are Telegram's, not ours.
+    /// </para>
+    /// <para>
+    /// WHAT THE INLINE RETRY ACTUALLY COVERS, stated narrowly because the first version of this
+    /// comment claimed more than the code does: only a <c>retry_after</c> of two seconds or less
+    /// (<see cref="TokenBucket_Gate.MAXIMUM_CONTROL_RETRY_WAIT"/>). That is the burst case. A real
+    /// Telegram flood wait — anything longer — is thrown to the inbound loop exactly as before,
+    /// and that loop still backs off on its own ladder without reading <c>retry_after</c>. So this
+    /// buys the short case and leaves the long one where it was; it does not make the bridge
+    /// <c>retry_after</c>-aware, and saying otherwise would be a comment the code cannot cash.
     /// </para>
     /// </summary>
     public async Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken)
@@ -645,10 +653,15 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         // taps would never reach the bridge.
         var url = $"{Build_MethodUrl("getUpdates")}?offset={offset}&timeout={timeoutSeconds}&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D";
 
+        // ONE TOKEN PER LOGICAL POLL, TAKEN OUTSIDE THE RETRY LOOP. Inside it, a 429'd poll would
+        // spend up to three tokens for one poll — on a bucket that refills one every two seconds
+        // and that the mirror's edits are already competing for. The retry is Telegram asking us
+        // to wait, not a second poll: charging it again would make the rate limit cost the owner's
+        // inbound latency twice over.
+        await Wait_ForBudget_Async(TelegramCallClasses.Control, cancellationToken);
+
         for (var attempt = 0; ; attempt++)
         {
-            await Wait_ForBudget_Async(TelegramCallClasses.Control, cancellationToken);
-
             var response = await _httpClient.GetAsync(url, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
 

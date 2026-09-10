@@ -84,14 +84,14 @@ public class TelegramApiClientWireTests
         var transport = new RecordingTransport_Fake();
         transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":[]}""");
 
-        await Build_Client(transport).Get_UpdatesJson_Async(offset: 4242, timeoutSeconds: 50, CancellationToken.None);
+        await Build_Client(transport).Get_UpdatesJson_Async(offset: 4242, timeoutSeconds: 20, CancellationToken.None);
 
         var request = Assert.Single(transport.Requests);
         var query = System.Web.HttpUtility.ParseQueryString(request.Uri.Query);
 
         Assert.EndsWith($"/bot{TOKEN}/getUpdates", request.Uri.AbsolutePath);
         Assert.Equal("4242", query["offset"]);
-        Assert.Equal("50", query["timeout"]);
+        Assert.Equal("20", query["timeout"]);
 
         var allowed = JsonNode.Parse(query["allowed_updates"]!)!.AsArray().Select(node => node!.GetValue<string>()).ToList();
 
@@ -111,7 +111,7 @@ public class TelegramApiClientWireTests
         transport.Answer_With((HttpStatusCode)409, """{"ok":false,"error_code":409,"description":"Conflict: terminated by other getUpdates request"}""");
 
         var failure = await Assert.ThrowsAsync<TelegramApiException>(
-            () => Build_Client(transport).Get_UpdatesJson_Async(0, 50, CancellationToken.None));
+            () => Build_Client(transport).Get_UpdatesJson_Async(0, 20, CancellationToken.None));
 
         Assert.Equal(409, failure.StatusCode);
         Assert.False(failure.Is_Retryable, "a 409 is a named situation with an action attached, not a 'try again'");
@@ -123,7 +123,10 @@ public class TelegramApiClientWireTests
     /// housekeeping. Asserted as "the send allowance is untouched", which is the property that
     /// matters and the one a future re-classification would break.
     /// </summary>
+    // SLOW BY CONSTRUCTION: the control bucket starts empty by design, so each of these pays a
+    // real ~2 s for its first token, and the retry case pays Telegram's retry_after on top.
     [Fact]
+    [Trait("Speed", "Slow")]
     public async Task GetUpdates_SpendsTheControlAllowance_NotTheOwnersDeliveryAllowance()
     {
         var budget = TelegramSendBudget_Factory.Create_Fresh();
@@ -132,7 +135,7 @@ public class TelegramApiClientWireTests
 
         var client = TelegramApiClient_Factory.Create_WithTransport(TOKEN, CHAT_ID, budget, transport);
 
-        await client.Get_UpdatesJson_Async(0, 50, CancellationToken.None);
+        await client.Get_UpdatesJson_Async(0, 20, CancellationToken.None);
 
         Assert.Equal(TokenBucket_Gate.DEFAULT_CAPACITY, budget.Read_SendState().Tokens, precision: 1);
         Assert.Single(transport.Requests);
@@ -143,14 +146,17 @@ public class TelegramApiClientWireTests
     /// in this file that went straight to HttpClient — no bucket, no retry_after — so a 429 met the
     /// inbound loop's own backoff, which knows nothing about how long Telegram asked for.
     /// </summary>
+    // SLOW BY CONSTRUCTION: the control bucket starts empty by design, so each of these pays a
+    // real ~2 s for its first token, and the retry case pays Telegram's retry_after on top.
     [Fact]
+    [Trait("Speed", "Slow")]
     public async Task AGetUpdatesThatIsRateLimited_IsRetried_AndTheSecondAttemptIsTheOneThatCounts()
     {
         var transport = new RecordingTransport_Fake();
         transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":1}}""");
         transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":[{"update_id":5}]}""");
 
-        var body = await Build_Client(transport).Get_UpdatesJson_Async(0, 50, CancellationToken.None);
+        var body = await Build_Client(transport).Get_UpdatesJson_Async(0, 20, CancellationToken.None);
 
         Assert.Contains("\"update_id\":5", body);
         Assert.Equal(2, transport.Requests.Count);
@@ -161,14 +167,17 @@ public class TelegramApiClientWireTests
     /// path's ten. A poll that slept for minutes would hold the inbound loop while the owner's
     /// taps queued behind it.
     /// </summary>
+    // SLOW BY CONSTRUCTION: the control bucket starts empty by design, so each of these pays a
+    // real ~2 s for its first token, and the retry case pays Telegram's retry_after on top.
     [Fact]
+    [Trait("Speed", "Slow")]
     public async Task AGetUpdatesRateLimitedForTooLong_IsHandedBack_NotSleptThrough()
     {
         var transport = new RecordingTransport_Fake();
         transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":600}}""");
 
         var failure = await Assert.ThrowsAsync<TelegramApiException>(
-            () => Build_Client(transport).Get_UpdatesJson_Async(0, 50, CancellationToken.None));
+            () => Build_Client(transport).Get_UpdatesJson_Async(0, 20, CancellationToken.None));
 
         Assert.Equal(429, failure.StatusCode);
         Assert.Equal(600, failure.RetryAfterSeconds);
