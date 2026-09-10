@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Channels;
+
 namespace AIOrchestratorCoreLib.Bridge;
 
 /// <summary>
@@ -26,6 +28,23 @@ public static class Brevity_Policy
     /// <summary>Never nag more than once per this window, however chatty the supervisor gets.</summary>
     public const int NUDGE_COOLDOWN_MINUTES = 20;
 
+    /// <summary>
+    /// THE LINES THAT COUNT — prose only, since the owner's ruling of 2026-09-10. A marker line is
+    /// structure: the app turns `OPTION:` into a button and `STATE:` into a PULSE field, and neither
+    /// is a sentence the owner reads.
+    ///
+    /// <para>
+    /// WHY IT CHANGED, MEASURED. A well-formed question is SIX marker lines by construction — ROW,
+    /// RISK, QUESTION, two OPTIONs, RECOMMEND — so a counter that included them coached EVERY question
+    /// as over a five-line ceiling. Brief C asks for "zero coaching entries about format"; this was
+    /// the surface generating them, about entries that were correct.
+    /// </para>
+    /// <para>
+    /// ONE RULE, READ FROM THE GRAMMAR, so this counter and the tool that refuses before the write
+    /// agree by construction. They did not: the tool counted prose and this counted everything, which
+    /// is the same class of split E3 exists to end, one layer up from the marker words themselves.
+    /// </para>
+    /// </summary>
     public static int Count_Lines(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -35,8 +54,10 @@ public static class Brevity_Policy
 
         foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
         {
-            if (!string.IsNullOrWhiteSpace(line))
-                lines++;
+            if (string.IsNullOrWhiteSpace(line) || ChannelGrammar.Is_MarkerLine(line))
+                continue;
+
+            lines++;
         }
 
         return lines;

@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Bridge;
 using Xunit;
+using AIOrchestratorCoreLib.Channels;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -267,5 +268,91 @@ public class OwnerMessageContractTests
     public void TheTooManyOptionsCoachingSaysHowMany()
     {
         Assert.Contains("4", OwnerMessage_Contract.Describe(OwnerMessageFaults.TooManyOptions));
+    }
+
+    /// <summary>
+    /// A WELL-FORMED QUESTION IS NOT TOO LONG — the owner's ruling of 2026-09-10, and the defect it
+    /// removes was total rather than occasional: a question owes the owner ROW, RISK, QUESTION, two
+    /// to four OPTIONs and RECOMMEND, so the SHORTEST valid question is six marker lines. A counter
+    /// that included them coached EVERY question ever asked as over a five-line ceiling — and brief C
+    /// asks for "zero coaching entries about format".
+    ///
+    /// Six marker lines and one line of prose, which is a question with something said before it.
+    /// </summary>
+    [Fact]
+    public void AWellFormedQuestionIsNotCoachedAsTooLong()
+    {
+        var entry = string.Join('\n',
+        [
+            "The perf branch is green and I would take it now.",
+            $"{ChannelGrammar.ROW} FIN-D-277a",
+            $"{ChannelGrammar.RISK} high",
+            $"{ChannelGrammar.QUESTION} merge wf-perf now, or hold for your review?",
+            $"{ChannelGrammar.OPTION} Merge it",
+            $"{ChannelGrammar.OPTION} Hold",
+            $"{ChannelGrammar.RECOMMEND} Hold — you asked to read every merge to master first.",
+        ]);
+
+        Assert.DoesNotContain(OwnerMessageFaults.TooLong, OwnerMessage_Contract.Check(entry));
+
+        // And the reason is the count, not luck: one prose line among seven.
+        Assert.Equal(1, Brevity_Policy.Count_Lines(entry));
+    }
+
+    /// <summary>
+    /// PROSE IS STILL COUNTED, and the boundary is asserted on both sides so the rule cannot pass by
+    /// counting nothing. Six sentences is still six sentences however many markers surround them.
+    /// </summary>
+    [Fact]
+    public void ProseIsStillCounted_MarkersOrNot()
+    {
+        var sixSentencesAroundAQuestion = string.Join('\n',
+        [
+            "one", "two", "three", "four", "five", "six",
+            $"{ChannelGrammar.QUESTION} which?",
+            $"{ChannelGrammar.OPTION} a",
+            $"{ChannelGrammar.OPTION} b",
+        ]);
+
+        Assert.Contains(OwnerMessageFaults.TooLong, OwnerMessage_Contract.Check(sixSentencesAroundAQuestion));
+
+        var fiveSentences = string.Join('\n', ["one", "two", "three", "four", "five"]);
+
+        Assert.DoesNotContain(OwnerMessageFaults.TooLong, OwnerMessage_Contract.Check(fiveSentences));
+    }
+
+    /// <summary>
+    /// THE CHARACTER CEILING STILL COUNTS EVERYTHING. A wall of text is a wall whatever the marker at
+    /// its left edge, and exempting markers from the LINE count must not quietly exempt them from the
+    /// other ceiling — that would let a single 2,000-character `OPTION:` through.
+    /// </summary>
+    [Fact]
+    public void ACharacterWallIsStillTooLongEvenBehindAMarker()
+    {
+        var wall = $"{ChannelGrammar.OPTION} " + new string('x', OwnerMessage_Contract.MAXIMUM_CHARACTERS + 1);
+
+        Assert.Contains(OwnerMessageFaults.TooLong, OwnerMessage_Contract.Check(wall));
+    }
+
+    /// <summary>
+    /// THE TWO SIDES AGREE BY CONSTRUCTION — the whole point of moving the rule into the grammar. The
+    /// tool refuses before the write and this coaches after it; they were counting differently, which
+    /// is the same split E3 exists to end, one layer above the marker words.
+    ///
+    /// Asserted through the shared predicate rather than by re-deriving a count here, because a
+    /// second implementation in a test is a second thing to be wrong.
+    /// </summary>
+    [Fact]
+    public void EveryGrammarMarkerIsStructureToTheCounter()
+    {
+        foreach (var marker in ChannelGrammar.All_Markers)
+        {
+            Assert.True(
+                ChannelGrammar.Is_MarkerLine($"{marker} something"),
+                $"'{marker}' is in the grammar but the prose counter does not recognise it as structure, "
+                + "so an entry using it would be coached as too long.");
+
+            Assert.Equal(0, Brevity_Policy.Count_Lines($"{marker} something"));
+        }
     }
 }

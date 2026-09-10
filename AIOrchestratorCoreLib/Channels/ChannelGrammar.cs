@@ -63,6 +63,9 @@ public static class ChannelGrammar
 
     public static IReadOnlyList<string> RiskLevels => Read_Array(["risk_levels", "values"]);
 
+    /// <summary>Past this many hours a DEADLINE: is read as no deadline at all.</summary>
+    public static int Deadline_MaximumHours => Read_Int(["deadline", "maximum_hours"]);
+
     public static int Max_Lines => Read_Int(["ceilings", "max_lines"]);
 
     public static int Max_Characters => Read_Int(["ceilings", "max_characters"]);
@@ -121,6 +124,67 @@ public static class ChannelGrammar
     public static string TO => Marker("to");
 
     public static string WORKTREE => Marker("worktree");
+
+    /// <summary>
+    /// EVERY marker word in the grammar, for a caller that must recognise a marker LINE without
+    /// caring which marker it is.
+    ///
+    /// Read once and cached: the ceilings are measured on every owner-facing entry, and re-parsing
+    /// the JSON per line would put a document parse inside a per-line loop.
+    /// </summary>
+    public static IReadOnlyList<string> All_Markers { get; } = Read_AllMarkers();
+
+    /// <summary>
+    /// WHETHER A LINE IS STRUCTURE RATHER THAN PROSE — the owner's ruling of 2026-09-10: the brevity
+    /// ceiling counts prose lines only, because a marker line is something the app turns into a
+    /// button or a field, not a sentence the owner reads.
+    ///
+    /// <para>
+    /// IT LIVES HERE, BESIDE THE MARKERS, so the tool and the app cannot disagree about what counts.
+    /// The tool refuses before the write and the app coaches after it; they were counting differently,
+    /// and the consequence was measured: a well-formed question is SIX marker lines by construction,
+    /// so the app coached every single one as too long — noise about format, which is precisely what
+    /// brief C's "zero coaching entries about format" asks to end.
+    /// </para>
+    /// <para>
+    /// LEADING WHITESPACE IS IGNORED, because a marker indented under a bullet is still a marker —
+    /// the recognisers that act on these lines trim before matching, and a counter that did not would
+    /// disagree with them about the same line.
+    /// </para>
+    /// </summary>
+    public static bool Is_MarkerLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var trimmed = line.TrimStart();
+
+        foreach (var marker in All_Markers)
+        {
+            if (trimmed.StartsWith(marker, StringComparison.Ordinal))
+                return true;
+        }
+
+        // The persisted type line is structure too, and the most obviously so: the tool writes it and
+        // the parser removes it. A body that still carries one is being counted before parsing.
+        return trimmed.StartsWith(TypeLine_Prefix, StringComparison.Ordinal);
+    }
+
+    static IReadOnlyList<string> Read_AllMarkers()
+    {
+        var markers = Read_Node(["markers"]) as JsonObject
+            ?? throw new Exception("The channel grammar's 'markers' is not an object.");
+
+        return
+        [
+            .. markers
+                .Where(pair => pair.Key != "_comment")
+                .Select(pair => pair.Value!.GetValue<string>())
+                // LONGEST FIRST, so a prefix cannot shadow a longer marker that starts with it.
+                // Nothing in the grammar does today; a future pair like `RISK:` and `RISKS:` would.
+                .OrderByDescending(marker => marker.Length),
+        ];
+    }
 
     /// <summary>
     /// A marker word with its trailing colon removed — some recognisers match the bare word because

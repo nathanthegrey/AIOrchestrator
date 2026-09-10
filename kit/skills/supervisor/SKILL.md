@@ -437,25 +437,27 @@ scroll past later. The brevity ceiling above (3 lines the norm, 5 the hard ceili
 characters) is not a courtesy on top of the old filter any more — it is the only thing standing
 between your keyboard and their pocket. Write to the owner only what they must know; everything else
 belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which ring at all.
-- **A question to the owner is FIVE lines, and the app REFUSES to send one that is missing any of
-  them.** Each at the start of its own line, beside the body they belong to:
+- **A question to the owner owes FIVE things, and the tool REFUSES to write one that is missing any
+  of them.** You pass them as flags — you never type the syntax:
 
-  ```
-  QUESTION: Merge branch wf-perf into master now, or hold for your IDE review?
-  OPTION: Merge it
-  OPTION: Hold
-  RECOMMEND: Hold — you asked to read every merge to master first.
-  RISK: high
-  ROW: FIN-D-277a
+  ```bash
+  channel-append.sh --channel "…/owner-channel.md" --to owner \
+    --subject   "the merge gate" \
+    --question  "Merge branch wf-perf into master now, or hold for your IDE review?" \
+    --option    "Merge it" \
+    --option    "Hold" \
+    --recommend "Hold — you asked to read every merge to master first." \
+    --risk high \
+    --row FIN-D-277a
   ```
 
-  `QUESTION:` — one short, self-contained question (≤2 lines, ideally one). The app sends your body
+  `--question` — one short, self-contained question (≤2 lines, ideally one). The app sends your body
   first and puts the buttons on their OWN message carrying only this, so it has to stand alone.
-  `OPTION:` — at least two, spelled out; one option is not a choice. `RECOMMEND:` — what you would
-  do and why, one line; it is printed with the question, because a recommendation the owner has to
-  scroll back for is a decision deferred. `RISK:` — `high` or `low`; high means a tap is not enough
-  and they type back a 4-digit code. `ROW:` — the plan row this decision belongs to, or the word
-  `none`, written out.
+  `--option` — repeatable, two to four, spelled out; one option is not a choice and a fifth makes it
+  a list. `--recommend` — what you would do and why, one line; it is printed with the question,
+  because a recommendation the owner has to scroll back for is a decision deferred. `--risk` —
+  `high` or `low`; high means a tap is not enough and they type back a 4-digit code. `--row` — the
+  plan row this decision belongs to, or the word `none`, written out.
 
   **Missing a line? The body still reaches them, the question does not, and you get one entry in
   this channel naming every line you left out.** Nobody will answer a question that was never sent,
@@ -470,8 +472,10 @@ belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which
   app reads it for the topic's status line (PULSE), field 2: `sup · <what you declared> · declared
   HH:MM`. One line, your own words — a STATE, not a summary of what the entry just reported:
 
-  ```
-  STATE: waiting for imp-2's review, then I hand you the merge
+  ```bash
+  channel-append.sh --channel "…/owner-channel.md" --to owner \\
+    --subject "…" --report "…" \\
+    --state "waiting for imp-2's review, then I hand you the merge"
   ```
 
   Write it in the OWNER'S language — it is addressed to them, like the rest of the entry. The label
@@ -479,20 +483,24 @@ belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which
   **A turn that writes nothing to the owner needs no `STATE:` line.** The app leaves the field BLANK
   rather than inventing a state for you — an omitted line is a blank row, never a crash and never a
   stale one carried over from three entries ago.
-- **A question that can wait for ever usually does. Bound it: `DEADLINE:` and `DEFAULT:`.** Two
-  optional lines, written beside `QUESTION:`/`OPTION:` and read by the app the same way:
+- **A question that can wait for ever usually does. Bound it: `--deadline` and `--default`.** Two
+  more flags on the same call:
 
-  ```
-  QUESTION: Merge branch wf-perf into master now, or hold for your IDE review?
-  OPTION: Merge it
-  OPTION: Hold
-  DEADLINE: 2h
-  DEFAULT: 2
+  ```bash
+  channel-append.sh --channel "…/owner-channel.md" --to owner \
+    --subject  "the merge gate" \
+    --question "Merge branch wf-perf into master now, or hold for your IDE review?" \
+    --option   "Merge it" \
+    --option   "Hold" \
+    --deadline 2h \
+    --default  2
   ```
 
-  `DEADLINE:` is `2h`, `90m`, or a bare number meaning minutes; past 168h it is read as no deadline
-  at all. `DEFAULT:` is the OPTION NUMBER AS THE OWNER SEES IT — 1-based, matching the buttons. When
-  the deadline passes unanswered, the default is applied and `/pending` says it was.
+  `--deadline` is `2h`, `90m`, or a bare number meaning minutes; past 168h the app reads it as NO
+  deadline at all, so the tool refuses that rather than letting it mean the opposite of what you
+  wrote. `--default` is the OPTION NUMBER AS THE OWNER SEES IT — 1-based, matching the buttons — and
+  is refused if it names no option, or if there is no deadline for it to be applied at. When the
+  deadline passes unanswered the default is applied and `/pending` says it was.
 
   **They are optional and they are NOT symmetrical.** A `DEADLINE:` alone is meaningful: the question
   expires and says so. A `DEFAULT:` alone is dropped, because nothing would ever apply it. Writing

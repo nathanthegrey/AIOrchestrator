@@ -46,6 +46,8 @@ usage() {
   echo "    --recommend <text>    which option you would take, and why in one clause" >&2
   echo "    --risk low|medium|high" >&2
   echo "    --row <id>            the ledger row this decides" >&2
+  echo "    --deadline <2h|90m|N> bound a question that can otherwise wait for ever" >&2
+  echo "    --default <n>         the option number applied when the deadline passes (1-based)" >&2
   echo "    --state <text>        your one-line state for PULSE, at turn end" >&2
   echo "    --report <text>       a plain report body" >&2
   echo "    --attach <path>       repeatable; a file the owner should receive" >&2
@@ -60,6 +62,7 @@ CHANNEL=""; AUTHOR=""; SUBJECT=""; BODY_FILE=""; BUDGET_SECONDS="$DEFAULT_BUDGET
 
 # ---- the typed entry (E3) -----------------------------------------------------------------------
 ENTRY_TYPE=""; QUESTION=""; RECOMMEND=""; RISK=""; ROW=""; STATE_LINE=""; REPORT=""; TO_KIND=""
+DEADLINE=""; DEFAULT_OPTION=""
 OPTIONS=(); ATTACHMENTS=()
 
 while [ $# -gt 0 ]; do
@@ -79,6 +82,8 @@ while [ $# -gt 0 ]; do
     --report)         REPORT="${2:-}"; shift 2 ;;
     --attach)         ATTACHMENTS+=("${2:-}"); shift 2 ;;
     --to)             TO_KIND="${2:-}"; shift 2 ;;
+    --deadline)       DEADLINE="${2:-}"; shift 2 ;;
+    --default)        DEFAULT_OPTION="${2:-}"; shift 2 ;;
     -h|--help)        usage ;;
     *) echo "channel-append.sh: unknown argument '$1'" >&2; usage ;;
   esac
@@ -109,14 +114,17 @@ grammar() {
 TYPED_CALL=0
 if [ -n "$ENTRY_TYPE" ] || [ -n "$QUESTION" ] || [ -n "$STATE_LINE" ] || [ -n "$REPORT" ] \
    || [ ${#OPTIONS[@]} -gt 0 ] || [ ${#ATTACHMENTS[@]} -gt 0 ] || [ -n "$RECOMMEND" ] \
-   || [ -n "$RISK" ] || [ -n "$ROW" ]; then
+   || [ -n "$RISK" ] || [ -n "$ROW" ] || [ -n "$DEADLINE" ] || [ -n "$DEFAULT_OPTION" ]; then
   TYPED_CALL=1
 fi
 
 if [ "$TYPED_CALL" = "1" ]; then
+  # ONE LINE, NAMING THE FIX. A typed entry reads the grammar with jq; without it there is no way to
+  # know what a marker is spelled like, and guessing is the drift E3 removed. install.sh has always
+  # required jq and install.ps1 did not until 2026-09-10 — so this refusal is the one a Windows
+  # session actually hits, in msys bash, and it has to be actionable on its own.
   command -v jq >/dev/null 2>&1 || {
-    echo "channel-append.sh: a typed entry needs jq to read the channel grammar, and jq is not on PATH." >&2
-    echo "                   Nothing was written. Install jq, or write the entry with --body-file." >&2
+    echo "channel-append.sh: REFUSED — a typed entry needs jq to read the channel grammar and jq is not on PATH. NOTHING WAS WRITTEN. Install it (winget install jqlang.jq / brew install jq / apt install jq) — on Windows it must be on the PATH msys bash sees — or write this entry with --body-file." >&2
     exit 4
   }
 
@@ -131,6 +139,7 @@ if [ "$TYPED_CALL" = "1" ]; then
   MIN_OPTIONS="$(grammar '.ceilings.min_options')"
   MAX_OPTIONS="$(grammar '.ceilings.max_options')"
   OPTION_WIDTH="$(grammar '.ceilings.option_label_width')"
+  DEADLINE_MAX_HOURS="$(grammar '.deadline.maximum_hours')"
 fi
 
 # ---- the author is the SESSION's, not the caller's word (E3 requirement 2) ----------------------
@@ -267,6 +276,44 @@ if [ "$TYPED_CALL" = "1" ]; then
     fi
   fi
 
+  # A DEADLINE IS 2h, 90m, OR A BARE NUMBER OF MINUTES, and past the grammar's ceiling the app reads
+  # it as NO deadline at all — so a value beyond it is refused here rather than silently meaning the
+  # opposite of what was written.
+  if [ -n "$DEADLINE" ]; then
+    case "$DEADLINE" in
+      ''|*[!0-9hm]*) FAULTS+=("--deadline must be like '2h', '90m' or a bare number of minutes, got '$DEADLINE'.") ;;
+      *h)
+        deadline_hours="${DEADLINE%h}"
+        if [ -z "$deadline_hours" ] || [ "$deadline_hours" -gt "$DEADLINE_MAX_HOURS" ]; then
+          FAULTS+=("--deadline '$DEADLINE' is past the ${DEADLINE_MAX_HOURS}h ceiling, which the app reads as NO deadline — the opposite of what you wrote.")
+        fi
+        ;;
+      *) : ;;
+    esac
+
+    if [ -z "$QUESTION" ]; then
+      FAULTS+=("--deadline was given without --question: there is nothing for it to bound.")
+    fi
+  fi
+
+  # THE DEFAULT IS THE OPTION NUMBER AS THE OWNER SEES IT — 1-based, matching the buttons. An
+  # out-of-range default is applied to nothing, so the question would expire having decided nothing
+  # while reporting that a default was set.
+  if [ -n "$DEFAULT_OPTION" ]; then
+    case "$DEFAULT_OPTION" in
+      ''|*[!0-9]*) FAULTS+=("--default must be an option NUMBER as the owner sees it (1-based), got '$DEFAULT_OPTION'.") ;;
+      *)
+        if [ "$DEFAULT_OPTION" -lt 1 ] || [ "$DEFAULT_OPTION" -gt "${#OPTIONS[@]}" ]; then
+          FAULTS+=("--default $DEFAULT_OPTION names no option: there are ${#OPTIONS[@]}, numbered 1 to ${#OPTIONS[@]}.")
+        fi
+        ;;
+    esac
+
+    if [ -z "$DEADLINE" ]; then
+      FAULTS+=("--default without --deadline is never applied: a default is what happens when the deadline passes.")
+    fi
+  fi
+
   for attachment in ${ATTACHMENTS+"${ATTACHMENTS[@]}"}; do
     [ -f "$attachment" ] || FAULTS+=("--attach '$attachment' does not exist: the entry would name a file the owner never receives.")
   done
@@ -300,6 +347,8 @@ if [ "$TYPED_CALL" = "1" ]; then
         printf '%s %s\n' "$(grammar '.markers.option')" "$option"
       done
       if [ -n "$RECOMMEND" ]; then printf '%s %s\n' "$(grammar '.markers.recommend')" "$RECOMMEND"; fi
+      if [ -n "$DEADLINE" ]; then printf '%s %s\n' "$(grammar '.markers.deadline')" "$DEADLINE"; fi
+      if [ -n "$DEFAULT_OPTION" ]; then printf '%s %s\n' "$(grammar '.markers.default')" "$DEFAULT_OPTION"; fi
     fi
 
     for attachment in ${ATTACHMENTS+"${ATTACHMENTS[@]}"}; do

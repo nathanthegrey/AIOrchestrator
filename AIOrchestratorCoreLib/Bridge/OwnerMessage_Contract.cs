@@ -304,19 +304,22 @@ public static class OwnerMessage_Contract
         return false;
     }
 
+    /// <summary>
+    /// THE SAME COUNT THE TOOL MAKES, through the same rule — prose lines only (owner, 2026-09-10).
+    ///
+    /// It counted every non-blank line until then, and a well-formed question is six marker lines by
+    /// construction: this method coached every question ever asked as too long. `Brevity_Policy` owns
+    /// the counting now, so the ceiling and its measurement live together, and `channel-append.sh`
+    /// refuses on the same basis one moment earlier.
+    ///
+    /// THE CHARACTER CEILING STILL COUNTS EVERYTHING: a wall of text is a wall whatever the marker at
+    /// its left edge.
+    /// </summary>
     static bool Is_TooLong(string[] lines, string body)
     {
         if (body.Length > MAXIMUM_CHARACTERS)
             return true;
 
-        var counted = 0;
-
-        foreach (var line in lines)
-        {
-            if (line.Trim().Length > 0)
-                counted++;
-        }
-
-        return counted > MAXIMUM_LINES;
+        return Brevity_Policy.Count_Lines(string.Join('\n', lines)) > MAXIMUM_LINES;
     }
 }
