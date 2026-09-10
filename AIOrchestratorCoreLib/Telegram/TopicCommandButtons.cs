@@ -7,8 +7,15 @@ namespace AIOrchestratorCoreLib.Telegram;
 ///
 /// They render as an INLINE keyboard hanging off that message — one tap sends a callback_data
 /// payload back to the app, leaving no message in the chat. The set lives HERE, once, and both the
-/// rendering and the parser derive from <see cref="BUTTONS"/>, so adding a sixth command is one
-/// line in one array and cannot leave a button that renders and does nothing.
+/// rendering and the parser derive from <see cref="TOPIC_BUTTONS"/> and
+/// <see cref="GENERAL_BUTTONS"/>, so adding a command is one line in one array and cannot leave a
+/// button that renders and does nothing.
+///
+/// TWO BARS SINCE 2026-09-09, because the two kinds of topic answer different questions. An
+/// orchestration topic is about ONE endeavour — what is waiting, what is left, what is it doing,
+/// merge it, end it. The General topic is about ALL of them, so it gets the cross-cutting five
+/// (/summary, /pending, /limits, /resume, /dnd_all) and none of the per-orchestration ones, which
+/// would have no session to act on there.
 ///
 /// THERE WAS A SECOND RENDERING, AND IT WAS REMOVED ON 2026-09-06: a persistent REPLY keyboard, the
 /// bar of literal slash commands above the input box, installed by sending a carrier message and
@@ -30,7 +37,7 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// cannot be repeated.
 ///
 /// Like the hold toggle, and unlike the question options, these buttons are deliberately NOT
-/// registered in the single-use registry. They are permanent furniture: the owner presses /show a
+/// registered in the single-use registry. They are permanent furniture: the owner presses /pending a
 /// dozen times across a session, and expiring the button after the first press would leave dead
 /// furniture sitting exactly where they were told to press.
 /// </summary>
@@ -47,54 +54,95 @@ public static class TopicCommandButtons
     const char FIELD_SEPARATOR = ':';
 
     /// <summary>
-    /// THE source of truth. Display order is the order the owner reaches for them: look at it,
-    /// land it, mark it for testing, photograph it.
+    /// THE source of truth for an ORCHESTRATION topic's bar, in the owner's own display order
+    /// (2026-09-09): *"[⏳ /pending] [📋 /left] / [👀 /tail sup] [📉 /limits] / [🔀 /merge]
+    /// [🏁 /close]"*. Two per row, so the rows read as pairs: what is owed, what is happening, what
+    /// to do about it.
     ///
-    /// Every label is emoji-then-slash-command: the emoji is what the eye finds on a crowded
-    /// screen, the slash command is what makes the button's EFFECT unambiguous — a picture alone
-    /// leaves the owner guessing which of two similar glyphs merges and which closes.
-    /// 🧪 for /test is not a free choice: it is the same glyph the topic's own status line uses for
-    /// the awaiting-testing state, so the button and the state it toggles read as one thing.
+    /// FOUR BUTTONS LEFT THIS BAR AND ALL FOUR SURVIVE AS TYPED COMMANDS — /screen, /show, /pc and
+    /// /test. The owner's reason is the bar's purpose: it is the six things they reach for from a
+    /// phone while an endeavour runs, and looking at a Windows desktop is not one of them when they
+    /// are not at it. Nothing became unreachable: each keeps its entry in Telegram's "/" menu, which
+    /// is the same trade /refresh took when it lost its button on 2026-09-07.
+    ///
+    /// Every label is emoji-then-slash-command: the emoji is what the eye finds on a crowded screen,
+    /// the slash command is what makes the button's EFFECT unambiguous — a picture alone leaves the
+    /// owner guessing which of two similar glyphs merges and which closes.
+    /// ⏳ for /pending is not a free choice: it is the same glyph PULSE's own "waiting on you" field
+    /// uses, so the button and the field it expands read as one thing.
     /// </summary>
-    static readonly (string Command, string Label)[] BUTTONS =
+    static readonly (string Command, string Label)[] TOPIC_BUTTONS =
     [
-        // /screen LEADS, on the owner's call: "the /screen command is crucial, it should be among
-        // the main commands always available" (2026-08-24). It was already in every surface it
-        // could be in — but it sat last, in the second row of a two-by-two, which is the least
-        // reachable of the four on a phone.
-        ("screen", "📸 /screen"),
-        ("show",   "👁 /show"),
-        ("merge",  "🔀 /merge"),
-        ("test",   "🧪 /test"),
-        // /pc AND /close REPLACE /refresh on the owner's call, 2026-09-07: *"Let's remove the
-        // /refresh button from the pulse message, an place the /close and /pc command as buttons
-        // instead."* /refresh survives as a typed command and keeps its entry in Telegram's "/"
-        // menu - only the standing button went, so nothing it repaired became unreachable.
-        //
-        // They share the last row because both act on the SESSION rather than on its work: the
-        // rows above look at it (/screen, /show) and act on the code (/merge, /test).
-        //
-        // 💻 for /pc is no more a free choice than 🧪 is for /test: it is the glyph the topic
-        // NAME already carries while terminal presence is on, so the button and the state it
-        // toggles read as one thing. /close is the only button here that ENDS anything, and it is
-        // also the only one whose tap does not act on its own - it parks a request the owner
-        // confirms.
-        ("pc",     "💻 /pc"),
-        ("close",  "🏁 /close"),
+        ("pending",  "⏳ /pending"),
+        ("left",     "📋 /left"),
+
+        // "tail sup" IS THE VERB, SPACE INCLUDED, and that is a decision worth stating: /tail takes a
+        // target ("/tail 1", "/tail sup") and a tap arrives with no text to carry one in. The payload
+        // has exactly two fields — verb and topic — so the target rides inside the verb, and the tap
+        // handler dispatches the whole string. The alternative was a third payload field, which would
+        // have changed the shape every other button already round-trips through.
+        ("tail sup", "👀 /tail sup"),
+        ("limits",   "📉 /limits"),
+
+        // The last row acts on the WORK and then ends it, which is why these two share a row: /merge
+        // is the one that lands an endeavour and /close is the only button here that ENDS anything.
+        // /close's tap does not act on its own either — it parks a request the owner confirms, so a
+        // mistap cannot end an orchestration.
+        ("merge",    "🔀 /merge"),
+        ("close",    "🏁 /close"),
     ];
 
-    /// <summary>The commands offered, in display order: "screen", "show", "merge", "test", "pc", "close".</summary>
-    public static IReadOnlyList<string> Commands { get; } = BUTTONS.Select(button => button.Command).ToArray();
-
     /// <summary>
-    /// Membership test for the parser. Ordinal and case-SENSITIVE: a payload we did not build is
-    /// not ours, and quietly accepting "cmd:SHOW:5" would mean accepting whatever else invented it.
+    /// THE source of truth for the GENERAL topic's bar (owner, 2026-09-09): /summary, /pending,
+    /// /limits, /resume, /dnd_all.
+    ///
+    /// All five are cross-cutting on purpose — General has no session of its own, so a /merge or a
+    /// /close there would have nothing to act on and a /tail nothing to read. These are the five
+    /// questions the owner asks ABOUT the whole machine: what happened everywhere, who wants me,
+    /// how close am I to a limit, wake everything up, and silence everything.
+    ///
+    /// 🌙 for /dnd_all is <see cref="TelegramDeliveryMode_Glyphs.DEFERRED"/>'s own character — the
+    /// glyph the topics themselves wear while deferred, so the button and the state it puts them all
+    /// into read as one thing.
     /// </summary>
-    static readonly HashSet<string> KNOWN_COMMANDS = new(BUTTONS.Select(button => button.Command), StringComparer.Ordinal);
+    static readonly (string Command, string Label)[] GENERAL_BUTTONS =
+    [
+        ("summary", "📊 /summary"),
+        ("pending", "⏳ /pending"),
+        ("limits",  "📉 /limits"),
+        ("resume",  "▶ /resume"),
+        ("dnd_all", "🌙 /dnd_all"),
+    ];
 
     /// <summary>
-    /// Inline-keyboard buttons for one topic: (callback_data, label), in <see cref="Commands"/>
-    /// order.
+    /// The commands offered on an ORCHESTRATION topic, in display order: "pending", "left",
+    /// "tail sup", "limits", "merge", "close".
+    /// </summary>
+    public static IReadOnlyList<string> Commands { get; } = TOPIC_BUTTONS.Select(button => button.Command).ToArray();
+
+    /// <summary>
+    /// The commands offered on the GENERAL topic, in display order: "summary", "pending", "limits",
+    /// "resume", "dnd_all".
+    ///
+    /// A SEPARATE PROPERTY rather than an addition to <see cref="Commands"/>, and the distinction is
+    /// load-bearing: EveryTopicButtonIsWiredTests walks <see cref="Commands"/> to prove each button
+    /// has a case in the tap handler, and folding the two lists together would make that test demand
+    /// one list of wiring for two different bars.
+    /// </summary>
+    public static IReadOnlyList<string> GeneralCommands { get; } = GENERAL_BUTTONS.Select(button => button.Command).ToArray();
+
+    /// <summary>
+    /// Membership test for the parser — BOTH bars, because a tap from either has to parse. Ordinal
+    /// and case-SENSITIVE: a payload we did not build is not ours, and quietly accepting
+    /// "cmd:SUMMARY:5" would mean accepting whatever else invented it.
+    /// </summary>
+    static readonly HashSet<string> KNOWN_COMMANDS = new(
+        TOPIC_BUTTONS.Select(button => button.Command).Concat(GENERAL_BUTTONS.Select(button => button.Command)),
+        StringComparer.Ordinal);
+
+    /// <summary>
+    /// Inline-keyboard buttons for one orchestration topic: (callback_data, label), in
+    /// <see cref="Commands"/> order.
     ///
     /// The payload carries the TOPIC because a tap arrives with no text to infer one from, and this
     /// app's entire routing is per topic. 0 is the General topic, which has no thread id — the same
@@ -102,15 +150,32 @@ public static class TopicCommandButtons
     /// topic" is keyed as.
     ///
     /// Telegram caps callback_data at 64 BYTES and rejects an over-long one at SEND time, on the
-    /// phone, where nothing here can see it. The worst case is "cmd:screen:" plus a 20-character
-    /// long — 31 bytes — so the cap is not close, but it is pinned by a test because a future
+    /// phone, where nothing here can see it. The worst case is "cmd:tail sup:" plus a 20-character
+    /// long — 33 bytes — so the cap is not close, but it is pinned by a test because a future
     /// longer verb is exactly the change that would sail past review.
     /// </summary>
     public static IReadOnlyList<(string Data, string Label)> Build_ForTopic(long messageThreadId)
     {
+        return Build(TOPIC_BUTTONS, messageThreadId);
+    }
+
+    /// <summary>
+    /// Inline-keyboard buttons for the GENERAL topic, in <see cref="GeneralCommands"/> order.
+    ///
+    /// It takes the thread id rather than assuming 0, for the same reason
+    /// <see cref="Build_ForTopic"/> does: which id General is keyed as belongs to the caller that
+    /// holds the roster, and a builder that hard-coded one would be a second opinion on it.
+    /// </summary>
+    public static IReadOnlyList<(string Data, string Label)> Build_ForGeneral(long messageThreadId)
+    {
+        return Build(GENERAL_BUTTONS, messageThreadId);
+    }
+
+    static IReadOnlyList<(string Data, string Label)> Build((string Command, string Label)[] buttons, long messageThreadId)
+    {
         var topic = messageThreadId.ToString(CultureInfo.InvariantCulture);
 
-        return BUTTONS
+        return buttons
             .Select(button => ($"{PREFIX}{button.Command}{FIELD_SEPARATOR}{topic}", button.Label))
             .ToArray();
     }
@@ -129,6 +194,10 @@ public static class TopicCommandButtons
     /// The parameter is nullable although the contract writes it plain — a tap payload arrives from
     /// the wire, and a parser whose whole purpose is "return null for anything unexpected" must not
     /// be the thing that throws on the most ordinary unexpected value there is.
+    ///
+    /// A VERB MAY CONTAIN A SPACE ("tail sup"), which this shape allows without a change: the body is
+    /// split at the FIRST colon, so anything but a colon is legal inside a verb. What is still
+    /// refused is whitespace in the TOPIC field, because Build never wrote one.
     /// </summary>
     public static (string Command, long MessageThreadId)? Parse_OrNull(string? callbackData)
     {
@@ -142,8 +211,8 @@ public static class TopicCommandButtons
 
         var separator = body.IndexOf(FIELD_SEPARATOR);
 
-        // -1 is "cmd:show" — a verb with no topic. 0 is "cmd::5" — a topic with no verb. Neither is
-        // something Build_ForTopic can produce, so neither gets a benefit of the doubt.
+        // -1 is "cmd:pending" — a verb with no topic. 0 is "cmd::5" — a topic with no verb. Neither
+        // is something Build can produce, so neither gets a benefit of the doubt.
         if (separator <= 0)
             return null;
 
@@ -153,7 +222,7 @@ public static class TopicCommandButtons
             return null;
 
         // AllowLeadingSign and nothing else: the default NumberStyles.Integer would also swallow
-        // surrounding whitespace, and "cmd:show: 5" is not a payload this class ever wrote.
+        // surrounding whitespace, and "cmd:pending: 5" is not a payload this class ever wrote.
         if (!long.TryParse(body[(separator + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var messageThreadId))
             return null;
 

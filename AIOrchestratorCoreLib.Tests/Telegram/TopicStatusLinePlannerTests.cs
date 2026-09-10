@@ -169,6 +169,12 @@ public class TopicStatusLinePlannerTests
     ///
     /// In production that mutation removes the `last` row from every topic message, and where the
     /// subject is the only substance it reduces the message to the bare title or to nothing.
+    ///
+    /// ADAPTED 2026-09-10: `[^1]` stopped being the `last` line once PULSE grew a trailing
+    /// `updated HH:MM` heartbeat (Brief C, field 6) — the array's last element is now always that
+    /// line when there is anything to say at all. Picking the line by its own `last ` prefix instead
+    /// of by position keeps the claim ("the picker's answer lands in the text") true regardless of
+    /// which other fields are present.
     /// </summary>
     [Fact]
     public void ThePlanActuallyCallsThePickerAndPutsTheWinnerInTheText()
@@ -179,14 +185,38 @@ public class TopicStatusLinePlannerTests
             Member("imp-2", "the winning subject", "2026-08-12 14:55"),
         ]);
 
-        // Asserted on the LAST LINE, not on the whole text: every member's brief also appears as its
-        // own row, so "contains the subject" is satisfied by the row and says nothing about the
+        // Asserted on the `last` LINE, not on the whole text: every member's brief also appears as
+        // its own row, so "contains the subject" is satisfied by the row and says nothing about the
         // picker. The `last` line is the only place the picker's answer shows up.
-        var lastLine = plan.Text.Split('\n')[^1];
+        var lastFieldLine = plan.Text.Split('\n').Single(line => line.StartsWith("last "));
 
-        Assert.StartsWith("last", lastLine);
-        Assert.Contains("the winning subject", lastLine);
-        Assert.DoesNotContain("older thing", lastLine);
+        Assert.Contains("the winning subject", lastFieldLine);
+        Assert.DoesNotContain("older thing", lastFieldLine);
+    }
+
+    /// <summary>
+    /// CONTENT PROBE (d) from Brief C's "Done when": the `last` field is the latest SUPERVISOR
+    /// subject, never the first `[>]` ledger line — the old STATUS message's defect ("now: FIN-D-293a
+    /// step 6 and step 7" repeated identically for hours after the work merged). PULSE's `last` field
+    /// never reads the ledger at all: it is Pick_LastSubject_OrNull's answer and nothing else, so this
+    /// pins that a ledger with a same-named in-progress line cannot leak into it.
+    /// </summary>
+    [Fact]
+    public void TheLastFieldIsTheLatestSupervisorSubjectNeverTheFirstInProgressLedgerLine()
+    {
+        var progress = PlanProgress_Factory.Create(
+            0, 1, 0, 0, 1, "the first in-progress ledger line",
+            ["the first in-progress ledger line"], [], [], null,
+            [new PlanLedgerLine(">", "the first in-progress ledger line")]);
+
+        var plan = Plan(
+            progress: progress,
+            members: [Member("imp-1", "the real latest supervisor subject", "2026-08-12 14:55")]);
+
+        var lastFieldLine = plan.Text.Split('\n').Single(line => line.StartsWith("last "));
+
+        Assert.Contains("the real latest supervisor subject", lastFieldLine);
+        Assert.DoesNotContain("first in-progress ledger line", lastFieldLine);
     }
 
     // ── THE REPOST, owner directive 2026-08-13 ────────────────────────────────────────────────────
@@ -417,7 +447,13 @@ public class TopicStatusLinePlannerTests
     [Fact]
     public void ASilencedTopicWithNothingNewToSayStaysSilent()
     {
-        var current = Plan(existingMessageId: STATUS_ID).Text;
+        // `current` is captured under the SAME mode the second call uses. The header now carries the
+        // mode glyph (the planner fills `fields.Mode` in from `mode` before calling the builder — see
+        // TopicStatusLine_Planner.Plan's own comment, "THE MODE IS FILLED IN HERE"), so a "previously
+        // written" text for an ALREADY-silenced topic would itself read `🔕 PULSE`, never bare `PULSE`.
+        // Building `current` under Normal and comparing it against a Silenced computation was
+        // comparing two different topics' text, not the same topic on two ticks.
+        var current = Plan(mode: TelegramDeliveryModes.Silenced, existingMessageId: STATUS_ID).Text;
 
         Assert.Equal(
             TopicStatusActions.None,

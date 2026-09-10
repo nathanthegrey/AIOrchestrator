@@ -10,6 +10,7 @@ using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
 using AIOrchestratorCoreLib.Tests.TestSupport;
+using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -264,22 +265,22 @@ internal sealed class TypingRecordingTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(Record(text));
     }
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(Record(html));
     }
 
-    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(Record(text));
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(Record(text));
     }
@@ -290,7 +291,7 @@ internal sealed class TypingRecordingTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(Record(html));
     }
@@ -380,12 +381,12 @@ internal sealed class TypingRecordingTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
     }
 
-    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken)
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
     }

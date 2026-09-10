@@ -34,14 +34,20 @@ public interface ITelegramApiClient
     Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken);
 
     /// <summary>Returns the sent message's id (null when Telegram's reply carried none), so it can be edited later.</summary>
-    Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken);
+    /// <summary>
+    /// EVERY SEND STATES WHETHER IT RINGS — <see cref="TelegramSendSounds"/> is required, never
+    /// defaulted, so a loud message is a decision at the call site. The owner's ruling, 2026-09-09:
+    /// the supervisor's own words ring; status, receipts and app bookkeeping do not. Text sends also
+    /// disable Telegram's link preview unconditionally.
+    /// </summary>
+    Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken);
 
     /// <summary>
     /// Sends HTML-formatted text — every piece of agent-written prose, so the Markdown agents write
     /// arrives rendered instead of literal. Telegram rejects malformed HTML, so the caller must
     /// escape everything; <see cref="TelegramHtml_Renderer"/> is the one place that does.
     /// </summary>
-    Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken);
+    Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken);
 
     /// <summary>
     /// Telegram's own "is typing…" bubble (<c>sendChatAction</c>). It is not a message: nothing lands
@@ -55,7 +61,7 @@ public interface ITelegramApiClient
     /// The HTML send WITH an inline keyboard — the decision message, whose question text is written
     /// by an agent and whose buttons are not. Only the text is parsed; a button label is never HTML.
     /// </summary>
-    Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
+    Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken);
 
     /// <summary>
     /// Rewrites an already-sent message. Used for the delivery receipt, which EVOLVES in place
@@ -89,10 +95,10 @@ public interface ITelegramApiClient
     /// sendMessage with an inline keyboard — one tappable button per (data, label) pair. Returns
     /// the message id so a tap can rewrite it to show WHICH option was chosen.
     /// </summary>
-    Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken);
+    Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken);
 
     /// <summary>The same send, with the buttons laid out in ROWS — see the row-aware edit above.</summary>
-    Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken);
+    Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken);
 
     /// <summary>Answers a button tap (stops the phone-side spinner); text shows as a small toast.</summary>
     Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken);
@@ -107,7 +113,7 @@ public interface ITelegramApiClient
     Task Delete_Message_Async(long messageId, CancellationToken cancellationToken);
 
     /// <summary>Uploads a local image file as a photo message (multipart sendPhoto).</summary>
-    Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken);
+    Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken);
 
     /// <summary>
     /// Uploads BYTES as a document (multipart sendDocument) — an owner-facing entry too long to read
@@ -124,7 +130,7 @@ public interface ITelegramApiClient
     /// agent-written prose — and Telegram caps it at 1024 characters after entity parsing.
     /// </para>
     /// </summary>
-    Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken);
+    Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken);
 
     /// <summary>Registers the bot's command menu (the chat's ☰ menu button).</summary>
     Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken);

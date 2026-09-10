@@ -358,7 +358,7 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
             return [.. _sentTexts];
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         lock (_lock)
         {
@@ -371,14 +371,14 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
     // RECORDED SINCE 2026-09-07, when the mirror started sending every entry as HTML. It used to
     // ignore this call because only ASCII mockups came through it; leaving it blind now would hide
     // the whole conversation from a probe that counts what reached the phone.
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, html, cancellationToken);
+        return Send_Message_Async(messageThreadId, html, sound, cancellationToken);
     }
 
-    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
     }
 
     public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
@@ -397,6 +397,7 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
         long? messageThreadId,
         string text,
         IReadOnlyList<(string Data, string Label)> buttons,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         lock (_lock)
@@ -471,9 +472,9 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
         return Edit_MessageText_Async(messageId, text, cancellationToken);
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
@@ -496,9 +497,9 @@ internal sealed class RecordingTelegram_Fake : ITelegramApiClient
 
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken) => Task.CompletedTask;

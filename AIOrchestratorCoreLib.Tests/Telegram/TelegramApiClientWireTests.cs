@@ -25,6 +25,55 @@ public class TelegramApiClientWireTests
     const long CHAT_ID = -1001234567890;
 
     /// <summary>
+    /// THE TWO DELIVERY KEYS, ASSERTED ON THE WIRE — the only place they exist.
+    ///
+    /// <para>
+    /// `disable_notification` and `link_preview_options` are set inside
+    /// <c>TelegramApiClientModel</c>, which is `internal sealed` with no `InternalsVisibleTo`: an
+    /// adversarial review of the change that introduced them found both "implemented and
+    /// unverifiable", because every fake in the suite takes the sound argument and discards it. This
+    /// transport is the seam that closes that — it is the request Telegram would have received.
+    /// </para>
+    /// <para>
+    /// The owner's rule, 2026-09-09: the supervisor's own words ring; status, receipts and app
+    /// bookkeeping do not. So the flag has to be the CALLER's choice on the wire, not a constant.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData(TelegramSendSounds.Rings, "false")]
+    [InlineData(TelegramSendSounds.Silent, "true")]
+    public async Task TheSoundTheCallerChose_IsTheDisableNotificationFlagOnTheWire(TelegramSendSounds sound, string expectedFlag)
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":51}}""");
+
+        await Build_Client(transport).Send_Message_Async(5, "hello", sound, CancellationToken.None);
+
+        var request = Assert.Single(transport.Requests);
+
+        Assert.Contains($"\"disable_notification\":{expectedFlag}", request.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// AND NO TEXT SEND EVER UNFURLS A LINK. Unconditional and not a caller's choice: a channel
+    /// entry that merely mentions a URL used to arrive with Telegram's own card underneath it, a
+    /// second screenful that pushes the message being read off the top.
+    /// </summary>
+    [Fact]
+    public async Task EveryTextSend_DisablesTheLinkPreview()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":52}}""");
+
+        await Build_Client(transport).Send_Message_Async(5, "see https://example.com", TelegramSendSounds.Rings, CancellationToken.None);
+
+        var request = Assert.Single(transport.Requests);
+
+        Assert.Contains("\"link_preview_options\"", request.Body, StringComparison.Ordinal);
+        Assert.Contains("\"is_disabled\":true", request.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// THE QUERY STRING THAT DECIDES WHETHER TAPS ARRIVE. <c>allowed_updates</c> is URL-encoded, so
     /// it is decoded and read as the JSON array it is rather than matched as an opaque blob — a
     /// test that pinned the encoded literal would pass just as happily on a wrongly-encoded one.
@@ -80,7 +129,7 @@ public class TelegramApiClientWireTests
         transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":1}}""");
         transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":77}}""");
 
-        var messageId = await Build_Client(transport).Send_Message_Async(5, "hello", CancellationToken.None);
+        var messageId = await Build_Client(transport).Send_Message_Async(5, "hello", TelegramSendSounds.Rings, CancellationToken.None);
 
         Assert.Equal(77, messageId);
         Assert.Equal(2, transport.Requests.Count);
@@ -98,7 +147,7 @@ public class TelegramApiClientWireTests
         transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":600}}""");
 
         var failure = await Assert.ThrowsAsync<TelegramApiException>(
-            () => Build_Client(transport).Send_Message_Async(5, "hello", CancellationToken.None));
+            () => Build_Client(transport).Send_Message_Async(5, "hello", TelegramSendSounds.Rings, CancellationToken.None));
 
         Assert.Equal(429, failure.StatusCode);
         Assert.Equal(600, failure.RetryAfterSeconds);
@@ -116,7 +165,7 @@ public class TelegramApiClientWireTests
         var transport = new RecordingTransport_Fake();
         transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":9}}""");
 
-        await Build_Client(transport).Send_Document_Async(7, "report.md", "hello file"u8.ToArray(), "<b>caption</b>", CancellationToken.None);
+        await Build_Client(transport).Send_Document_Async(7, "report.md", "hello file"u8.ToArray(), "<b>caption</b>", TelegramSendSounds.Rings, CancellationToken.None);
 
         var request = Assert.Single(transport.Requests);
 
@@ -155,7 +204,7 @@ public class TelegramApiClientWireTests
         transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":9}}""");
 
         var refusal = await Assert.ThrowsAnyAsync<Exception>(
-            () => Build_Client(transport).Send_Document_Async(7, "huge.bin", new byte[TelegramFileCaps.MAX_DOCUMENT_BYTES + 1], "c", CancellationToken.None));
+            () => Build_Client(transport).Send_Document_Async(7, "huge.bin", new byte[TelegramFileCaps.MAX_DOCUMENT_BYTES + 1], "c", TelegramSendSounds.Rings, CancellationToken.None));
 
         Assert.Contains("sendDocument", refusal.Message);
         Assert.Contains($"{TelegramFileCaps.In_Megabytes(TelegramFileCaps.MAX_DOCUMENT_BYTES)} MB cap", refusal.Message);

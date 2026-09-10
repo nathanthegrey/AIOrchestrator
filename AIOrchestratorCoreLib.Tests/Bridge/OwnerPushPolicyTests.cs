@@ -38,58 +38,38 @@ public class OwnerPushPolicyTests
     /// The waterfall. Every one of these is real narration from the transcript that prompted this —
     /// useful in the channel, noise on a phone.
     /// </summary>
-    [Theory]
-    [InlineData("## [11] FROM supervisor — d — s\nimp-1 is pricing both options now, still read-only.")]
-    [InlineData("## [12] FROM supervisor — d — s\nConfirmed: the preliminary simulation is the mechanism.")]
-    [InlineData("## [13] FROM supervisor — d — s\nAccepted imp-3's Task 6; the ledger is updated.")]
-    public void ProgressNarration_IsNotPushed(string entry)
-    {
-        Assert.False(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false));
-    }
-
     /// <summary>
-    /// The dangerous case: a real question asked in prose, with no marker. Dropping it would leave
-    /// the supervisor waiting for an answer the owner never saw — a deadlock neither can observe.
-    /// A false positive costs one ignorable message; a false negative costs the whole conversation.
+    /// THE FILTER IS GONE, AND THIS IS THE TEST THAT SAYS SO. Progress narration used to be
+    /// suppressed here: only a question, an awaited answer, a BLOCKED flag, a file or the boot
+    /// greeting reached the phone. The owner's ruling of 2026-09-09 reversed it — *"If the
+    /// supervisor writes to me, I must know it"* — after their own quoted example of a message they
+    /// needed was suppressed and arrived five minutes late through the deadlock net, in raw Markdown.
+    ///
+    /// <para>
+    /// The brake on chatter is now the SKILL and the brevity nudge, not a filter guessing which of
+    /// the supervisor's words matter. This is a deliberate trade: five progress entries in ten
+    /// minutes are now five notifications, and the role commands say so.
+    /// </para>
     /// </summary>
     [Theory]
-    [InlineData("## [4] FROM supervisor — d — s\nShould I merge this into master or hold it?")]
-    [InlineData("## [4] FROM supervisor — d — s\nDo you want the synthetic drawdown or the real one?")]
-    [InlineData("## [4] FROM supervisor — d — s\nwhich approach do you prefer")]
-    public void AQuestionInPlainProse_IsStillPushed(string entry)
+    [InlineData("## [11] FROM supervisor — d — s\nimp-1 is pricing the matrix; rev-1 has the diff.")]
+    [InlineData("## [12] FROM supervisor — d — s\nConfirmed: the provider list is complete.")]
+    [InlineData("## [13] FROM supervisor — d — s\nAccepted imp-3's report and merged it to staging.")]
+    public void ProgressNarration_IsPushed_NowThatTheFilterIsGone(string entry)
     {
-        // The last case has no '?' and is NOT caught by this filter — deliberately asserted so the
-        // boundary stays visible. It is not a deadlock: an entry this filter suppresses is
-        // remembered, and the engine releases it once the supervisor AND every member have been
-        // idle for minutes (Break_SilentDeadlock_Async). The filter is the fast path; that is the
-        // guarantee.
-        var pushed = OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false);
-
-        Assert.Equal(entry.Contains('?'), pushed);
+        Assert.True(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false));
     }
 
-    /// <summary>
-    /// A QUERY MARK THAT DOES NOT END A LINE IS NOT AN ASK, and this is the case that broke.
-    ///
-    /// 2026-08-21, the owner: *"after I put it in pc mode a ? icon appeared in the name for no
-    /// reason"*, and minutes later, of a second topic, *"you just put ? in the topic name"*. Both
-    /// entries were reports. What they had in common is a query mark used as a NOUN or inside a
-    /// LEDGER MARKER — "the ? glyph", "sits at [?] until they answer" — and a bare Contains
-    /// cannot tell those from a question. Sessions write about the `- [?]` marker constantly, so
-    /// this was not a rare shape: it lit the topic glyph and pushed the phone on plain narration.
-    ///
-    /// The replacement is deliberately blunt rather than clever: a prose question ENDS its line
-    /// with the mark. Anything else uses the explicit markers, which every role command already
-    /// tells sessions to use when they actually need a decision.
-    /// </summary>
     [Theory]
     [InlineData("## [3] FROM solo — d — s\nInvestigating the ? glyph, the rename and the hook now.")]
     [InlineData("## [5] FROM solo — d — s\nSTANDING BY.\nLedger line sits at [?] until they answer.")]
     [InlineData("## [9] FROM solo — d — s\nMarked it - [?] blocked on you, the rest continues.")]
     public void AQueryMarkThatDoesNotEndALine_IsNotAnAsk(string entry)
     {
+        // ASKS_INPROSE STILL MATTERS — the topic's ❓ glyph and the typed-answer binding read it —
+        // but it no longer decides whether an entry is PUSHED: everything the supervisor writes is.
         Assert.False(OwnerPush_Policy.Asks_InProse(entry));
-        Assert.False(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false));
+        Assert.True(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: false));
     }
 
     /// <summary>
@@ -112,7 +92,10 @@ public class OwnerPushPolicyTests
         var entry = "## [5] FROM supervisor — d — s\nprogress update\n```\n| ready? | yes |\n```\nnothing else";
 
         Assert.False(OwnerPush_Policy.Asks_InProse(entry));
-        Assert.False(OwnerPush_Policy.Should_Push(entry, false));
+
+        // Pushed all the same — it is the supervisor writing to the owner. What the fenced block
+        // must not do is make the topic wear a ❓ or absorb a typed reply as an answer.
+        Assert.True(OwnerPush_Policy.Should_Push(entry, false));
     }
 
     /// <summary>
@@ -126,6 +109,11 @@ public class OwnerPushPolicyTests
         var entry = "## [12] FROM supervisor — d — s\nOwner: \"What do you think? The old app does not ask for it.\"";
 
         Assert.True(OwnerPush_Policy.Is_OwnerRestatement(entry));
+
+        // THE SECOND OF THE TWO SURVIVING REFUSALS, and it is refused even while they ARE waiting —
+        // the one condition that used to push anything. Their own words with the session's label on
+        // them say nothing they did not just type, and they would spend the wait the real answer
+        // needs.
         Assert.False(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: true));
     }
 
@@ -158,9 +146,16 @@ public class OwnerPushPolicyTests
     }
 
     [Fact]
-    public void EmptyEntry_IsNeverPushed()
+    /// <summary>
+    /// THE ONE THING STILL NOT PUSHED besides the owner's own words quoted back: an entry with no
+    /// body. Not a filter — Telegram refuses an empty message, and there is nothing to read.
+    /// </summary>
+    public void AnEmptyEntry_IsStillNotPushed()
     {
-        Assert.False(OwnerPush_Policy.Should_Push("", false));
+        // ONE OF THE TWO SURVIVING REFUSALS, and the reason it is not a filter: Telegram refuses an
+        // empty message, and there is nothing in one to read.
+        Assert.False(OwnerPush_Policy.Should_Push("", ownerIsWaitingForAReply: false));
+        Assert.False(OwnerPush_Policy.Should_Push("   \n  ", ownerIsWaitingForAReply: true));
     }
 
     /// <summary>
@@ -254,7 +249,11 @@ public class OnlineGreetingPushTests
     public void TheWordInProse_IsNotAGreeting(string subject)
     {
         Assert.False(OwnerPush_Policy.Is_OnlineGreeting(subject));
-        Assert.False(OwnerPush_Policy.Should_Push($"## [8] FROM supervisor — d — {subject}\nnothing to decide here.", false, subject));
+
+        // AND IT IS PUSHED ANYWAY, which is the change: the greeting exemption existed because the
+        // filter suppressed everything else. With the filter gone (2026-09-09) what Is_OnlineGreeting
+        // still decides is the topic's own bookkeeping, never whether the entry reaches the phone.
+        Assert.True(OwnerPush_Policy.Should_Push($"## [3] FROM supervisor — d — {subject}\nbody", ownerIsWaitingForAReply: false, subject));
     }
 
     [Fact]
@@ -262,7 +261,9 @@ public class OnlineGreetingPushTests
     {
         Assert.False(OwnerPush_Policy.Is_OnlineGreeting(null));
         Assert.False(OwnerPush_Policy.Is_OnlineGreeting("   "));
-        Assert.False(OwnerPush_Policy.Should_Push("## [12] FROM supervisor — d — s\nimp-1 is still pricing.", false));
+
+        // A caller with no subject to offer pushes exactly as one with a subject does.
+        Assert.True(OwnerPush_Policy.Should_Push("## [3] FROM supervisor — d — s\nbody", ownerIsWaitingForAReply: false));
     }
 
     [Fact]
@@ -279,13 +280,15 @@ public class OnlineGreetingPushTests
             ownerIsWaitingForAReply: false));
     }
 
+    /// <summary>
+    /// Renamed with the filter's removal: a prose mention of ATTACH:/IMAGE: no longer decides
+    /// anything about the PUSH (everything the supervisor writes is pushed). What it still decides
+    /// is whether an UPLOAD happens, which is what this always actually tested.
+    /// </summary>
     [Fact]
-    public void AProseMentionOfTheMarkers_DoesNotPush_BecauseItDeliversNoFile()
+    public void AProseMentionOfTheMarkers_DeliversNoFile()
     {
         // Only a column-0 marker line produces an upload — the engine's extractor is anchored.
-        Assert.False(OwnerPush_Policy.Should_Push(
-            "I will ATTACH: the report once the build is green, and add an IMAGE: of the chart.",
-            ownerIsWaitingForAReply: false));
 
         Assert.False(OwnerPush_Policy.Carries_FileForTheOwner("ATTACH:"));
         Assert.False(OwnerPush_Policy.Carries_FileForTheOwner("ATTACH:   "));

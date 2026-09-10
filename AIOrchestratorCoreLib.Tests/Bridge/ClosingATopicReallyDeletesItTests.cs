@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 using Xunit.Abstractions;
+using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -201,6 +202,42 @@ public class ClosingATopicReallyDeletesItTests : IDisposable
         Assert.Null(_store.Get_Session(ORCH_ID).TelegramTopicDeletePendingUtc);
     }
 
+    /// <summary>
+    /// THE TWO PATHS COLLIDE, AND ONE OF THEM STANDS DOWN. A close fires the delete itself while the
+    /// start-up sweep is still reading the sessions, so a pending stamp written in that window is
+    /// picked up by BOTH — and a REFUSED delete attempted twice breaks the one promise this family
+    /// makes: it is not retried inside the process, because a revoked right cannot change while the
+    /// process runs.
+    ///
+    /// <para>
+    /// FOUND BY <c>ADeleteTelegramWillNeverAccept_TellsTheOwnerOnce_AndNeverAgainAfterARestart</c>,
+    /// which failed about one run in four under a full suite and passed alone — the shape of a race.
+    /// Its assertion was right; the code was not. This probe forces the collision instead of waiting
+    /// for it: the pending stamp is already on disk (so the sweep will take it) AND the owner closes
+    /// the same orchestration (so the close path takes it too).
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheCloseAndTheStartUpSweep_NeverAttemptTheSameDeleteTwice()
+    {
+        _telegram.Refuse_AllDeletes(new TelegramApiException(400, "Telegram 'deleteForumTopic' failed with HTTP 400: {\"description\":\"Bad Request: not enough rights to manage topics\"}"));
+
+        // On disk before the engine starts: the sweep will find this and take the delete on.
+        _store.Mark_TopicDeletePending(ORCH_ID);
+
+        // ...and the owner closes the same orchestration as the engine comes up, which fires the
+        // delete down the other path.
+        await Run_Engine_Until_Async(
+            beforeWait: engine => engine.Close_Orchestration_ByOwner(ORCH_ID, "the owner closed it from the app"),
+            until: () => _telegram.DeleteAttempts >= 2,
+            timeoutMilliseconds: BridgeTestTiming.Window_ForTicks(20));
+
+        // ONE attempt, whichever path got there first — and one alert, which is what the owner sees.
+        Assert.Equal(1, _telegram.DeleteAttempts);
+        Assert.Equal(1, Count_GeneralAlerts());
+    }
+
     IBridgeEngine Build_Engine(IOrchestrationLog log)
     {
         return BridgeEngine_Factory.Create_WithTelegramClient(
@@ -377,16 +414,16 @@ internal sealed class DeletingTelegram_Fake : ITelegramApiClient
     public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         lock (_lock)
             return Task.FromResult<long?>(_nextMessageId++);
     }
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken) => Send_Message_Async(messageThreadId, html, cancellationToken);
-    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken) => Send_Message_Async(messageThreadId, html, cancellationToken);
-    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken) => Send_Message_Async(messageThreadId, text, cancellationToken);
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken) => Send_Message_Async(messageThreadId, text, cancellationToken);
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken) => Send_Message_Async(messageThreadId, html, sound, cancellationToken);
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken) => Send_Message_Async(messageThreadId, html, sound, cancellationToken);
+    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken) => Send_Message_Async(messageThreadId, text, sound, cancellationToken);
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken) => Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -395,8 +432,8 @@ internal sealed class DeletingTelegram_Fake : ITelegramApiClient
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken) => Task.CompletedTask;
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<byte>());

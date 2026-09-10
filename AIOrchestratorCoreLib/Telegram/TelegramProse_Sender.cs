@@ -32,10 +32,11 @@ public static class TelegramProse_Sender
         string orchId,
         long? messageThreadId,
         string markdown,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         return Send_Rendered_Async(
-            client, log, orchId, messageThreadId, TelegramHtml_Renderer.Render(markdown), markdown, cancellationToken);
+            client, log, orchId, messageThreadId, TelegramHtml_Renderer.Render(markdown), markdown, sound, cancellationToken);
     }
 
     /// <summary>
@@ -58,17 +59,23 @@ public static class TelegramProse_Sender
         long? messageThreadId,
         string html,
         string plainFallback,
+
+        // CARRIED, NOT DECIDED HERE. This class knows how to render and how to fall back; whether the
+        // owner's phone rings is a fact about the MESSAGE, and only the caller knows whose words
+        // these are. The fallback must ring exactly as the HTML would have — a refused render is not
+        // a reason to downgrade a supervisor's message to a silent one.
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await client.Send_HtmlMessage_Async(messageThreadId, html, cancellationToken);
+            return await client.Send_HtmlMessage_Async(messageThreadId, html, sound, cancellationToken);
         }
         catch (TelegramApiException ex) when (Is_ParseRefusal(ex))
         {
             log.Log_Warning(orchId, Describe_Refusal("sendMessage", plainFallback, ex));
 
-            return await client.Send_Message_Async(messageThreadId, plainFallback, cancellationToken);
+            return await client.Send_Message_Async(messageThreadId, plainFallback, sound, cancellationToken);
         }
     }
 
@@ -79,12 +86,13 @@ public static class TelegramProse_Sender
         long? messageThreadId,
         string markdown,
         IReadOnlyList<(string Data, string Label)> buttons,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         try
         {
             return await client.Send_HtmlMessageWithButtons_Async(
-                messageThreadId, TelegramHtml_Renderer.Render(markdown), buttons, cancellationToken);
+                messageThreadId, TelegramHtml_Renderer.Render(markdown), buttons, sound, cancellationToken);
         }
         catch (TelegramApiException ex) when (Is_ParseRefusal(ex))
         {
@@ -93,7 +101,7 @@ public static class TelegramProse_Sender
             // THE BUTTONS COME BACK TOO. Dropping to the plain send would strip the keyboard, which
             // on a decision message is the entire message: the owner would be shown a question with
             // no way to answer it.
-            return await client.Send_MessageWithButtons_Async(messageThreadId, markdown, buttons, cancellationToken);
+            return await client.Send_MessageWithButtons_Async(messageThreadId, markdown, buttons, sound, cancellationToken);
         }
     }
 

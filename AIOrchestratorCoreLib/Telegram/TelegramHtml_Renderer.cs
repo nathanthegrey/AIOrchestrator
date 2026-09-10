@@ -398,9 +398,19 @@ public static class TelegramHtml_Renderer
 
             if (opensCleanly && closesCleanly && outerBoundaryOk)
             {
-                html.Append(openTag);
+                // TELEGRAM REFUSES <code> NESTED INSIDE b/i/s (and the reverse): "can contain and
+                // can be part of any other entities, EXCEPT pre and code". `**`x`**` recursing
+                // straight through would emit <b><code>x</code></b> and earn a 400, which is the
+                // defect this guards — so a run whose content holds a code span opens no wrapping
+                // tag at all; the content (code span included) still renders, just unwrapped.
+                if (!Contains_CodeSpan(content))
+                    html.Append(openTag);
+
                 Append_Inline(html, content);
-                html.Append(closeTag);
+
+                if (!Contains_CodeSpan(content))
+                    html.Append(closeTag);
+
                 nextPosition = afterClosing;
                 return true;
             }
@@ -409,6 +419,34 @@ public static class TelegramHtml_Renderer
             // than giving up, so "_a b_c_" still finds the run its author meant.
             searchFrom = closing + 1;
         }
+    }
+
+    /// <summary>
+    /// Mirrors the code-span test <see cref="Append_Inline"/> itself uses (a backtick with a
+    /// closing backtick more than one position later — an empty pair is not a span). Only an
+    /// EXISTENCE check: it need not track state the way the scanner does, because either answer
+    /// it gives on an edge case is safe — a false positive costs a run its wrapping tag, never an
+    /// illegal nesting.
+    /// </summary>
+    static bool Contains_CodeSpan(string text)
+    {
+        var position = 0;
+
+        while (position < text.Length)
+        {
+            if (text[position] != '`')
+            {
+                position++;
+                continue;
+            }
+
+            if (text.IndexOf('`', position + 1) > position + 1)
+                return true;
+
+            position++;
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -55,7 +55,14 @@ public class ASucceededTurnIsNeverParkedForALimitTests
         using var held = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
 
-        var holder = Task.Run(() => ChannelWrite_Lock.Try_Run_Serialised(channelFile, TimeSpan.FromSeconds(30), () =>
+        // THE HOLD MUST OUTLAST THE WAIT BELOW, and it did not: the gate was held for 30 seconds
+        // while the outcome was awaited for 60. On a loaded machine the dispatcher needs more than
+        // thirty seconds to spawn a real process and spend an attempt — the lease then expired, the
+        // appends the turn makes started SUCCEEDING, and the test failed reporting "the attempt was
+        // not counted" about a premise that had quietly evaporated. Red once in three full parallel
+        // runs on 2026-09-10. The claim is untouched: what changed is that the refusal this test is
+        // built on lasts as long as the test looks for its consequence.
+        var holder = Task.Run(() => ChannelWrite_Lock.Try_Run_Serialised(channelFile, TimeSpan.FromMinutes(3), () =>
         {
             held.Set();
             release.Wait(TimeSpan.FromMinutes(2));

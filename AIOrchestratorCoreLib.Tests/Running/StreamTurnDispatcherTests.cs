@@ -262,7 +262,13 @@ public class StreamTurnDispatcherTests
         // new prompt is sent. An idle gap between two owner messages, longer than the silence
         // limit, left the NEXT turn reading a stale heartbeat from the turn before and being
         // declared silent before it had even been given a chance to answer.
-        using var harness = new PrintRunnerTestHarness("implementer:stream", turnTimeoutMinutes: 5, streamSilenceSeconds: 0.3);
+        // TWO SECONDS, NOT 300 MILLISECONDS, and the claim is untouched by the change. The gap below
+        // still has to exceed the silence limit for this test to mean anything — what the old number
+        // bought was speed, and what it cost was reliability: starting FakeClaude on a loaded machine
+        // takes longer than 300 ms, so the limit was inside the noise of the harness itself. This
+        // test's own comment already records one narrowing for the same reason (2026-09-09); it went
+        // red again on 2026-09-10 under a full parallel suite.
+        using var harness = new PrintRunnerTestHarness("implementer:stream", turnTimeoutMinutes: 5, streamSilenceSeconds: 2.0);
         var (orchId, memberId) = harness.Register_Member(MemberKinds.Implementer, runner: SessionRunners.Stream);
 
         List<string> logged = [];
@@ -280,7 +286,7 @@ public class StreamTurnDispatcherTests
         // The quiet stretch: well past the 300 ms silence limit, and nobody has asked the process
         // anything since its last answer — exactly the shape of the idle gap between two owner
         // messages on the VPS.
-        Thread.Sleep(800);
+        Thread.Sleep(4000);
 
         Append_Supervisor(harness, orchId, memberId, "GO AHEAD", "second");
         Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).ExecutedTurns.Count == 2, PrintRunnerTestHarness.GENEROUS),
