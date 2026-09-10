@@ -983,6 +983,47 @@ flag dello strumento, `--deadline` e `--default` compresi).
 
 ---
 
+### Un rapporto scritto non sparisce più: se un messaggio finale viene superato, si registrano entrambi
+
+**Com'era.** Per il bridge «la voce di canale» era l'ultimo messaggio della sessione, e basta. Se un
+sub-agente lanciato in background tornava *dopo* che il rapporto era stato scritto, la sessione si
+risvegliava, scriveva un altro messaggio, e quello diventava la voce: il rapporto originale (una volta
+19.771 caratteri, una volta una revisione di nove agenti) non arrivava a nessuno, e il turno diceva
+«riuscito». Con il runner «print», poi, non c'era modo di vederlo: chiedeva alla CLI un solo documento
+con una sola stringa.
+
+**Cos'è adesso.** Entrambi i runner guardano tutti i messaggi «da fine turno» (solo testo, senza
+chiamate a strumenti, non di un sub-agente). Se il risultato non li contiene, ogni messaggio superato
+viene registrato come voce a sé, **prima** di quella finale, e la sessione riceve una riga che dice
+cos'è successo. Il runner «print» ora chiede alla CLI lo stesso flusso di eventi che il supervisore usa
+già in produzione, così la regola vale per implementer, revisori, solo e generale. E ogni skill dice:
+non scrivere il messaggio finale con un sub-agente ancora in volo.
+
+**Perché.** Un fallimento silenzioso è il peggiore che c'è: nessuno si accorge di niente, né la
+sessione che crede di aver consegnato, né chi aspetta. Registrare entrambi i messaggi costa al massimo
+una voce in più; perderne uno è costato una revisione intera. Il cambio di trasporto del runner print è
+la parte da tenere d'occhio dopo il deploy: i test «dal vivo» pinnano ancora il formato vecchio.
+
+**Dove.** `stage/19-a-final-report-is-never-superseded`.
+
+### Il revisore ha una cartella dove scrivere, e il repository resta blindato
+
+**Com'era.** Il guardiano del revisore negava `cp`, `mkdir` e ogni redirezione: niente scrittura,
+da nessuna parte. Quindi niente mutation testing — copiare un file, romperlo di proposito e vedere se la
+suite se ne accorge — che su questi rami è stato l'unico rilevatore a trovare quattro test che passavano
+per il motivo sbagliato. I revisori si arrangiavano con mutanti in memoria, dichiarandoli più deboli.
+
+**Cos'è adesso.** Una sola cartella è scrivibile, `…/<orchestrazione>/<membro>/scratch/`: dentro si può
+creare, copiare, modificare e cancellare; fuori niente cambia. Una copia *da* scratch *verso* il
+repository è rifiutata. Il harness del guardiano ha 42 casi in più (292) e ha chiuso due rossi che
+c'erano già: un contatore di righe mai aggiornato e — su macOS — una coppia di byte nel guardiano che
+bash 3.2 rileggeva come apertura di traduzione, cancellando un `$` prima che python lo vedesse.
+
+**Perché.** Lo strumento migliore del ruolo era vietato proprio al ruolo. Il prezzo è una cartella in più
+per sessione; il beneficio è un revisore che può provare invece di ragionare.
+
+**Dove.** `stage/18-the-reviewer-gets-a-scratch-folder`.
+
 ## 6. Il ponte con Telegram: che cosa regge sotto
 
 L'audit del 2026-09-09 sull'integrazione Telegram (i brief in
@@ -1073,6 +1114,66 @@ primi test.
 **Dove.** `stage/9b-telegram-hygiene`, `stage/10`, `stage/11`.
 
 ---
+
+### Il supervisore non fa la fila dietro ai suoi operai
+
+**Com'era.** Tre turni in parallelo per orchestrazione, in coda, per tutti. Con cinque implementer
+avviati il messaggio del proprietario si metteva in fila **dietro** a loro: misurato il 2026-09-10,
+ventinove minuti dalle 21:18 alle 21:47, con il turno del supervisore partito nel secondo esatto in cui
+un implementer veniva ucciso al suo limite. E intanto il telefono diceva «still at it», perché per l'app
+«ammesso» e «in esecuzione» erano la stessa cosa.
+
+**Cos'è adesso.** I ruoli che parlano col proprietario (supervisore, solo, generale) non prendono uno
+slot: ognuno è una sessione sola con un turno alla volta, quindi al massimo un turno in più per
+orchestrazione. L'app distingue «in coda» da «in esecuzione», lo dice sul telefono con le parole giuste,
+e non scrive «il proprietario ti aspetta» a una sessione che non può nemmeno partire.
+
+**Perché.** Il turno del supervisore *è* la linea telefonica del proprietario. I limiti esistono per
+il ventaglio degli implementer, non per lei.
+
+**Dove.** `stage/16-the-supervisor-never-queues`.
+
+### Un tocco vale un'attesa: la riscrittura del messaggio ritenta, e la riga di stato smette di martellare
+
+**Com'era.** Telegram limita le modifiche a uno stesso messaggio molto più delle nuove invii al gruppo.
+La riga PULSE aveva un freno di 30 s dopo un rifiuto — testato, in produzione mai raggiunto: un blocco
+aggiunto per i cambi «solo bottoni» rifaceva la decisione da solo, e dopo un fallimento il testo
+risultava «cambiato» a ogni tick. Risultato: 382 rifiuti in 56 minuti, 357 della PULSE, ritentata ogni
+2 secondi con Telegram che diceva «aspetta 34, 31, 29…». Dentro quella tempesta, il tocco del
+proprietario: la riscrittura del messaggio rifiutata, il ripiego «almeno togli i bottoni» rifiutato,
+nessuno dei due ritentato. Sul telefono: testo vecchio, bottoni vivi su una domanda già risposta —
+mentre l'azione era passata.
+
+**Cos'è adesso.** La promozione a «modifica» passa per lo stesso freno del pianificatore. La riscrittura
+dopo un tocco aspetta il numero che Telegram le dice (fino a 30 s), tre tentativi in tutto, fuori dal
+ciclo che legge i tocchi, e solo dopo si arrende come prima. Insieme a stage 15 (PULSE ogni 5 minuti e
+un freno per singolo messaggio) va in produzione nello stesso riavvio.
+
+**Perché.** Un tocco del proprietario vale più di una riga di stato: se deve aspettare mezzo minuto per
+vedersi rispondere, aspetta. E un freno che esiste ma non morde è peggio di nessun freno: rassicura chi
+legge il codice.
+
+**Dove.** `stage/16-the-supervisor-never-queues` (piano `2026-09-10-stage-17-…`).
+
+### Una domanda nuova chiude quelle a cui il proprietario aveva già risposto a parole
+
+**Com'era.** Con più domande aperte una risposta scritta non si lega a nessuna (giusto: l'app non
+indovina), e nient'altro le chiudeva se non un tocco, una scadenza, la modalità «assente» o la chiusura
+dell'orchestrazione. Il proprietario rispondeva a parole, il supervisore andava avanti, e le domande
+restavano su PULSE come «waiting on you» per ore — sei, alle 21:50 del 2026-09-10, la più vecchia
+delle 15:58.
+
+**Cos'è adesso.** Se il proprietario ha scritto qualcosa **e poi** lo stesso supervisore fa una domanda
+nuova nello stesso topic, le domande precedenti a quella risposta vengono chiuse come «superate»:
+fuori dal registro, bottoni consumati (un tocco tardivo viene rifiutato, non inoltrato come risposta
+vecchia), messaggio riscritto per dirlo, e una riga al supervisore: se una serviva ancora, la rifà.
+Due domande davvero parallele, senza un messaggio del proprietario in mezzo, restano entrambe aperte.
+
+**Perché.** La risposta a parole seguita da una domanda nuova è la prova che le vecchie sono state
+trattate in prosa; chiuderle *sempre* invece avrebbe rotto il contratto «più decisioni aperte, ognuna
+risolvibile da sola» che tre sonde pinnano. Scelta del proprietario, la variante prudente.
+
+**Dove.** `stage/16-the-supervisor-never-queues` (piano `2026-09-10-stage-20-…`).
 
 ## 7. Che cosa stiamo facendo adesso
 
