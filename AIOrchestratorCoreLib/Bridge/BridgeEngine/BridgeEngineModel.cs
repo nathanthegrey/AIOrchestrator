@@ -9061,6 +9061,130 @@ internal sealed class BridgeEngineModel(
     /// delivery gate blocks it in a silenced topic exactly as it blocks a first post, and it never
     /// fires while the line is already last.
     /// </summary>
+    /// <summary>
+    /// An entry's own header stamp, or null when it cannot be trusted. Agent-written (decision 12),
+    /// so a stamp in the FUTURE reads as absent rather than as a confident wrong clock — the same
+    /// refusal <c>Describe_SinceStamp_OrNull</c> makes for a duration.
+    /// </summary>
+    static DateTime? Read_TrustedStamp_OrNull(string? stampText)
+    {
+        if (string.IsNullOrWhiteSpace(stampText))
+            return null;
+
+        return SessionDuration_Formatter.Try_ReadTrustedStamp(stampText, DateTime.Now, out var stamp) ? stamp : null;
+    }
+
+    /// <summary>
+    /// WHEN THE SESSION THAT TALKS TO THE OWNER RESUMES, if it is waiting out a usage limit. The
+    /// dispatcher records the instant only for a limit that NAMED its reset — see
+    /// <c>IPrintSessionState.RetryNotBeforeUtc</c> — which is precisely the case where the app can
+    /// say something certain instead of "idle — waiting", the line the owner read for two hours on
+    /// 2026-09-09 while a turn had an appointment.
+    /// </summary>
+    DateTime? Read_UsageLimitResumeAt_OrNull(IOrchestrationSession session)
+    {
+        var resumeAt = Read_ResumeAt_OrNull(Running.SessionRoles.Supervisor, session.OrchId, Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID);
+
+        if (resumeAt != null)
+            return resumeAt;
+
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc != null || Sessions.MemberKind_Ids.Resolve_Kind(member.MemberId) != Sessions.MemberKinds.Solo)
+                continue;
+
+            var soloResumeAt = Read_ResumeAt_OrNull(Running.SessionRoles.Solo, session.OrchId, member.MemberId);
+
+            if (soloResumeAt != null)
+                return soloResumeAt;
+        }
+
+        return null;
+    }
+
+    DateTime? Read_ResumeAt_OrNull(Running.SessionRoles role, string orchId, string memberId)
+    {
+        try
+        {
+            var stateFile = Running.PrintSessionState.PrintSessionState_Store.Get_StateFile(_paths, role, orchId, memberId);
+            var state = Running.PrintSessionState.PrintSessionState_Store.Read_OrNull(stateFile);
+
+            return state?.RetryNotBeforeUtc != null && Limits.DispatchPause_Gate.Is_Paused(state.RetryNotBeforeUtc, _clock.UtcNow)
+                ? state.RetryNotBeforeUtc.Value.ToLocalTime()
+                : null;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Could not read '{memberId}' state for its usage-limit appointment ({ex.Message}) — the status line omits it");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// WHAT ONLY THE ENGINE CAN KNOW ABOUT A TOPIC'S STATUS LINE, gathered in one place: the state
+    /// the supervisor DECLARED, what the owner is being waited on for, a usage-limit pause, and when
+    /// the last thing happened.
+    ///
+    /// <para>
+    /// PULSE's builder is handed per-member channels and a ledger. It cannot read owner-channel.md,
+    /// the open-question registry or a member's state file — which is exactly where the four fields
+    /// the owner asked for live. Handing them in as DATA is also what keeps the builder pure enough
+    /// to test: every one of these is a line the old status message got WRONG by inferring it.
+    /// </para>
+    /// <para>
+    /// EVERY FIELD DEGRADES TO NOTHING. A missing STATE: line is a blank row, not a guessed state; an
+    /// unreadable channel loses the row rather than the tick. That is the direction chosen after
+    /// 2026-09-09, where the owner read "waiting on you" about a supervisor that was not waiting and
+    /// "idle — waiting" about one that was paused.
+    /// </para>
+    /// </summary>
+    Telegram.TopicStatusFields Build_TopicStatusFields(IOrchestrationSession session)
+    {
+        try
+        {
+            var entries = ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId));
+
+            // The session that TALKS TO THE OWNER, whichever this orchestration has: a basic
+            // orchestration's solo declares its state exactly as a supervisor does.
+            var lastSpoken = MemberState_Resolver.Find_LastEntryBy_OrNull(entries, ChannelAuthors.Supervisor)
+                ?? MemberState_Resolver.Find_LastEntryBy_OrNull(entries, ChannelAuthors.Solo);
+
+            var declared = DeclaredState_Parser.Find_OrNull(lastSpoken?.Body);
+
+            List<Telegram.TopicOwnerAsk> asks = [];
+
+            lock (_ownerStateLock)
+            {
+                foreach (var question in _openQuestions.Values)
+                {
+                    if (question.OrchId == session.OrchId)
+                        asks.Add(new Telegram.TopicOwnerAsk("question", question.Text, question.AskedUtc.ToLocalTime()));
+                }
+            }
+
+            return new Telegram.TopicStatusFields
+            {
+                SupervisorDeclaredState = declared,
+
+                // THE STAMP IS THE ENTRY'S OWN, and it is read through the trusted reader rather than
+                // parsed here: a header stamp is agent-written (decision 12), and a future one must
+                // produce nothing instead of a confident wrong clock.
+                SupervisorDeclaredAt = declared == null ? null : Read_TrustedStamp_OrNull(lastSpoken?.DateText),
+                UsageLimitResumeAt = Read_UsageLimitResumeAt_OrNull(session),
+                LastEventAt = Read_TrustedStamp_OrNull(lastSpoken?.DateText),
+                OwnerAsks = asks,
+            };
+        }
+        catch (Exception ex)
+        {
+            // ONE TOPIC'S EXTRA FIELDS ARE NEVER WORTH THE TICK. Everything here is a read of a file
+            // an agent writes; the line still renders from what the builder can see for itself.
+            _log.Log_Warning(session.OrchId, $"Could not gather the status-line fields ({ex.Message}) — the line is drawn without them");
+
+            return default;
+        }
+    }
+
     async Task Refresh_TopicStatusLines_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
@@ -9120,7 +9244,8 @@ internal sealed class BridgeEngineModel(
                 // A basic orchestration has no supervisor file and this reads null, which is right:
                 // its solo carries the figure on its own row.
                 UsageTotals_Reader.Read_ContextUsage_OrNull(
-                    Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE)));
+                    Path.Combine(_paths.Get_OrchestrationFolder(session.OrchId), UsageTotals_Reader.SESSION_USAGE_FILE)),
+                Build_TopicStatusFields(session));
 
             var action = plan.Action;
             var text = plan.Text;
@@ -10759,7 +10884,15 @@ internal sealed class BridgeEngineModel(
     {
         try
         {
-            Remember_TopicMessage(messageThreadId, await client.Send_Message_Async(messageThreadId, text, sound, cancellationToken));
+            // THROUGH THE RENDERER (owner's decision, 2026-09-09: "command replies go through the
+            // HTML path"). Every reply on this route was a plain sendMessage, so a report carrying
+            // the ledger's own `- [x]` lines, a `**bold**` heading or a backticked id arrived with
+            // its markers showing — while the client's own doc comment claimed every owner-facing
+            // send was HTML. The sender falls back to plain text on a parse refusal, so the worst
+            // case is exactly today's behaviour.
+            Remember_TopicMessage(
+                messageThreadId,
+                await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, messageThreadId, text, sound, cancellationToken));
         }
         catch (OperationCanceledException)
         {
@@ -11714,6 +11847,30 @@ internal sealed class BridgeEngineModel(
 
             case "screen":
                 await Send_SessionScreenshot_Async(client, threadId, cancellationToken);
+                return true;
+
+            // THE FOUR THE OWNER PUT ON THE BAR (2026-09-09). Each already existed as a TYPED
+            // command; what was missing was a tap route to it, and EveryTopicButtonIsWiredTests is
+            // the thing that noticed — it walks TopicCommandButtons.Commands and demands a case here
+            // for every button the bar renders.
+            case "pending":
+                await Send_PendingDecisions_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "left":
+                await Send_ProgressReport_Async(client, threadId, "left", cancellationToken);
+                return true;
+
+            // THE VERB CARRIES ITS ARGUMENT, space included: /tail takes a member id, and the bar
+            // offers the one reading the owner actually wants — the supervisor's own turn log. The
+            // typed command parses the argument out of the message; here it is part of the payload,
+            // so the same handler is reached with the same words.
+            case "tail sup":
+                await Send_TurnLog_Async(client, threadId, "tail", "/tail sup", cancellationToken);
+                return true;
+
+            case "limits":
+                await Send_LimitsReport_Async(client, threadId, cancellationToken);
                 return true;
 
             case "merge":

@@ -51,10 +51,19 @@ public class EveryTopicButtonIsWiredTests
 
         foreach (var command in TopicCommandButtons.Commands)
         {
+            // A MULTI-WORD BAR VERB LEXES AS ITS FIRST WORD, and that is not a loophole — it is how a
+            // typed command works. `Get_BotCommand_OrNull` reads the verb after the slash, so the
+            // owner typing "/tail sup" arrives as command "tail" with "sup" still in the message
+            // text, which the handler parses as its argument. Demanding the literal
+            // `command == "tail sup"` here would only be satisfiable by dead code that can never be
+            // true, and the branch that genuinely serves it would still be the one for "tail".
+            var lexedVerb = command.Split(' ')[0];
+
             Assert.True(
-                engineSource.Contains($"command == \"{command}\"", StringComparison.Ordinal),
+                engineSource.Contains($"command == \"{lexedVerb}\"", StringComparison.Ordinal)
+                || engineSource.Contains($"command is \"{lexedVerb}\"", StringComparison.Ordinal),
                 $"'/{command}' can arrive as plain text (the \"/\" menu, or the owner typing it), but no "
-                + "branch dispatches that verb — "
+                + $"branch dispatches the verb '{lexedVerb}' — "
                 + "so the text is routed to the session as chat instead of running the command.");
         }
     }

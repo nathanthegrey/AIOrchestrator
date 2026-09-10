@@ -80,14 +80,25 @@ public static class TopicStatusLine_Planner
         TopicNewestMessage? newestTopicMessage,
         bool repostIsImpossible,
         TimeSpan? figuresUnchangedFor = null,
-        ISessionContextUsage? supervisorContext = null)
+        ISessionContextUsage? supervisorContext = null,
+
+        // WHAT ONLY THE ENGINE CAN KNOW — the supervisor's declared state, what the owner is being
+        // waited on for, a usage-limit pause, when the last event happened. The builder is handed
+        // per-member channels and cannot read owner-channel.md or a member's state file, so these
+        // arrive as data rather than being fetched. See TopicStatusFields.
+        TopicStatusFields fields = default)
     {
         // The id decides what "nothing to say" means, and it is passed rather than a flag derived at
         // the call site — that derivation was mutable to `false` with nothing reddening.
         // The `last` line is chosen HERE, not handed in. Gate C — the trusted reading of an
         // agent-written stamp — was the one gate that never left the engine, so it could be reverted
         // to a raw parse with 630 tests staying green.
-        var text = TopicStatusLine_Builder.Build(progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null, figuresUnchangedFor, supervisorContext);
+        // THE MODE IS FILLED IN HERE rather than by the caller: the planner already takes it for its
+        // own repost gate, and asking the engine to pass the same value twice is how two surfaces
+        // come to disagree about whether a topic is muted.
+        var text = TopicStatusLine_Builder.Build(
+            progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null,
+            figuresUnchangedFor, supervisorContext, fields with { Mode = mode });
 
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 
