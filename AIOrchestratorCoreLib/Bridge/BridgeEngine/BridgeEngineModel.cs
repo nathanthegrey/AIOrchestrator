@@ -6140,8 +6140,13 @@ internal sealed class BridgeEngineModel(
     /// <summary>A command becomes a canned English request for the GENERAL supervisor (thread null = general channel).</summary>
     static ITelegramOwnerMessage Build_GeneralCommandMessage(ITelegramOwnerMessage original, string cannedText)
     {
+        // APP-COMPOSED, like a tap: the owner typed `/summary`, and the SENTENCE that reaches the
+        // general supervisor was written here. Left unmarked, it met the typed-answer binding — so
+        // with one question open in General, asking for a summary filed that canned sentence as the
+        // owner's answer to it. Same defect the tap fix closed (stage 8a), one route further along.
         return TelegramOwnerMessage_Factory.Create(
-            original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, null, cannedText, null, null);
+            original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, null, cannedText, null, null,
+            isAppComposed: true);
     }
 
     /// <summary>
@@ -10997,7 +11002,21 @@ internal sealed class BridgeEngineModel(
         return Resolve_LogScope_ForTopic(message.MessageThreadId);
     }
 
-    async Task Route_OwnerMessage_Async(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
+    /// <summary>
+    /// IT REPORTS WHAT BECAME OF THE MESSAGE, because the caller sends the ✓ and the ✓ is a claim.
+    /// This returned void, so `Send_ReceivedAck_Async` ran after it whatever it had done — a message
+    /// into an unknown topic was dropped with a warning and ticked anyway, and one into a closed
+    /// orchestration was written into a channel nobody tails and ticked the same way.
+    ///
+    /// <para>
+    /// THE CLOSED CHECK IS HERE AND NOT IN THE STORE, deliberately. `Find_ByTelegramTopicId_OrNull`
+    /// has some thirty call sites — reports, glyph sweeps, `/clear`, the close flow itself — and
+    /// several of them legitimately want a session that is closed. This is the one place that WRITES
+    /// the owner's words into a channel file, so it is the one place the question "is anyone still
+    /// reading this?" belongs.
+    /// </para>
+    /// </summary>
+    async Task<OwnerRouteOutcomes> Route_OwnerMessage_Async(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
     {
         string orchId;
         string channelFile;
@@ -11014,7 +11033,20 @@ internal sealed class BridgeEngineModel(
             if (session == null)
             {
                 _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner message in unknown topic {message.MessageThreadId} ignored: {message.Text}");
-                return;
+                return OwnerRouteOutcomes.UnknownTopic;
+            }
+
+            // A CLOSED ORCHESTRATION'S CHANNEL IS AN ARCHIVE. Its tailers are stopped and its
+            // terminals are gone, so an append here is a write nobody will ever read — and the
+            // topic can outlive the close, because the delete that should remove it is
+            // fire-and-forget (brief E1). The owner is told instead.
+            if (session.ClosedUtc != null)
+            {
+                _log.Log_Warning(
+                    session.OrchId,
+                    $"Owner message arrived in the topic of a CLOSED orchestration (closed {session.ClosedUtc:yyyy-MM-dd HH:mm}Z) — not appended, and the owner was told");
+
+                return OwnerRouteOutcomes.ClosedOrchestration;
             }
 
             orchId = session.OrchId;
@@ -11029,15 +11061,20 @@ internal sealed class BridgeEngineModel(
         {
             var voiceText = await Build_VoiceEntryText_OrNull_Async(message, channelFile, orchId, cancellationToken);
 
-            // Not configured or failed — the owner already got a direct reply; nothing to route.
+            // Not configured or failed — the owner already got a direct reply; nothing to route,
+            // and NO ✓ either: a tick under "voice failed — please type it" says the opposite.
             if (voiceText == null)
-                return;
+                return OwnerRouteOutcomes.AnsweredDirectly;
 
             segmentText = voiceText;
         }
         else if (message.PhotoFileId != null)
         {
             segmentText = await Build_PhotoEntryText_Async(message, channelFile, orchId, cancellationToken);
+        }
+        else if (message.Document != null)
+        {
+            segmentText = await Build_DocumentEntryText_Async(message, channelFile, orchId, cancellationToken);
         }
         else
         {
@@ -11089,6 +11126,8 @@ internal sealed class BridgeEngineModel(
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
+
+        return OwnerRouteOutcomes.Routed;
     }
 
     async Task Flush_OwnerDeliveries_Async(CancellationToken cancellationToken)
@@ -13314,6 +13353,127 @@ internal sealed class BridgeEngineModel(
             await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🎙 voice message failed — please type it", cancellationToken);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Telegram's own ceiling for what a BOT may download — 20 MB. It is not a policy choice, which
+    /// is why it is stated as a fact and not as a setting: past it the download call fails, so the
+    /// only useful thing to do is say so before spending it.
+    /// </summary>
+    const long OWNER_DOCUMENT_MAX_BYTES = 20L * 1024 * 1024;
+
+    /// <summary>
+    /// A FILE THE OWNER ATTACHED, SAVED BESIDE THE CHANNEL AND NAMED IN IT.
+    ///
+    /// <para>
+    /// Documents were dropped in silence: the parser knew text, photo and voice, so a file with no
+    /// caption produced no owner message at all and the offset advanced over it. A file WITH a
+    /// caption was worse — the caption arrived as an ordinary message, so the owner watched their
+    /// words land and had every reason to think the file had landed too.
+    /// </para>
+    /// <para>
+    /// IT NEVER SWALLOWS THE OWNER'S WORDS, which is why this returns text rather than null the way
+    /// the voice path does. A caption is a message in its own right: whatever happens to the bytes,
+    /// what they wrote reaches the session, and the entry says plainly whether the file came with
+    /// it. When the file did NOT arrive the owner is also told directly, because a note in a channel
+    /// they do not read is not an answer.
+    /// </para>
+    /// <para>
+    /// THE NAME IS SANITISED, NOT TRUSTED — see <see cref="OwnerFileName_Sanitizer"/>: it comes from
+    /// the sending device, and joining it to a folder unchecked is how a write lands outside that
+    /// folder.
+    /// </para>
+    /// </summary>
+    async Task<string> Build_DocumentEntryText_Async(
+        Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message,
+        string channelFile,
+        string orchId,
+        CancellationToken cancellationToken)
+    {
+        var document = message.Document
+            ?? throw new Exception("Build_DocumentEntryText_Async called without a document");
+
+        var describedName = string.IsNullOrWhiteSpace(document.FileName) ? "a file" : document.FileName;
+        var caption = message.Text.Length == 0 ? $"(sent {describedName}, no caption)" : message.Text;
+
+        // REFUSED BEFORE IT IS FETCHED when Telegram already told us how big it is. Spending the
+        // download to discover a limit that was declared in the update is a slow way to fail.
+        if (document.SizeBytes != null && document.SizeBytes > OWNER_DOCUMENT_MAX_BYTES)
+        {
+            await Refuse_OversizedDocument_Async(message, describedName, document.SizeBytes.Value, cancellationToken);
+
+            return $"{caption}\n\n(The owner attached {describedName}, {Describe_Megabytes(document.SizeBytes.Value)} — over the 20 MB limit, so it was NOT downloaded. They were told to share a path instead.)";
+        }
+
+        try
+        {
+            var client = _telegramClient
+                ?? throw new Exception("Document message arrived without a Telegram client");
+
+            var bytes = await client.Download_File_Async(document.FileId, cancellationToken);
+
+            // AND CHECKED AGAIN AFTER THE FACT, because `file_size` is optional in the update: a
+            // document that declared nothing is only measurable once it is here.
+            if (bytes.LongLength > OWNER_DOCUMENT_MAX_BYTES)
+            {
+                await Refuse_OversizedDocument_Async(message, describedName, bytes.LongLength, cancellationToken);
+
+                return $"{caption}\n\n(The owner attached {describedName}, {Describe_Megabytes(bytes.LongLength)} — over the 20 MB limit, so it was discarded. They were told to share a path instead.)";
+            }
+
+            var mediaFolder = Path.Combine(Path.GetDirectoryName(channelFile)
+                ?? throw new Exception($"Channel file '{channelFile}' has no parent folder"), "media");
+            Directory.CreateDirectory(mediaFolder);
+
+            var safeName = Telegram.OwnerFileName_Sanitizer.Sanitize(document.FileName, $"tg-doc-{message.UpdateId}");
+            var filePath = Path.Combine(mediaFolder, $"tg-doc-{message.UpdateId}-{safeName}");
+
+            await File.WriteAllBytesAsync(filePath, bytes, cancellationToken);
+
+            _log.Log_Info(orchId, $"Owner document downloaded to {filePath} ({bytes.LongLength} bytes)");
+
+            return $"{caption}\n\nFILE: {filePath}\n(The owner sent this file — Read it to inspect it.)";
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(orchId, $"Owner document download failed for '{describedName}'", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                _telegramClient!, message.MessageThreadId,
+                $"📎 I could not download {describedName} — your message went through, the file did not. Send it again, or put it somewhere I can read and tell me the path.",
+                cancellationToken);
+
+            return $"{caption}\n\n(The owner attached {describedName} but downloading it FAILED: {ex.Message})";
+        }
+    }
+
+    async Task Refuse_OversizedDocument_Async(
+        Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message,
+        string describedName,
+        long sizeBytes,
+        CancellationToken cancellationToken)
+    {
+        _log.Log_Warning(
+            Describe_MessageOrch(message),
+            $"Owner document '{describedName}' is {sizeBytes} bytes — over the {OWNER_DOCUMENT_MAX_BYTES}-byte Telegram download limit; refused with a reply");
+
+        if (_telegramClient == null)
+            return;
+
+        await Send_DirectReply_BestEffort_Async(
+            _telegramClient, message.MessageThreadId,
+            $"📎 {describedName} is {Describe_Megabytes(sizeBytes)} — Telegram only lets me download files up to 20 MB. "
+            + "Your message went through; the file did not. Put it somewhere I can read and tell me the path.",
+            cancellationToken);
+    }
+
+    static string Describe_Megabytes(long sizeBytes)
+    {
+        return $"{sizeBytes / (double)(1024 * 1024):0.#} MB";
     }
 
     async Task<string> Build_PhotoEntryText_Async(

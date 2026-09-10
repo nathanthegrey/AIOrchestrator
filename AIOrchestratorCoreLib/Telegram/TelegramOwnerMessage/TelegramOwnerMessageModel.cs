@@ -10,7 +10,8 @@ internal sealed class TelegramOwnerMessageModel(
     string? photoFileId,
     string? voiceFileId,
     string? replyToText,
-    bool isAppComposed) : ITelegramOwnerMessage
+    bool isAppComposed,
+    TelegramDocumentRef? document) : ITelegramOwnerMessage
 {
     public long UpdateId { get; } = updateId;
     public long? MessageId { get; } = messageId;
@@ -22,4 +23,5 @@ internal sealed class TelegramOwnerMessageModel(
     public string? PhotoFileId { get; } = photoFileId;
     public string? VoiceFileId { get; } = voiceFileId;
     public bool IsAppComposed { get; } = isAppComposed;
+    public TelegramDocumentRef? Document { get; } = document;
 }
