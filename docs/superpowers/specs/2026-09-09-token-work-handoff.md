@@ -141,3 +141,42 @@ Headline so far (spec §5f): **tokens per call for members 345 k → ~100 k and 
 *Nothing here is certified by its author: the suite numbers are `dotnet test AIOrchestratorCoreLib.Tests`
 (2 756 passed / 9 skipped / 0 red on `f5d6b76`), the VPS facts are reads of the running box, and the
 before/after that proves the plan is the gate in §5f–§5g.*
+
+## 7. What the three changes actually did in production (measured 2026-09-10, VPS reads)
+
+Read this before believing §5's design claims: the three changes shipped on 2026-09-09 went live
+before anyone had seen them fire on a real session. Two now have production evidence, one does not.
+
+- **The soft boundary (mid-turn advisory)** — **8 sessions** received a real advisory. Counted as
+  `hook_additional_context` AND `IT HAS READ NO CLOCK` present in the same transcript
+  (`~/.claude/projects/*/*.jsonl` on the VPS, metadata + field presence only, never message text).
+  **Do not count the phrase `SOFT BOUNDARY`**: it is now in the skills that every session loads, so
+  it matches sessions the hook never touched. Only the attachment field proves delivery.
+- **The member digest** — 4 releases, of which **1 carried two entries in one turn**
+  (`'sup': entries: imp-2 [116], imp-3 [52] — the 5 min member digest elapsed`, `fincanva-5`,
+  12:01:12Z). That single release is the whole saving observed so far: one supervisor turn not taken,
+  worth **~607 k tokens of carried context** (measured: mean of the 171 turns that session made that
+  day, `input + cache_read + cache_creation` of the largest call per `promptId`). ~98 % of that is
+  cache-read [estimate, from the 97.8 % measured on 09-08], so the billed saving is a small fraction
+  of the raw number — but the unit saved is the most expensive turn in the system.
+  **The three single-entry releases saved nothing and cost 5 minutes of latency each**: the two
+  implementers take 35+ call turns, so their reports arrive more than five minutes apart and the
+  window is shorter than the interval between them. The digest is mechanically correct and, in this
+  workload, mostly idle. Before widening it, note the ceiling: `IMPLEMENTER_NUDGE_MINUTES = 8`, past
+  which the app nudges a supervisor for a report the app itself is holding. The better variant is to
+  release when no member has a turn in flight — in this workload that releases immediately, i.e. the
+  digest switches itself off when it cannot help, which is the right shape.
+- **The closing-spoke report** — **never fired.** No member has yet been closed with unread traffic,
+  so `UndeliveredSpokeTraffic_Reporter` has no production evidence at all. It is the one of the three
+  still in production on trust.
+
+### The measuring mistake this cost, twice
+
+Two of the advisory deliveries were reported as **false positives of the detector** and were not: the
+transcripts were read while the session was still writing them, so the field was absent when the grep
+ran and present ten minutes later. The detector never produced a false positive; the clock did.
+
+**On a file another process is still writing, absence is not a measurement.** Presence is — it cannot
+appear by mistiming. So a check of this kind may conclude "it is there", never "it is not there":
+for the negative you need a closed file, or two reads far enough apart to say which. This is
+CLAUDE.md decision 18's temporal sibling — 18 asks *which copy* you read, this asks *when*.
