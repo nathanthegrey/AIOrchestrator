@@ -96,7 +96,27 @@ public static class RunnerConfigs_Json
             Read_MemberDigestWindow_OrDefault(limits, rejections));
     }
 
-    /// <summary>Sets both blocks on <paramref name="configRoot"/>, replacing whatever was there.</summary>
+    /// <summary>
+    /// Sets both blocks on <paramref name="configRoot"/>, replacing whatever was there.
+    ///
+    /// <para>
+    /// WHAT IS WRITTEN IS WHAT THE APP IS USING, not what the operator typed — the header's contract
+    /// ("explicit on the way out: every role and every limit is written, so the owner sees the whole
+    /// surface and its current values"). So a REFUSED value is overwritten by the effective one at
+    /// the next save: <c>memberDigestMinutes: 10</c> becomes <c>5</c>, exactly as an unparseable
+    /// <see cref="SESSION_MEMORY_MAX_KEY"/> becomes <c>3G</c> and a negative digest becomes <c>0</c>.
+    /// Reviewed and kept on 2026-09-10: a file that shows the values in force is the point of writing
+    /// it out at all, and preserving a number the app is not using would make the file a record of
+    /// two different configurations, one of which is a lie about behaviour.
+    /// </para>
+    /// <para>
+    /// WHAT MAKES THAT HONEST IS THE REFUSAL LINE, AND IT NAMES BOTH NUMBERS — "is 10, above the
+    /// 5-minute ceiling … refused, the digest stays at 5 minutes" — logged once by
+    /// <c>PrintTurnDispatcherModel.Report_ConfigRejections_Once</c>. Before that reader existed the
+    /// overwrite was silent in both places at once, which was the review's finding rather than this
+    /// method's behaviour.
+    /// </para>
+    /// </summary>
     public static void Write(JsonObject configRoot, IRunnerConfigs configs)
     {
         var runnersNode = new JsonObject();
@@ -213,9 +233,17 @@ public static class RunnerConfigs_Json
     /// holding, and spends that quiet spell's single nudge token on the false alarm.
     /// </para>
     /// <para>
-    /// NOT A THROW, on either end. An app that will not start because of a hand-typed number in
-    /// <c>config.json</c> is a worse failure than a refused setting, and this file's contract is
-    /// tolerant on the way in.
+    /// NOT A THROW, on either end — AND IT WAS ONE. Review finding, 2026-09-10: the ceiling was
+    /// applied by building the <c>TimeSpan</c> first, on a line outside the try that guards the read,
+    /// so <c>memberDigestMinutes: 1e11</c> raised <c>OverflowException</c> straight out of
+    /// <see cref="Parse"/> — and neither <c>OrchestratorConfig_Loader.Load_OrEmpty</c> nor
+    /// <c>IOrchestratorConfigProvider.Get_Current</c> catches. <c>Get_Current</c> runs on the startup
+    /// path and on every mirror tick, so one hand-typed number took the WHOLE config read down and
+    /// logged one error per tick for ever, with nothing after it running. The comparison is made on
+    /// the NUMBER now, in minutes, so the only thing an absurd value can cost is its own setting.
+    /// <c>1e309</c> is the same door: JSON has no infinity, so it arrives as
+    /// <c>double.PositiveInfinity</c>, and the test is written as "is it inside the ceiling" rather
+    /// than "is it outside" so that a non-number would be refused rather than passed through.
     /// </para>
     /// </summary>
     static TimeSpan Read_MemberDigestWindow_OrDefault(JsonObject? limits, List<string> rejections)
@@ -228,10 +256,8 @@ public static class RunnerConfigs_Json
         if (written.Value <= 0)
             return TimeSpan.Zero;
 
-        var asked = TimeSpan.FromMinutes(written.Value);
-
-        if (asked <= RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW)
-            return asked;
+        if (written.Value <= RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW.TotalMinutes)
+            return TimeSpan.FromMinutes(written.Value);
 
         rejections.Add(
             $"'{LIMITS_KEY}.{MEMBER_DIGEST_MINUTES_KEY}' is {written.Value:0.#}, above the "

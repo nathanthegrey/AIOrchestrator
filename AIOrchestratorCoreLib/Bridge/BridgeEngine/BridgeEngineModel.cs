@@ -4652,6 +4652,10 @@ internal sealed class BridgeEngineModel(
     {
         try
         {
+            // SAID BEFORE THE SPOKE STOPS BEING A SOURCE — see UndeliveredSpokeTraffic_Reporter for
+            // why a line and not a drain, and for what the member digest widened.
+            UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, _log, orchId, memberId);
+
             _store.Close_Member(orchId, memberId);
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, memberId));
 

@@ -134,6 +134,41 @@ public class RunnerConfigsJsonTests : IDisposable
     }
 
     /// <summary>
+    /// AN ABSURD NUMBER COSTS THAT SETTING ITS DEFAULT AND NOTHING ELSE — the second review's HIGH of
+    /// 2026-09-10, and this file's own contract ("NOT A THROW, on either end").
+    ///
+    /// <para>
+    /// The ceiling was applied by building a <c>TimeSpan</c> first, OUTSIDE the try that guards the
+    /// read: <c>TimeSpan.FromMinutes(1e11)</c> raises <c>OverflowException</c>, which escaped
+    /// <c>RunnerConfigs_Json.Parse</c>, then <c>OrchestratorConfig_Loader.Load_OrEmpty</c> and
+    /// <c>IOrchestratorConfigProvider.Get_Current</c> — neither of which catches. <c>Get_Current</c>
+    /// runs on the startup path and on every mirror tick, so one hand-typed number took down the
+    /// whole config read and logged one error per tick for ever, with nothing after the read running.
+    /// The comparison is now made on the NUMBER, so the only thing an absurd value can cost is
+    /// itself.
+    /// </para>
+    /// <para>
+    /// <c>1e309</c> is the other end of the same door: JSON has no infinity, so it is read as
+    /// <c>double.PositiveInfinity</c> and reached the same constructor.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("100000000000")]
+    [InlineData("1e11")]
+    [InlineData("1e309")]
+    public void ADigestNumberTooLargeForATimeSpan_IsRefused_AndTakesNothingElseDown(string written)
+    {
+        var configs = RunnerConfigs_Json.Parse(
+            JsonNode.Parse($"{{\"printRunner\": {{ \"memberDigestMinutes\": {written}, \"maxConcurrentTurns\": 7 }}}}") as JsonObject);
+
+        Assert.Equal(RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW, configs.MemberDigestWindow);
+        Assert.Contains(RunnerConfigs_Json.MEMBER_DIGEST_MINUTES_KEY, Assert.Single(configs.Rejections));
+
+        // The reading did not stop at the bad key: everything after it is still read.
+        Assert.Equal(7, configs.MaxConcurrentTurns);
+    }
+
+    /// <summary>
     /// AND THE CEILING IS INCLUSIVE, so the value the app itself defaults to is not something the owner
     /// is refused for writing down.
     /// </summary>

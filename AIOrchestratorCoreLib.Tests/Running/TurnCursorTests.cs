@@ -121,6 +121,41 @@ public class TurnCursorTests
         Assert.Empty(TurnCursor_Factory.CreateFrom_Delivered(TurnCursor_Factory.Create_Empty(SOURCE), SessionRoles.Implementer, [], []).Delivered);
     }
 
+    /// <summary>
+    /// THE PRUNE CAN EMPTY A DELIVERED SET THAT HAD SOMETHING IN IT, and this is where the app is
+    /// allowed to see that — decision 13's shape, found by an adversarial review on 2026-09-10.
+    ///
+    /// <para>
+    /// On a turn where a compacted source had NOTHING pending, every identity the cursor held has left
+    /// the live file and nothing is added, so <c>Delivered</c> comes back EMPTY on a channel with
+    /// hours of history. Anything asking "has this source ever handed something over" from that count
+    /// is therefore answering "no" about a long-lived member — which is exactly what the wake-up
+    /// digest's first-contact exemption did, and why it now reads
+    /// <see cref="ITurnCursor.HighWaterIndex"/> as well (it is only ever raised, so it cannot come
+    /// back).
+    /// </para>
+    /// <para>
+    /// NOTHING IS RE-DELIVERED BY IT — that half of the design holds. The emptied set leaves the one
+    /// live entry pending, which it already was. The damage is only to the readers that treated an
+    /// empty set as "first contact".
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void CreateFrom_Delivered_WhenCompactionTookEveryDeliveredEntry_EmptiesTheSet()
+    {
+        var before = Parse(Channel(1, 3));
+        var delivered = TurnCursor_Factory.CreateFrom_Delivered(TurnCursor_Factory.Create_Empty(SOURCE), SessionRoles.Implementer, before, before);
+
+        Assert.Equal(3, delivered.Delivered.Count);
+        Assert.Equal(3, delivered.HighWaterIndex);
+
+        // Compaction archived [1]-[3] and a fourth entry landed; this turn delivered nothing from here.
+        var after = TurnCursor_Factory.CreateFrom_Delivered(delivered, SessionRoles.Implementer, Parse(Channel(4, 1)), []);
+
+        Assert.Empty(after.Delivered);
+        Assert.Equal(3, after.HighWaterIndex);
+    }
+
     [Fact]
     public void TheIdentityIsTheTEXT_SoTwoEntriesSharingAnIndexAreTwoIdentities()
     {

@@ -151,12 +151,22 @@ public class WakeUpDigestReviewFixTests
     /// configured — three seconds in production — that first tick does not start a turn, and the
     /// SECOND tick then found the flag already set and stamped a fresh window on the very traffic the
     /// rule existed to release: the restart bug wearing a three-second delay. The exemption is
-    /// therefore keyed on "this dispatcher has STARTED A TURN for this session"
-    /// (<c>SessionTracker.HasStartedATurn</c>), which no tick can set on its own.
+    /// therefore keyed on a turn of this session's having COMPLETED under this dispatcher
+    /// (<c>SessionTracker.HasDeliveredTraffic</c>), which no tick can set on its own — and which, for
+    /// one commit, was keyed on a turn having merely STARTED, until a failed turn showed why that is
+    /// the same bug wearing a failure (<see cref="WakeUpDigestSecondReviewTests"/>).
     /// </para>
     /// <para>
     /// THE TICKS ARE HAND-DRIVEN because a coalesce window needs two distinct instants to clear, and
     /// <c>Drive_Until_At</c> holds one. Probed 2026-09-10 against the abandoned flag: no turn ran.
+    /// </para>
+    /// <para>
+    /// AND THAT IS ALSO WHY ITS CONTROL HALF HAD TO BE REWRITTEN ON 2026-09-10. It asserted "no turn
+    /// ran at T+2" through <c>Ran_AnotherTurn</c>, which drives ONE frozen instant — and with a
+    /// three-second coalesce window a frozen instant can never clear it, so no turn could ever run at
+    /// that assertion whatever the digest did. Measured with the policy stubbed to release everything:
+    /// the case passed. The control now ticks once to record the pending set and asserts at a second,
+    /// later instant, where only the digest can be holding the report.
     /// </para>
     /// </summary>
     [Fact]
@@ -190,7 +200,13 @@ public class WakeUpDigestReviewFixTests
 
         Report(harness, imp, "REPORT — parser ported");
 
-        Assert.False(Ran_AnotherTurn(harness, first, T0.AddMinutes(2), 2), "the report was not held at all.");
+        // TWO INSTANTS: the first records the pending set, the second is past the coalesce window, so
+        // what holds the report at the assertion is the digest and nothing else.
+        first.Tick(T0.AddMinutes(2));
+
+        Assert.False(
+            Ran_AnotherTurn(harness, first, T0.AddMinutes(2).AddSeconds(10), 2),
+            "the report was not held at all, so the restart half below proves nothing.");
 
         await first.Stop_Async();
 
@@ -222,6 +238,13 @@ public class WakeUpDigestReviewFixTests
     /// ASKED OF THE CURSOR, never of the entry's <c>[n]</c> (CLAUDE.md decision 12). Probed 2026-09-10
     /// against <c>601c178</c>: the greeting was digested.
     /// </para>
+    /// <para>
+    /// AND IT CARRIES ITS OWN CONTROL SINCE 2026-09-10. Asserting only that a turn RAN is satisfied by
+    /// a digest that is off, or stubbed, or never consulted — measured, with the policy stubbed to
+    /// release everything this case passed — so the second half files an ordinary report from the same
+    /// member and requires it to be held. <see cref="AndItsSecondEntry_IsHeldLikeAnyOtherReport"/>
+    /// states the same thing as its own subject; here it is what makes this case able to fail.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task AFreshMembersGreeting_WakesTheSupervisorAtOnce()
@@ -242,6 +265,12 @@ public class WakeUpDigestReviewFixTests
         Assert.True(
             PrintRunnerTestHarness.Drive_Until_At(dispatcher, T0.AddMinutes(1), () => Turns(harness) == 2, PrintRunnerTestHarness.GENEROUS),
             "a new member's greeting was digested, so add-implementer cost a window of dead time before it could be briefed.");
+
+        Report(harness, imp, "REPORT — the parser is ported");
+
+        Assert.False(
+            Ran_AnotherTurn(harness, dispatcher, T0.AddMinutes(2), 2),
+            "the digest was holding nothing for this session, so the greeting above was released by no rule in particular.");
 
         await dispatcher.Stop_Async();
     }
@@ -283,9 +312,17 @@ public class WakeUpDigestReviewFixTests
     /// behaviour as MEASURED rather than asserting the fix: the loss is not the digest's — the same
     /// entry is lost with the digest off if the close lands inside the coalesce window, and the cursor
     /// is deliberately kept so nothing is re-delivered either — but the digest widens the exposure
-    /// from three seconds to five minutes. See the report of 2026-09-10; closing that gap means
-    /// draining a closing member's spoke, which is <c>close-implementer</c>'s business rather than the
-    /// digest's.
+    /// from three seconds to five minutes, on the single most valuable entry a member ever writes
+    /// ("done, pushed, here is the diff").
+    /// </para>
+    /// <para>
+    /// WHAT IS OWED IS A LINE, NOT A DRAIN — reviewed 2026-09-10. Re-running the spoke's pending
+    /// entries through a supervisor whose turn asked for the close is a second turn nobody ordered;
+    /// what the close path owes is to SAY what it is dropping, in the log, naming the entries
+    /// (decision 21, and decision 15 keeps it off the phone: the owner cannot act on it). That line
+    /// belongs in <c>BridgeEngineModel.Execute_CloseImplementer</c>, which is outside this stage's
+    /// file set, so it is reported with the exact change rather than taken. Until it lands, this case
+    /// is the record that the loss is known and measured.
     /// </para>
     /// </summary>
     [Fact]

@@ -84,13 +84,14 @@ public static class WakeUp_Policy
     /// a DECLARATION rather than a word, and taking the constant is what stops the next copy.
     /// </para>
     /// <para>
-    /// THE CONSTANT COMES FROM <c>Bridge</c>, A LAYER THIS ONE DOES NOT OTHERWISE READ, and that price
-    /// is paid deliberately. <c>Bridge</c> depends on <c>Running</c> — <c>BridgeEngineModel</c> is
-    /// constructed with an <see cref="PrintTurnDispatcher.IPrintTurnDispatcher"/> — so this reference
-    /// points back up the way it came; it is legal (one assembly), it is one word, and the alternative
-    /// was a fifth literal. The right home is <see cref="MemberState_Resolver"/>, which already owns
-    /// the other marker and which both layers depend on; moving it there is one line in a file outside
-    /// this stage's set, so it is reported rather than done.
+    /// BOTH CONSTANTS COME FROM <see cref="MemberState_Resolver"/>, which is where the channel
+    /// vocabulary lives and which both this layer and <c>Bridge</c> already depend on. An earlier
+    /// attempt took the word from <c>Bridge.OwnerPush_Policy</c> instead — a reference pointing back
+    /// up the way it came, since <c>BridgeEngineModel</c> is constructed with an
+    /// <see cref="PrintTurnDispatcher.IPrintTurnDispatcher"/> — and this paragraph then said the move
+    /// to its right home was "one line in a file outside this stage's set, so it is reported rather
+    /// than done". It WAS done, in the same commit; the paragraph outlived the fact by a day and sent
+    /// the next reader to <c>Bridge</c> for a constant that is not there (review finding, 2026-09-10).
     /// </para>
     /// <para>
     /// TWO MARKERS THE BRIEF NAMED ARE NOT HERE, and their absence is a finding rather than an
@@ -146,8 +147,11 @@ public static class WakeUp_Policy
     /// THAT NULL IS THE RESTART CASE, AND DELIVERING ON IT IS THE DECISION. The stamp lives in the
     /// dispatcher's tracker, which is per-process, so traffic already sitting in the channels when a
     /// dispatcher starts has no hold on record — it has already waited an unknown time, and the honest
-    /// answer is to hand it over. The dispatcher therefore writes NO stamp until it has started a turn
-    /// for the session (<c>PrintTurnDispatcherModel.SessionTracker.HasStartedATurn</c>). REVIEW
+    /// answer is to hand it over. The dispatcher therefore writes NO stamp until a turn of that
+    /// session's has COMPLETED under it
+    /// (<c>PrintTurnDispatcherModel.SessionTracker.HasDeliveredTraffic</c> — it was
+    /// <c>HasStartedATurn</c> for one commit, and having a merely STARTED turn arm the hold is the
+    /// regression of 2026-09-10: a failed turn armed it while consuming nothing). REVIEW
     /// FINDING, 2026-09-09: the first tick after a restart used to stamp <c>nowLocal</c> instead, so a
     /// restart RESTARTED the window on traffic that had already waited — probed, a report filed at T+1
     /// on a five-minute window went out at T+11, two full windows, once per restart, with 21 daemon
@@ -188,6 +192,16 @@ public static class WakeUp_Policy
         // supervisor and the owner (PrintTurn_Trigger.Is_Inbound), so a brief or a verdict is never
         // digestable and every other role's timing is untouched. A member's FIRST entry is in this
         // class too, for the reason Is_Digestable gives.
+        //
+        // AND ONE SUCH ENTRY RELEASES THE WHOLE SET — a TURN TAKES EVERYTHING PENDING, so the reports
+        // being held beside it go early. Measured and disclosed on 2026-09-10 rather than fixed: it is
+        // not the exemption leaking, it is the queue. This session's queue IS the channels, one turn
+        // takes every pending inbound entry of every source, and that property is what makes holding
+        // safe in the first place ("nothing is lost by being held", above). Releasing one entry and
+        // not its neighbours would mean starting a turn on a SUBSET — two turns where the design
+        // promises one, and one request id covering entries the next turn must take again. What it
+        // costs is the size of the saving when an add-implementer lands inside a window, and the
+        // direction is early rather than late.
         foreach (var item in pending)
         {
             if (!Is_Digestable(item, sourcesNeverDeliveredFrom))

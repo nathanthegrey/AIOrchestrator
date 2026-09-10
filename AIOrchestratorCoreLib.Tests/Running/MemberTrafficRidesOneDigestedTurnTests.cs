@@ -149,6 +149,15 @@ public class MemberTrafficRidesOneDigestedTurnTests
     /// A MEMBER THAT SAYS IT IS BLOCKED IS NOT HELD, at the instant it says so. Two sessions and a
     /// person are waiting on each other at that point, so a digest would be five minutes of nobody
     /// working — the case the constraint on this change names by name.
+    ///
+    /// <para>
+    /// TWO THINGS WERE WRONG WITH THIS CASE UNTIL 2026-09-10 and both made it green for free. The
+    /// declaration was the member's FIRST entry, so what released it was the greeting exemption and
+    /// not the marker at all; and the case then asserted only that a turn RAN, which a digest that had
+    /// been switched off or bypassed guarantees. Measured with the policy stubbed to release
+    /// everything: it passed. So the exemption is spent first, and the control half below files an
+    /// ORDINARY report from the same member at the same window and requires it to be held.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task ABlockedMember_WakesTheSupervisorAtOnce()
@@ -161,12 +170,21 @@ public class MemberTrafficRidesOneDigestedTurnTests
         var dispatcher = harness.Create_Dispatcher();
 
         Boot(harness, dispatcher);
+        harness.Spend_FirstContact(dispatcher, ORCH, T0.AddMinutes(1), 1, imp);
 
         Report(harness, imp, ChannelAuthors.Implementer, $"{MemberState_Resolver.BLOCKED_ON_OWNER_MARKER} — which branch do I target?");
 
         Assert.True(
-            PrintRunnerTestHarness.Drive_Until_At(dispatcher, T0, () => Turns(harness) == 2, PrintRunnerTestHarness.GENEROUS),
+            PrintRunnerTestHarness.Drive_Until_At(dispatcher, T0.AddMinutes(2), () => Turns(harness) == 3, PrintRunnerTestHarness.GENEROUS),
             "a member declaring BLOCKED ON OWNER was held for the digest.");
+
+        // THE CONTROL: the same member, the same window, an ordinary report — and this one waits. It is
+        // what says the digest was live for this session, so the assertion above is about the marker.
+        Report(harness, imp, ChannelAuthors.Implementer, "REPORT — carried on with the other branch");
+
+        Assert.False(
+            Ran_AnotherTurn(harness, dispatcher, T0.AddMinutes(3), 3),
+            "the digest was not holding anything for this session, so nothing above proves the marker did the releasing.");
 
         await dispatcher.Stop_Async();
     }
@@ -246,10 +264,13 @@ public class MemberTrafficRidesOneDigestedTurnTests
     /// list alone would pass while a turn was busy being wrong.
     ///
     /// <para>
-    /// THE COUNT IS A PARAMETER AND NOT THE CONSTANT 1 IT WAS. Since 2026-09-10 these cases spend each
-    /// spoke's first-contact exemption before they measure anything
-    /// (<c>PrintRunnerTestHarness.Spend_FirstContact</c>), so the baseline is not the boot turn alone —
-    /// and a hard-coded 1 would have made every negative assertion below trivially true.
+    /// THE COUNT IS A PARAMETER AND NOT THE CONSTANT 1 IT WAS, and the reason is not the one this
+    /// paragraph gave until 2026-09-10. Since these cases spend each spoke's first-contact exemption
+    /// before they measure anything (<c>PrintRunnerTestHarness.Spend_FirstContact</c>) the baseline is
+    /// no longer the boot turn alone — so a hard-coded 1 would compare 2 against 1, report a turn that
+    /// ran minutes ago as a turn that ran now, and make every negative assertion below trivially RED,
+    /// not trivially green. A stale baseline in this helper cannot manufacture a pass; it manufactures
+    /// a failure, which is the safe direction and the wrong justification to leave written down.
     /// </para>
     /// </summary>
     static bool Ran_AnotherTurn(PrintRunnerTestHarness harness, IPrintTurnDispatcher dispatcher, DateTime nowLocal, int turnsSoFar)

@@ -335,6 +335,42 @@ public class WakeUpPolicyTests
     }
 
     /// <summary>
+    /// BUT A TURN TAKES EVERYTHING PENDING, so a new member's greeting IN THE SAME SET releases the
+    /// others' held reports with it — measured and disclosed on 2026-09-10 rather than fixed.
+    ///
+    /// <para>
+    /// This is not the exemption leaking: it is the queue. A bridge-driven session has no queue but
+    /// the channels, one turn takes every pending inbound entry of every source, and that is the
+    /// property the whole digest rests on ("nothing is lost by being held"). There is no way to
+    /// release the greeting without releasing what is pending beside it short of starting a turn on a
+    /// SUBSET, which would mean two turns where the design promises one and would break the
+    /// idempotency record that makes a turn re-runnable.
+    /// </para>
+    /// <para>
+    /// SO WHAT IT COSTS IS SIZE, NOT CORRECTNESS: the other reports are read EARLY, which is the safe
+    /// direction, and the saving is smaller by one wake-up every time <c>add-implementer</c> lands
+    /// inside a window. <see cref="AFirstEntryFromANewChannel_IsNotHeld"/> is the other half — the
+    /// exemption itself is per source, so a new member elsewhere does not by itself release a report.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AFirstEntryReleasesEverythingPendingWithIt_BecauseATurnTakesTheWholeSet()
+    {
+        IReadOnlyCollection<string> firstContact = new HashSet<string>([IMP.Key], StringComparer.OrdinalIgnoreCase);
+
+        List<PendingEntry> both =
+        [
+            new(REV, Entry("reviewer", "VERDICT — accepted")),
+            new(IMP, Entry("implementer", "imp-1 online")),
+        ];
+
+        var reason = WakeUp_Policy.Resolve_WakeReason_OrNull(both, firstContact, NOW, NOW.AddMinutes(1), DIGEST);
+
+        Assert.NotNull(reason);
+        Assert.Contains(IMP.Key, reason);
+    }
+
+    /// <summary>
     /// AND THE MATCH ON A SOURCE KEY IS CASE-INSENSITIVE, the same as the cursor set's. A key is a word
     /// an agent typed, and the two records have to agree on what "the same channel" means or the
     /// exemption applies to a channel the cursor thinks is a different one.

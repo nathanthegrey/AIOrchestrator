@@ -71,10 +71,20 @@ public interface IRunnerConfigs
     string SessionMemoryMax { get; }
 
     /// <summary>
-    /// Configurations the loader REFUSED, in the owner's own terms — one line each, logged once by
-    /// the launcher. A refusal is not a parse error (config.json still loads, the role falls back to
-    /// terminal): it is a setting that would have done something the app must not do, and the only
-    /// unacceptable outcome is applying it silently.
+    /// Configurations the loader REFUSED, in the owner's own terms — one line each. A refusal is not a
+    /// parse error (config.json still loads, the role falls back to terminal): it is a setting that
+    /// would have done something the app must not do, and the only unacceptable outcome is applying it
+    /// silently.
+    ///
+    /// <para>
+    /// THE READER IS <c>PrintTurnDispatcherModel.Report_ConfigRejections_Once</c>, which logs each
+    /// distinct line once. This docstring said "logged once by the launcher" for four stages and no
+    /// launcher did: <c>grep -rn Rejections</c> on 2026-09-10 found the model, the factory, this
+    /// interface and five test files, so every refusal the loader wrote reached nobody at all
+    /// (adversarial review; CLAUDE.md decision 21 — a silence is not an acceptable outcome). Naming
+    /// the reader here is deliberate: this is a list whose whole value is that somebody prints it, so
+    /// the next reader can check the claim in one grep instead of believing it.
+    /// </para>
     /// </summary>
     IReadOnlyList<string> Rejections { get; }
 }
