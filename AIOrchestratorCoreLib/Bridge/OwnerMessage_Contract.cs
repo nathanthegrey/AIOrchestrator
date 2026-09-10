@@ -17,6 +17,21 @@ public enum OwnerMessageFaults
 
     /// <summary>Over the length the owner will actually read.</summary>
     TooLong,
+
+    /// <summary>
+    /// More options than the owner will weigh on a phone. Owner, brief C/E2: options are two to
+    /// four.
+    ///
+    /// <para>
+    /// IT COACHES AND DOES NOT REFUSE, and that is the whole reason it lives here rather than beside
+    /// the lower bound. `OwnerQuestion_Contract.FewerThanTwoOptions` REFUSES to forward — a question
+    /// with one option is not a choice, so nothing is lost by sending it back. A question with five
+    /// options IS a choice; refusing it would lose the owner a decision they can perfectly well make,
+    /// which is the worst outcome this system has. So the question goes out — with every button
+    /// numbered, which is what makes five readable — and the supervisor is told afterwards.
+    /// </para>
+    /// </summary>
+    TooManyOptions,
 }
 
 /// <summary>
@@ -47,8 +62,24 @@ public enum OwnerMessageFaults
 /// </summary>
 public static class OwnerMessage_Contract
 {
-    public const int MAXIMUM_LINES = 6;
-    public const int MAXIMUM_CHARACTERS = 600;
+    /// <summary>
+    /// ONE CEILING, READ FROM ONE HOME — <see cref="Brevity_Policy"/> (owner, brief C/E2: 5 lines,
+    /// 600 characters).
+    ///
+    /// <para>
+    /// These were literals here, and they had already drifted: this class said SIX lines while
+    /// `Brevity_Policy` said five, so an entry of six lines was coached as too long by one surface
+    /// and passed as fine by the other, and the supervisor could obey whichever it happened to be
+    /// told. The characters agreed at 600 only by luck — two literals, no link.
+    /// </para>
+    /// <para>
+    /// `Brevity_Policy` is the home because it is the one that MEASURES what was actually mirrored
+    /// and reports the numbers; this class checks the entry before it goes. Same rule, two moments.
+    /// </para>
+    /// </summary>
+    public const int MAXIMUM_LINES = Brevity_Policy.MAX_LINES;
+
+    public const int MAXIMUM_CHARACTERS = Brevity_Policy.MAX_CHARACTERS;
 
     const string QUESTION_MARKER = "QUESTION:";
     const string OPTION_MARKER = "OPTION:";
@@ -113,6 +144,11 @@ public static class OwnerMessage_Contract
         if (Is_TooLong(lines, body))
             faults.Add(OwnerMessageFaults.TooLong);
 
+        // COUNTED, NOT REFUSED — see the fault's own summary for why this bound coaches while the
+        // lower one rejects.
+        if (optionIndexes.Count > Decisions.OwnerQuestion_Contract.MAXIMUM_OPTIONS)
+            faults.Add(OwnerMessageFaults.TooManyOptions);
+
         return faults;
     }
 
@@ -121,6 +157,8 @@ public static class OwnerMessage_Contract
     {
         return fault switch
         {
+            OwnerMessageFaults.TooManyOptions =>
+                $"OPTION: lines — {Decisions.OwnerQuestion_Contract.MAXIMUM_OPTIONS} at most. Past that the owner is reading a list, not making a choice; the buttons were numbered so it stays readable, but fold the near-duplicates together.",
             OwnerMessageFaults.TwoQuestions =>
                 "Two QUESTION: lines in one entry. The owner answers with one message, so the second question "
                 + "gets no answer and the app cannot tell which one they meant. Ask one; keep the other for after.",
