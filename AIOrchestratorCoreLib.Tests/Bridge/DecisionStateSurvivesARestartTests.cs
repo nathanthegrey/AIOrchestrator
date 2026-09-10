@@ -478,6 +478,12 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
             return _sentTexts.LastOrDefault(text => text.Contains(fragment, StringComparison.Ordinal));
     }
 
+    public int Count_Edited_Containing(string fragment)
+    {
+        lock (_lock)
+            return _editedTexts.Count(text => text.Contains(fragment, StringComparison.Ordinal));
+    }
+
     public string? Find_EditedContaining(string fragment)
     {
         lock (_lock)

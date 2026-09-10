@@ -3,6 +3,7 @@ using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -451,6 +452,85 @@ public class QuestionContractProbeTests : IDisposable
         Assert.True(
             refusedAttempts <= 1,
             $"the refused status-line edit was attempted {refusedAttempts} times inside the {BridgeTestTiming.RETRY_BACKOFF_SECONDS} s back-off — production saw one every tick.");
+    }
+
+    const string THIRD_QUESTION =
+        "Both branches are in.\n"
+        + "QUESTION: Ship the release tonight?\n"
+        + "OPTION: Ship it\n"
+        + "OPTION: Hold off\n"
+        + "RECOMMEND: Hold off — the pricing pass is still yours.\n"
+        + "RISK: low\n"
+        + "ROW: FIN-D-279a";
+
+    /// <summary>
+    /// A NEWER QUESTION CLOSES THE OLDER ONES THE OWNER HAD ALREADY REPLIED TO IN WORDS. Measured
+    /// 2026-09-10: three questions from 15:58, 16:46 and 16:56 still listed as "waiting on you" at
+    /// 21:50 — the owner had answered each in prose, but with several open a typed reply binds to
+    /// none, so nothing ever closed them. Two open here, a typed reply that binds neither, then a
+    /// third question: the two are superseded (registry, keyboard, message), the third alone is
+    /// open, and the asker is told. With no reply between two questions both stay open — that case
+    /// is pinned by ATapOnOneQuestion_LeavesTheOtherOpen_TappableAndUnstamped and is unchanged.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ANewQuestion_AfterTheOwnerRepliedInWords_SupersedesTheOlderOnes()
+    {
+        var orchId = await Start_Async();
+
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
+
+        Assert.True(
+            await Run_Until_Async(
+                () => _telegram.Find_ButtonFor("Start it") != null && _telegram.Find_ButtonFor("Merge it") != null,
+                25_000),
+            $"both questions never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
+
+        // The owner answers in words — and with two open, that binds neither (by design). The
+        // harness clock is frozen, so it is stepped first: "replied AFTER the question was asked" is
+        // a comparison of two stamps from that clock, and in production the clock moves by itself.
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("start the build and hold the merge", updateId: 3080, messageId: 78));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("the reply names none of them"), 20_000),
+            $"the typed reply was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
+
+        // Then the asker moves on. (Numbered past the app's own entries, which took [5] and [6].)
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, THIRD_QUESTION, entryNumber: 9);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Ship it") != null && _engineState.Load_OrEmpty().OpenQuestions.Count == 1, 25_000),
+            $"the third question did not supersede the two older ones.{Environment.NewLine}{_log.Dump()}");
+
+        var open = Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Contains("Ship the release tonight?", open.Text, StringComparison.Ordinal);
+
+        // BOTH OLDER MESSAGES SAY SO — and the edit is what drops their keyboards.
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX) == 2, 20_000),
+            $"the superseded questions were not rewritten.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        // The asker was told, once, in its own channel.
+        Assert.Contains("superseded by this one", Channel(orchId), StringComparison.Ordinal);
+
+        // A late tap on a superseded question is refused, never routed as a stale answer.
+        var startIt = _telegram.Find_ButtonFor("Start it") ?? throw new Exception("the option payload is gone from the fake");
+        var firstMessageId = _telegram.Find_MessageIdOfSentContaining("Start the FIN-D-277a build now?") ?? throw new Exception("no id for the first question");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, firstMessageId, updateId: 3090));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Dump().Contains("Callback REFUSED", StringComparison.Ordinal), 20_000),
+            $"a superseded question's option was still live.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
     }
 
     async Task Run_For_Async(int milliseconds)

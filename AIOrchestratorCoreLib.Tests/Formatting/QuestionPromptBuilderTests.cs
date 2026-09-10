@@ -82,4 +82,19 @@ public class QuestionPromptBuilderTests
 
         Assert.Equal($"❓ Which?\n\n✅ answered: {QuestionPrompt_Builder.ANSWERED_IN_WRITING}", answered);
     }
+
+    /// <summary>
+    /// A superseded question keeps its words (the owner scrolls back to it) and says plainly why it
+    /// closed — and never with a "✅", because no choice was recorded.
+    /// </summary>
+    [Fact]
+    public void ASupersededQuestion_KeepsItsWords_SaysWhy_AndRecordsNoChoice()
+    {
+        var text = QuestionPrompt_Builder.Build_SupersededText("❓ Start the build now?");
+
+        Assert.StartsWith("❓ Start the build now?", text, StringComparison.Ordinal);
+        Assert.EndsWith(QuestionPrompt_Builder.SUPERSEDED_SUFFIX, text, StringComparison.Ordinal);
+        Assert.Contains("superseded", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("✅", text, StringComparison.Ordinal);
+    }
 }

@@ -506,6 +506,18 @@ internal sealed class BridgeEngineModel(
     /// thread, the clear runs on the inbound loop.
     /// </remarks>
     readonly Dictionary<string, string> _stallAlertedQuestionKeyByOrchId = [];
+
+    /// <summary>
+    /// WHEN THE OWNER LAST REPLIED IN WORDS, per topic — the one fact that lets a newer question
+    /// close older ones honestly. With several questions open a typed reply binds to none (the app
+    /// will not guess), so they all stayed open, for hours, as "waiting on you". A typed reply
+    /// FOLLOWED BY a newer question from the same asker is the evidence that the older ones were
+    /// dealt with in prose (owner decision, 2026-09-10: this variant, not "a new question always
+    /// closes the old ones" — two genuinely parallel questions with no reply between them stay open).
+    /// In memory only: after a restart nothing is superseded until the owner types again, which errs
+    /// on the side of leaving a question open.
+    /// </summary>
+    readonly Dictionary<string, DateTime> _ownerRepliedInWordsUtcByOrchId = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
@@ -4021,7 +4033,11 @@ internal sealed class BridgeEngineModel(
         //
         // So the count is a smell to tell the session about, not a thing to prevent. The audience is
         // Agent, so this coaching never reaches the phone.
-        if (Would_BeASecondOpenQuestion(channel.OrchId))
+        // DECIDED BEFORE THE SEND, so the coaching below is not written about questions this send is
+        // about to close — and swept AFTER it, so a send that fails leaves the older ones open.
+        var toSupersede = Find_QuestionsToSupersede(channel.OrchId);
+
+        if (toSupersede.Count == 0 && Would_BeASecondOpenQuestion(channel.OrchId))
         {
             _log.Log_Info(
                 channel.OrchId,
@@ -4132,6 +4148,8 @@ internal sealed class BridgeEngineModel(
                         ? $"Question classified HIGH RISK (matched '{matchedPattern}') — a tap will require the read-back code"
                         : "Question classified HIGH RISK (declared by the asker, no pattern matched) — a tap will require the read-back code");
             }
+
+            await Supersede_OlderQuestions_Async(channel, toSupersede, cancellationToken);
 
             // It asked; now it stops. The hook refuses every tool until the owner answers — unless
             // the owner is IN this orchestration's terminal, where the answer is being typed at the
@@ -11727,6 +11745,91 @@ internal sealed class BridgeEngineModel(
             _clock.UtcNow);
     }
 
+    /// <summary>
+    /// The open questions of this topic asked BEFORE the owner last replied in words — the ones a
+    /// newer question from the same asker will close as superseded. Empty when the owner has not
+    /// spoken since the oldest of them: two parallel questions with no reply between stay open.
+    /// </summary>
+    IReadOnlyList<OpenQuestionRecord> Find_QuestionsToSupersede(string orchId)
+    {
+        lock (_ownerStateLock)
+        {
+            if (!_ownerRepliedInWordsUtcByOrchId.TryGetValue(orchId, out var repliedUtc))
+                return [];
+
+            return [.. _openQuestions.Values.Where(question => question.OrchId == orchId && question.AskedUtc < repliedUtc)];
+        }
+    }
+
+    /// <summary>
+    /// CLOSES THE OLDER QUESTIONS THE OWNER HAD ALREADY REPLIED TO IN WORDS, now that the asker has
+    /// moved on to a new one. The same three steps a tap takes — out of the registry with a recorded
+    /// reason, buttons consumed so a late tap is refused rather than routed as a stale answer, the
+    /// message rewritten (under the rate-limit retry, like every owner-facing rewrite) — plus the
+    /// read-back it may have been waiting for. Then the asker is told, once, in its own channel.
+    /// </summary>
+    async Task Supersede_OlderQuestions_Async(
+        Channels.DiscoveredChannel.IDiscoveredChannel channel,
+        IReadOnlyList<OpenQuestionRecord> toSupersede,
+        CancellationToken cancellationToken)
+    {
+        if (toSupersede.Count == 0 || _telegramClient == null)
+            return;
+
+        List<OpenQuestionRecord> superseded = [];
+
+        lock (_ownerStateLock)
+        {
+            foreach (var question in toSupersede)
+            {
+                // Re-checked under the lock: a tap or a typed answer may have closed it meanwhile.
+                if (!_openQuestions.Remove(question.MessageId))
+                    continue;
+
+                Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.SUPERSEDED);
+                _pendingConfirmations.RemoveAll(confirmation => confirmation.MessageId == question.MessageId);
+                superseded.Add(question);
+            }
+        }
+
+        if (superseded.Count == 0)
+            return;
+
+        lock (_buttonLock)
+        {
+            foreach (var question in superseded)
+            {
+                List<string> groupKeys = [.. _buttonOptions.Where(pair => pair.Value.GroupId == question.ButtonGroupId).Select(pair => pair.Key)];
+
+                foreach (var key in groupKeys)
+                    _buttonOptions.Remove(key);
+            }
+        }
+
+        Persist_EngineState();
+
+        _log.Log_Info(
+            channel.OrchId,
+            $"{superseded.Count} older open question(s) superseded — the owner had replied in words and a newer question followed");
+
+        ChannelAppender.Append_AppEntry(
+            channel.FilePath,
+            AppEntryAudiences.Agent,
+            "your earlier open question was superseded by this one",
+            $"The owner had replied in words while {(superseded.Count == 1 ? "an earlier question of yours was" : $"{superseded.Count} earlier questions of yours were")} still open, "
+            + "and you have now asked a new one — so the earlier one(s) are closed as superseded and say so on the phone. "
+            + "If one of them still needs a decision, ask it again.",
+            DateTime.Now);
+
+        foreach (var question in superseded)
+        {
+            await Rewrite_AnsweredQuestion_WithRetry_Async(
+                _telegramClient, question.MessageId,
+                QuestionPrompt_Builder.Build_SupersededText(question.Text),
+                cancellationToken);
+        }
+    }
+
     bool Would_BeASecondOpenQuestion(string orchId)
     {
         lock (_ownerStateLock)
@@ -12480,7 +12583,14 @@ internal sealed class BridgeEngineModel(
         // still open is the ordinary case, not a rare one — and on 2026-09-09 that is precisely what
         // stamped a talk request onto an orphaned-processes question nobody ever decided.
         if (!message.IsAppComposed)
+        {
             await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
+
+            // Stamped whether or not the reply bound: what matters later is that the owner SPOKE
+            // after a question was asked, and a bound reply leaves nothing open to supersede anyway.
+            lock (_ownerStateLock)
+                _ownerRepliedInWordsUtcByOrchId[orchId] = _clock.UtcNow;
+        }
         Clear_AwaitingAnswerFlag(orchId);
 
         // THE STALL ALERT'S MEMORY IS SETTLED BY THE OWNER SPEAKING, and forgetting it here is what
