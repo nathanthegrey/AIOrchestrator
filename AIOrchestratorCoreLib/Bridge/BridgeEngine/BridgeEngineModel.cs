@@ -1227,6 +1227,9 @@ internal sealed class BridgeEngineModel(
                 null,
                 $"🛑 The bridge's '{loopName}' loop failed {deaths} times in a row and has been abandoned. "
                     + "Mirroring and/or your messages are DOWN until the app is restarted — nothing else will bring it back.",
+
+                // The loudest thing this app can say: nothing else will reach them until they act.
+                TelegramSendSounds.Rings,
                 cancellationToken);
         }
         catch (Exception ex)
@@ -1594,6 +1597,10 @@ internal sealed class BridgeEngineModel(
                 Mirroring.UndeliveredDigest_Builder.FILE_NAME,
                 Mirroring.UndeliveredDigest_Builder.Build_Content(parked),
                 Mirroring.UndeliveredDigest_Builder.Build_CaptionHtml(parked.Count, parked[0].WhenUtc, parked[^1].WhenUtc),
+
+                // IT RINGS. These are entries the owner was owed and never got — the digest is the
+                // delivery, not a status note about one.
+                TelegramSendSounds.Rings,
                 cancellationToken);
 
             _log.Log_Info(
@@ -1826,7 +1833,7 @@ internal sealed class BridgeEngineModel(
                 // non-conditional form was safe only while the exit above dropped every sessionless
                 // orchestration — the bug that exit had. Fixing one without the other would have
                 // turned a silent discard into a NullReferenceException on the same path.
-                await _telegramClient.Send_Message_Async(heldSession?.TelegramTopicId, key.AlertText, cancellationToken);
+                await _telegramClient.Send_Message_Async(heldSession?.TelegramTopicId, key.AlertText, TelegramSendSounds.Rings, cancellationToken);
 
                 // Dropped only after a CONFIRMED send — the rule 71a849a applied to three memos
                 // while this site, its own immediate predecessor, contradicted it.
@@ -1939,7 +1946,7 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
+                await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, TelegramSendSounds.Rings, cancellationToken);
 
                 // After a CONFIRMED send, so a failed one retries next tick.
                 _stallAlertedOrchIds.Add(session.OrchId);
@@ -2549,6 +2556,10 @@ internal sealed class BridgeEngineModel(
             await _telegramClient.Send_Message_Async(
                 session.TelegramTopicId,
                 $"⚠️ {count} message{(count == 1 ? "" : "s")} in this orchestration never reached you — the session wrote a malformed channel header, so the app could not see {(count == 1 ? "it" : "them")}. It has been told to re-post.",
+
+                // SILENT, though it wears a ⚠️: the fix is the session's, it has already been asked
+                // for it, and the re-posted entries will ring on their own when they arrive.
+                TelegramSendSounds.Silent,
                 cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
@@ -3029,7 +3040,7 @@ internal sealed class BridgeEngineModel(
 
             try
             {
-                await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, cancellationToken);
+                await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, TelegramSendSounds.Rings, cancellationToken);
 
                 // THE ONLY WRITE. After a CONFIRMED send, so a failure retries on the next tick
                 // instead of being remembered as delivered — the rule from "the owner's answer
@@ -3161,7 +3172,7 @@ internal sealed class BridgeEngineModel(
 
                 var alertText = $"⚠️ LIMIT: {Limits.LimitData_Parser.Build_ShortLabel(pair.Key)} {pair.Value.Percent:F0}%";
                 _log.Log_Warning(GLOBAL_ORCH_ID, $"{alertText} (key '{pair.Key}')");
-                await _telegramClient.Send_Message_Async(null, alertText, cancellationToken);
+                await _telegramClient.Send_Message_Async(null, alertText, TelegramSendSounds.Rings, cancellationToken);
             }
 
             Save_LimitAlertState(state);
@@ -3228,7 +3239,7 @@ internal sealed class BridgeEngineModel(
             }
             else
             {
-                var messageId = await _telegramClient.Send_Message_Async(null, text, cancellationToken);
+                var messageId = await _telegramClient.Send_Message_Async(null, text, TelegramSendSounds.Silent, cancellationToken);
 
                 if (messageId == null)
                     return;
@@ -3574,13 +3585,13 @@ internal sealed class BridgeEngineModel(
             try
             {
                 foreach (var piece in pieces)
-                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, cancellationToken));
+                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, Resolve_EntrySound(entry), cancellationToken));
 
                 // ALSO, never INSTEAD. Every piece above has already been sent; the file is a
                 // convenience for an entry long enough that reading it in the chat is the work.
                 await Send_EntryDocument_BestEffort_Async(
                     threadId, pieces.Count, prose.AttachEntriesAbove, entry.Subject, text,
-                    append.Channel.OrchId, cancellationToken);
+                    append.Channel.OrchId, Resolve_EntrySound(entry), cancellationToken);
 
                 // Counts toward away detection: a supervisor message that reached the phone and is
                 // so far unanswered. Only the supervisor's own voice counts — app notices and
@@ -3605,10 +3616,10 @@ internal sealed class BridgeEngineModel(
                 }
 
                 foreach (var photoPath in photoPaths)
-                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel, cancellationToken);
+                    await Send_EntryPhoto_BestEffort_Async(threadId, photoPath, append.Channel, Resolve_EntrySound(entry), cancellationToken);
 
                 foreach (var attachmentPath in attachmentPaths)
-                    await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, cancellationToken);
+                    await Send_EntryAttachment_BestEffort_Async(threadId, attachmentPath, append.Channel, Resolve_EntrySound(entry), cancellationToken);
 
                 // ONLY NOW is the owner's wait consumed: everything this entry had to say is on the
                 // phone, so what follows is narration again. Anything that threw above skipped this
@@ -3677,13 +3688,33 @@ internal sealed class BridgeEngineModel(
     /// interchangeable once a fold is involved — the HTML carries a collapsed quotation that has no
     /// Markdown source — which is why the pair travels together instead of being re-derived here.
     /// </param>
-    async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, CancellationToken cancellationToken)
+    /// <summary>
+    /// WHO WROTE IT DECIDES WHETHER IT RINGS — the owner's ruling of 2026-09-09, in one place.
+    ///
+    /// <para>
+    /// *"If the supervisor writes to me, I must know it — that rings. Status, receipts and app
+    /// bookkeeping do not ring."* So an entry whose author SPEAKS TO THE OWNER (the supervisor, or
+    /// the solo that stands in for one) arrives with a notification; an App entry — a confirmation,
+    /// a coaching line, a status post — arrives silently and is there when they next look.
+    /// </para>
+    /// <para>
+    /// <see cref="ChannelAuthor_Kinds.Speaks_ToOwner"/> is the same predicate the away-detection and
+    /// the stall alert already use for "was that the supervisor talking", so a new author kind
+    /// cannot ring here while counting as silence there.
+    /// </para>
+    /// </summary>
+    static TelegramSendSounds Resolve_EntrySound(Channels.ChannelEntry.IChannelEntry entry)
+    {
+        return ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) ? TelegramSendSounds.Rings : TelegramSendSounds.Silent;
+    }
+
+    async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         var client = _telegramClient
             ?? throw new Exception("Send_MirrorPiece_Async called without a Telegram client");
 
         return await TelegramProse_Sender.Send_Rendered_Async(
-            client, _log, GLOBAL_ORCH_ID, threadId, piece.Html, piece.Markdown, cancellationToken);
+            client, _log, GLOBAL_ORCH_ID, threadId, piece.Html, piece.Markdown, sound, cancellationToken);
     }
 
     /// <summary>
@@ -3704,6 +3735,7 @@ internal sealed class BridgeEngineModel(
         string? subject,
         string markdown,
         string orchId,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         try
@@ -3716,6 +3748,7 @@ internal sealed class BridgeEngineModel(
                 OwnerDocument_Builder.Build_FileName(subject),
                 OwnerDocument_Builder.Build_Content(markdown),
                 OwnerDocument_Builder.Build_CaptionHtml(markdown),
+                sound,
                 cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
@@ -3886,7 +3919,12 @@ internal sealed class BridgeEngineModel(
         // the agent's QUESTION: line and their OPTION: wording, so it carries their Markdown. The
         // BUTTONS do not — a label is never parsed, whatever it contains.
         var messageId = await TelegramProse_Sender.Send_WithButtons_Async(
-            client, _log, channel.OrchId, threadId, promptWithTerms, buttons, cancellationToken);
+            client, _log, channel.OrchId, threadId, promptWithTerms, buttons,
+
+            // A QUESTION RINGS. It is the supervisor's, it stops their work until it is answered,
+            // and it is the one shape the owner has always wanted to be interrupted for.
+            TelegramSendSounds.Rings,
+            cancellationToken);
 
         Remember_TopicMessage(threadId, messageId);
 
@@ -4096,7 +4134,7 @@ internal sealed class BridgeEngineModel(
         return buttons;
     }
 
-    async Task Send_EntryPhoto_BestEffort_Async(long? threadId, string photoPath, IDiscoveredChannel channel, CancellationToken cancellationToken)
+    async Task Send_EntryPhoto_BestEffort_Async(long? threadId, string photoPath, IDiscoveredChannel channel, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         try
         {
@@ -4106,7 +4144,7 @@ internal sealed class BridgeEngineModel(
             if (!Approve_OwnerFile(channel, photoPath, asPicture: true))
                 return;
 
-            await _telegramClient.Send_Photo_Async(threadId, photoPath, cancellationToken);
+            await _telegramClient.Send_Photo_Async(threadId, photoPath, sound, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -4195,7 +4233,7 @@ internal sealed class BridgeEngineModel(
     /// supervision folder, resolved here because only the engine knows both.
     /// </summary>
     async Task Send_EntryAttachment_BestEffort_Async(
-        long? threadId, string attachmentPath, IDiscoveredChannel channel, CancellationToken cancellationToken)
+        long? threadId, string attachmentPath, IDiscoveredChannel channel, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         try
         {
@@ -4209,7 +4247,7 @@ internal sealed class BridgeEngineModel(
             var fileName = Path.GetFileName(attachmentPath);
             var captionHtml = $"📎 {System.Net.WebUtility.HtmlEncode(fileName)}";
 
-            await _telegramClient.Send_Document_Async(threadId, fileName, bytes, captionHtml, cancellationToken);
+            await _telegramClient.Send_Document_Async(threadId, fileName, bytes, captionHtml, sound, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled. Canonical account in Refresh_TopicStatusLines_Async.
@@ -5387,6 +5425,10 @@ internal sealed class BridgeEngineModel(
                 session.TelegramTopicId,
                 text,
                 [(confirmData, confirmLabel), (declineData, declineLabel)],
+
+                // A CONFIRMATION IS A QUESTION: closing an orchestration or promoting one to a full
+                // crew waits on this tap, so it rings like any other decision.
+                TelegramSendSounds.Rings,
                 cancellationToken);
 
             Remember_TopicMessage(session.TelegramTopicId, messageId);
@@ -7523,7 +7565,9 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await client.Send_Photo_Async(messageThreadId, imagePath, cancellationToken);
+            // SILENT: they typed /screen a moment ago and are looking at the screen. A reply to a
+            // command is app traffic, however welcome it is.
+            await client.Send_Photo_Async(messageThreadId, imagePath, TelegramSendSounds.Silent, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -9035,7 +9079,8 @@ internal sealed class BridgeEngineModel(
                         oldStatusMessageDeleted = true;
                     }
 
-                    var messageId = await _telegramClient.Send_MessageWithButtonRows_Async(session.TelegramTopicId, text, commandButtonRows, cancellationToken);
+                    var messageId = await _telegramClient.Send_MessageWithButtonRows_Async(
+                        session.TelegramTopicId, text, commandButtonRows, TelegramSendSounds.Silent, cancellationToken);
 
                     if (messageId == null)
                     {
@@ -10570,11 +10615,22 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    async Task Send_DirectReply_BestEffort_Async(ITelegramApiClient client, long? messageThreadId, string text, CancellationToken cancellationToken)
+    /// <summary>
+    /// <paramref name="sound"/> defaults to SILENT because that is what this method is: the app
+    /// answering the owner, refusing a command, explaining itself. Fifty-odd call sites, and the
+    /// owner's ruling covers all of them — *"status, receipts and app bookkeeping do not ring"*. The
+    /// few that must ring say so at the call site, which is the only reason it is a parameter at all.
+    /// </summary>
+    async Task Send_DirectReply_BestEffort_Async(
+        ITelegramApiClient client,
+        long? messageThreadId,
+        string text,
+        CancellationToken cancellationToken,
+        TelegramSendSounds sound = TelegramSendSounds.Silent)
     {
         try
         {
-            Remember_TopicMessage(messageThreadId, await client.Send_Message_Async(messageThreadId, text, cancellationToken));
+            Remember_TopicMessage(messageThreadId, await client.Send_Message_Async(messageThreadId, text, sound, cancellationToken));
         }
         catch (OperationCanceledException)
         {
@@ -10640,7 +10696,7 @@ internal sealed class BridgeEngineModel(
                 }
                 else
                 {
-                    receiptId = await client.Send_MessageWithButtons_Async(message.MessageThreadId, Build_HoldReceiptText(heldAlready), releaseButton, cancellationToken);
+                    receiptId = await client.Send_MessageWithButtons_Async(message.MessageThreadId, Build_HoldReceiptText(heldAlready), releaseButton, TelegramSendSounds.Silent, cancellationToken);
                 }
 
                 lock (_ownerStateLock)
@@ -12153,6 +12209,11 @@ internal sealed class BridgeEngineModel(
                 messageThreadId,
                 "✓",
                 [(HoldButton_Data.Build(HoldButtonActions.Hold, messageThreadId), HoldButton_Data.HOLD_LABEL)],
+
+                // A RECEIPT NEVER RINGS. They sent the message it acknowledges a second ago — they
+                // are holding the phone. "I got it" as a notification is the purest form of the
+                // noise this brief removes.
+                TelegramSendSounds.Silent,
                 cancellationToken);
 
             if (messageId != null)
@@ -13144,7 +13205,7 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, cancellationToken);
+            await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, TelegramSendSounds.Rings, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -13433,7 +13494,7 @@ internal sealed class BridgeEngineModel(
             }
             else
             {
-                pending.NarrationMessageId = await _telegramClient.Send_Message_Async(pending.ThreadId, text, cancellationToken);
+                pending.NarrationMessageId = await _telegramClient.Send_Message_Async(pending.ThreadId, text, TelegramSendSounds.Silent, cancellationToken);
             }
 
             pending.LastNarratedUtc = now;
@@ -13954,7 +14015,7 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            return await client.Send_Message_Async(messageThreadId, text, cancellationToken);
+            return await client.Send_Message_Async(messageThreadId, text, TelegramSendSounds.Silent, cancellationToken);
         }
         catch (OperationCanceledException)
         {

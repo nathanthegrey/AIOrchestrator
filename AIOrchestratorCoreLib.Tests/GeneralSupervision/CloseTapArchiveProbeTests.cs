@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
 using AIOrchestratorCoreLib.Bridge.BridgeEngineTiming;
+using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestratorCoreLib.Tests.GeneralSupervision;
 
@@ -387,6 +388,7 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         long? messageThreadId,
         string text,
         IReadOnlyList<(string Data, string Label)> buttons,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         lock (_lock)
@@ -434,21 +436,21 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(_nextMessageId++);
     }
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, html, cancellationToken);
+        return Send_Message_Async(messageThreadId, html, sound, cancellationToken);
     }
 
     // The confirming button is read off the SEND, so the rendered send has to reach the same reader
     // or this probe taps nothing at all.
-    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
     }
 
     public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
@@ -486,9 +488,9 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         return Edit_MessageText_Async(messageId, text, cancellationToken);
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
@@ -505,9 +507,9 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
 
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken) => Task.CompletedTask;

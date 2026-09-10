@@ -9,6 +9,7 @@ using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 using AIOrchestratorCoreLib.Tests.Launching;
 using Xunit;
 using AIOrchestratorCoreLib.Tests.TestSupport;
+using AIOrchestratorCoreLib.Telegram;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
 
@@ -440,14 +441,14 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
             return _sentTexts.Any(text => text.Contains(fragment, StringComparison.Ordinal));
     }
 
-    public async Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public async Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         await Block_IfAsked_Async(text, cancellationToken);
 
         return Record_AndMaybeFail(text);
     }
 
-    public async Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public async Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         await Block_IfAsked_Async(html, cancellationToken);
 
@@ -457,9 +458,9 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
     // THE RENDERED PATH RECORDS EXACTLY LIKE THE PLAIN ONE. Since 2026-09-07 every piece of agent
     // prose leaves as HTML, so a fake that only watched the plain calls would see an empty topic and
     // report the traffic it is here to prove as absent.
-    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, cancellationToken);
+        return Send_MessageWithButtons_Async(messageThreadId, html, buttons, sound, cancellationToken);
     }
 
     public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
@@ -496,6 +497,7 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         long? messageThreadId,
         string text,
         IReadOnlyList<(string Data, string Label)> buttons,
+        TelegramSendSounds sound,
         CancellationToken cancellationToken)
     {
         return Task.FromResult<long?>(Record_AndMaybeFail(text));
@@ -574,9 +576,9 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Edit_MessageText_Async(messageId, text, cancellationToken);
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
@@ -599,12 +601,12 @@ internal sealed class FailableTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
     }
 
-    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken)
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
     }

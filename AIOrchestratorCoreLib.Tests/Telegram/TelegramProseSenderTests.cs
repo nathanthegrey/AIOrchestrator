@@ -30,7 +30,7 @@ public class TelegramProseSenderTests
         var client = new ScriptedTelegram_Fake();
         var log = new CollectingLog_Fake();
 
-        var messageId = await TelegramProse_Sender.Send_Async(client, log, "orch-1", 99, MARKDOWN, CancellationToken.None);
+        var messageId = await TelegramProse_Sender.Send_Async(client, log, "orch-1", 99, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None);
 
         Assert.Equal(RENDERED, Assert.Single(client.HtmlSends));
         Assert.Empty(client.PlainSends);
@@ -43,7 +43,7 @@ public class TelegramProseSenderTests
         var client = new ScriptedTelegram_Fake { HtmlFailure = Parse_Refusal() };
         var log = new CollectingLog_Fake();
 
-        await TelegramProse_Sender.Send_Async(client, log, "orch-1", 99, MARKDOWN, CancellationToken.None);
+        await TelegramProse_Sender.Send_Async(client, log, "orch-1", 99, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None);
 
         // THE ORIGINAL MARKDOWN, not the HTML. The owner then reads what they read before this
         // renderer existed — markers and all — which is a bad message, not a missing one.
@@ -57,7 +57,7 @@ public class TelegramProseSenderTests
         var client = new ScriptedTelegram_Fake { HtmlFailure = Parse_Refusal() };
         var log = new CollectingLog_Fake();
 
-        await TelegramProse_Sender.Send_Async(client, log, "orch-7", 99, MARKDOWN, CancellationToken.None);
+        await TelegramProse_Sender.Send_Async(client, log, "orch-7", 99, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None);
 
         var line = Assert.Single(log.Warnings);
 
@@ -76,7 +76,7 @@ public class TelegramProseSenderTests
         var log = new CollectingLog_Fake();
 
         await Assert.ThrowsAsync<TelegramApiException>(
-            () => TelegramProse_Sender.Send_Async(client, log, "orch-1", 99, MARKDOWN, CancellationToken.None));
+            () => TelegramProse_Sender.Send_Async(client, log, "orch-1", 99, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None));
 
         Assert.Empty(client.PlainSends);
         Assert.Empty(log.Warnings);
@@ -89,7 +89,7 @@ public class TelegramProseSenderTests
         var log = new CollectingLog_Fake();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => TelegramProse_Sender.Send_Async(client, log, "orch-1", 99, MARKDOWN, CancellationToken.None));
+            () => TelegramProse_Sender.Send_Async(client, log, "orch-1", 99, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None));
 
         Assert.Empty(client.PlainSends);
     }
@@ -101,7 +101,7 @@ public class TelegramProseSenderTests
         var log = new CollectingLog_Fake();
         IReadOnlyList<(string Data, string Label)> buttons = [("d1", "Yes"), ("d2", "No")];
 
-        await TelegramProse_Sender.Send_WithButtons_Async(client, log, "orch-1", 99, MARKDOWN, buttons, CancellationToken.None);
+        await TelegramProse_Sender.Send_WithButtons_Async(client, log, "orch-1", 99, MARKDOWN, buttons, TelegramSendSounds.Rings, CancellationToken.None);
 
         // A DECISION MESSAGE WITHOUT ITS BUTTONS IS A QUESTION THE OWNER CANNOT ANSWER. Dropping to
         // the plain send would have stripped the keyboard, which is worse than the markers.
@@ -146,7 +146,7 @@ public class TelegramProseSenderTests
         var log = new CollectingLog_Fake();
 
         await TelegramProse_Sender.Send_Rendered_Async(
-            client, log, "orch-1", 99, piece.Html, piece.Markdown, CancellationToken.None);
+            client, log, "orch-1", 99, piece.Html, piece.Markdown, TelegramSendSounds.Rings, CancellationToken.None);
 
         var sent = Assert.Single(client.PlainSends);
 
@@ -164,7 +164,7 @@ public class TelegramProseSenderTests
         var client = new ScriptedTelegram_Fake { HtmlFailure = Parse_Refusal() };
 
         await TelegramProse_Sender.Send_Rendered_Async(
-            client, new CollectingLog_Fake(), "orch-1", 99, RENDERED, MARKDOWN, CancellationToken.None);
+            client, new CollectingLog_Fake(), "orch-1", 99, RENDERED, MARKDOWN, TelegramSendSounds.Rings, CancellationToken.None);
 
         Assert.Equal(MARKDOWN, Assert.Single(client.PlainSends));
     }
@@ -208,7 +208,7 @@ internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
     public int HtmlAttempts { get; private set; }
     public int LastPlainButtonCount { get; private set; }
 
-    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         HtmlAttempts++;
 
@@ -223,23 +223,23 @@ internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
         return Task.FromResult<long?>(11);
     }
 
-    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_HtmlMessage_Async(messageThreadId, html, cancellationToken);
+        return Send_HtmlMessage_Async(messageThreadId, html, sound, cancellationToken);
     }
 
-    public Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    public Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         PlainSends.Add(text);
 
         return Task.FromResult<long?>(12);
     }
 
-    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         LastPlainButtonCount = buttons.Count;
 
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
@@ -264,9 +264,9 @@ internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
-    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_Message_Async(messageThreadId, text, cancellationToken);
+        return Send_Message_Async(messageThreadId, text, sound, cancellationToken);
     }
 
     public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -289,9 +289,9 @@ internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
 
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
 

@@ -177,7 +177,37 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         }
     }
 
-    public async Task<long?> Send_Message_Async(long? messageThreadId, string text, CancellationToken cancellationToken)
+    /// <summary>
+    /// THE TWO KEYS EVERY OWNER-FACING TEXT SEND CARRIES, in one place so a new send cannot forget
+    /// them.
+    ///
+    /// <para>
+    /// <c>disable_notification</c> comes from the CALLER, because whether the owner's phone rings is
+    /// a decision about the message, not about the transport — see <see cref="TelegramSendSounds"/>.
+    /// </para>
+    /// <para>
+    /// <c>link_preview_options.is_disabled</c> is unconditional and needs no caller: a channel entry
+    /// that happens to mention a URL used to arrive with Telegram's own card unfurled underneath it,
+    /// which is a second screenful the owner did not ask for and which pushes the message they were
+    /// reading off the top. Nothing this app sends is a link the owner wants previewed.
+    /// </para>
+    /// </summary>
+    /// <summary>
+    /// The multipart twin of <see cref="Stamp_DeliveryOptions"/>. An upload carries no link preview
+    /// to disable, so only the notification choice crosses.
+    /// </summary>
+    static void Stamp_DeliveryOption(MultipartFormDataContent form, TelegramSendSounds sound)
+    {
+        form.Add(new StringContent(sound == TelegramSendSounds.Silent ? "true" : "false"), "disable_notification");
+    }
+
+    static void Stamp_DeliveryOptions(JsonObject payload, TelegramSendSounds sound)
+    {
+        payload["disable_notification"] = sound == TelegramSendSounds.Silent;
+        payload["link_preview_options"] = new JsonObject { ["is_disabled"] = true };
+    }
+
+    public async Task<long?> Send_Message_Async(long? messageThreadId, string text, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
         {
@@ -188,12 +218,14 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
+        Stamp_DeliveryOptions(payload, sound);
+
         var responseJson = await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message);
 
         return Read_MessageId_OrNull(responseJson);
     }
 
-    public async Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, CancellationToken cancellationToken)
+    public async Task<long?> Send_HtmlMessage_Async(long? messageThreadId, string html, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
         {
@@ -204,6 +236,8 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
 
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
+
+        Stamp_DeliveryOptions(payload, sound);
 
         return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message));
     }
@@ -226,7 +260,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("sendChatAction", payload, cancellationToken);
     }
 
-    public async Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public async Task<long?> Send_HtmlMessageWithButtons_Async(long? messageThreadId, string html, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
         {
@@ -238,6 +272,8 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
 
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
+
+        Stamp_DeliveryOptions(payload, sound);
 
         return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message));
     }
@@ -348,12 +384,12 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         }
     }
 
-    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    public Task<long?> Send_MessageWithButtons_Async(long? messageThreadId, string text, IReadOnlyList<(string Data, string Label)> buttons, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
-        return Send_MessageWithButtonRows_Async(messageThreadId, text, Wrap_OneButtonPerRow(buttons), cancellationToken);
+        return Send_MessageWithButtonRows_Async(messageThreadId, text, Wrap_OneButtonPerRow(buttons), sound, cancellationToken);
     }
 
-    public async Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    public async Task<long?> Send_MessageWithButtonRows_Async(long? messageThreadId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
         {
@@ -364,6 +400,8 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
 
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
+
+        Stamp_DeliveryOptions(payload, sound);
 
         // The id is needed later: on a tap this message is rewritten to show the chosen option.
         return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message));
@@ -402,7 +440,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         await Post_Async("deleteMessage", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
-    public async Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
+    public async Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         using var form = Build_MultipartForm(messageThreadId);
 
@@ -411,6 +449,8 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         Refuse_IfOverCap(photoBytes.Length, TelegramFileCaps.MAX_PHOTO_BYTES, "sendPhoto", $"'{filePath}'");
 
         form.Add(new ByteArrayContent(photoBytes), "photo", Path.GetFileName(filePath));
+
+        Stamp_DeliveryOption(form, sound);
 
         await Post_Multipart_Async("sendPhoto", form, $"for '{filePath}'", cancellationToken);
     }
@@ -421,7 +461,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     /// every other owner-facing send is: agents write Markdown, and the choice of parse mode is the
     /// only thing that decides whether the owner reads it or reads its markers.
     /// </summary>
-    public async Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, CancellationToken cancellationToken)
+    public async Task Send_Document_Async(long? messageThreadId, string fileName, byte[] content, string captionHtml, TelegramSendSounds sound, CancellationToken cancellationToken)
     {
         using var form = Build_MultipartForm(messageThreadId);
 
@@ -430,6 +470,8 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         form.Add(new StringContent(captionHtml), "caption");
         form.Add(new StringContent("HTML"), "parse_mode");
         form.Add(new ByteArrayContent(content), "document", fileName);
+
+        Stamp_DeliveryOption(form, sound);
 
         await Post_Multipart_Async("sendDocument", form, $"for '{fileName}' ({content.Length} bytes)", cancellationToken);
     }
