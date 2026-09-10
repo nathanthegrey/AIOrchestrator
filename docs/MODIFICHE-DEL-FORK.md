@@ -307,7 +307,8 @@ Nessuno dei due stati vecchi lo diceva, e una riga di stato che mente una volta 
 più. Il prezzo: senza lo stato ogni mezz'ora non c'è più una storia dello stato su Telegram — resta nei
 file, e la narrativa vera la fanno i messaggi del supervisore, che ora suonano tutti.
 
-**Dove.** `stage/8c-the-phone-rings-only-for-the-supervisor`, `stage/8d-pulse-glyphs-and-the-general-bar`.
+**Dove.** `stage/8c-the-phone-rings-only-for-the-supervisor`, `stage/8d-pulse-glyphs-and-the-general-bar`,
+`stage/8e-durations-and-the-general-header` (durate a passi di cinque minuti; 📸 dal nome di General al cruscotto).
 
 ### Le ricevute sono reazioni, non messaggi
 
@@ -937,7 +938,7 @@ decisione 12 del file di istruzioni). Il resto di questo lavoro — far scrivere
 strumento che controlla prima di scrivere, così la grammatica dei marcatori vive in una costante letta da
 chi scrive e da chi legge — è deciso e sta nella sezione 7.
 
-**Dove.** `stage/8e-one-brevity-ceiling` (in consegna il 2026-09-10).
+**Dove.** `stage/8e-durations-and-the-general-header`.
 
 ---
 
@@ -1042,7 +1043,9 @@ supervisore sono cambiate (ri-fa la domanda dopo «Let's talk», dichiara il suo
 PULSE); con il binario nuovo e le istruzioni vecchie le decisioni discusse non verrebbero più riproposte.
 La prima sera è una misura: quante volte vibra il telefono, e se i sei campi di PULSE dicono il vero.
 
-**In consegna.** Le ricevute come reazioni (sezione 1) e il metro unico di brevità (sezione 5).
+**In consegna.** Le ricevute come reazioni (sezione 1). Il metro unico di brevità (sezione 5) è atterrato
+il 10/9 pomeriggio, con una guardia che legge il manuale del supervisore e verifica che citi i numeri del
+codice.
 
 **Deciso, non iniziato.** Le voci di canale scritte attraverso uno strumento che controlla prima di
 scrivere: la grammatica dei marcatori (`QUESTION:`, `OPTION:`…) oggi vive in tre manuali e in chi la
