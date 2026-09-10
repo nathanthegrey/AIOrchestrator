@@ -189,7 +189,12 @@ public class PrintTurnDispatcherTests
 
         Append_Supervisor(harness, orchId, memberId, "slow", "a");
 
-        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).FailedAttempts >= PrintTurn_Words.MAX_ATTEMPTS, TimeSpan.FromSeconds(40)));
+        // NINETY SECONDS OF BUDGET, not forty — a budget, not an assertion. What is asserted is that
+        // three attempts are spent and the turn stalls with an alert; what the budget buys is three
+        // real FakeClaude spawns and three kills, and on a loaded machine a spawn alone can take
+        // seconds. Went red under a full parallel suite on 2026-09-10 with everything about the
+        // behaviour correct.
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).FailedAttempts >= PrintTurn_Words.MAX_ATTEMPTS, TimeSpan.FromSeconds(90)));
 
         // Stalled: more ticks start nothing.
         var invocationsAtStall = harness.Read_Invocations().Count;
