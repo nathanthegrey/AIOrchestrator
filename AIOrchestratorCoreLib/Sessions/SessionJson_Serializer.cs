@@ -44,6 +44,9 @@ public static class SessionJson_Serializer
             ["awaitingTest"] = session.AwaitingTest,
             ["done"] = session.Done,
             ["closedUtc"] = session.ClosedUtc?.ToString("O", CultureInfo.InvariantCulture),
+            ["telegramTopicDeletePendingUtc"] = session.TelegramTopicDeletePendingUtc?.ToString("O", CultureInfo.InvariantCulture),
+            ["telegramTopicDeletedUtc"] = session.TelegramTopicDeletedUtc?.ToString("O", CultureInfo.InvariantCulture),
+            ["telegramTopicDeleteFailureReported"] = session.TelegramTopicDeleteFailureReported,
         };
 
         return root.ToJsonString(JsonWriting.INDENTED);
@@ -103,7 +106,16 @@ public static class SessionJson_Serializer
 
             // Absent in every session written before 2026-08-21. False is the right reading: an
             // orchestration nobody ever marked finished is not finished.
-            root["done"]?.GetValue<bool>() ?? false);
+            root["done"]?.GetValue<bool>() ?? false,
+
+            // ABSENT IN EVERY SESSION WRITTEN BEFORE 2026-09-10, AND NULL IS THE ONLY SAFE READING.
+            // A missing pending stamp must mean "no delete is owed", never "a delete was owed and we
+            // forgot" — otherwise the start-up sweep would re-attempt a delete for every
+            // orchestration ever closed, most of whose topics went away correctly at the time. See
+            // Bridge.TopicDeletion.TopicDeleteSweep_Planner.
+            Get_DateTime_OrNull(root, "telegramTopicDeletePendingUtc"),
+            Get_DateTime_OrNull(root, "telegramTopicDeletedUtc"),
+            root["telegramTopicDeleteFailureReported"]?.GetValue<bool>() ?? false);
     }
 
     /// <summary>

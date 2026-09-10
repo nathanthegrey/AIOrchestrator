@@ -53,6 +53,19 @@ public interface IOrchestrationSessionStore
     void Set_SupervisorModelOverride(string orchId, string? model);
     void Set_ImplementerModelOverride(string orchId, string? model);
 
+    /// <summary>
+    /// Records that a <c>deleteForumTopic</c> has been asked for and not yet confirmed. Written
+    /// BEFORE the first attempt, so a process killed mid-retry still leaves the record the start-up
+    /// sweep reads — see Bridge.TopicDeletion.TopicDeleteSweep_Planner.
+    /// </summary>
+    void Mark_TopicDeletePending(string orchId);
+
+    /// <summary>The topic is gone (deleted, or Telegram says no such thread). Ends the retry for good.</summary>
+    void Mark_TopicDeleted(string orchId);
+
+    /// <summary>The owner has been told once that this topic will not delete; never unset.</summary>
+    void Mark_TopicDeleteFailureReported(string orchId);
+
     void Close_Member(string orchId, string memberId);
     void Close_Orchestration(string orchId);
 }

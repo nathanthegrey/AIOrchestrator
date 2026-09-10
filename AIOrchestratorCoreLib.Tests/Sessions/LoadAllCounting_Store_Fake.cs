@@ -75,6 +75,12 @@ internal sealed class LoadAllCounting_Store_Fake(IOrchestrationSessionStore inne
 
     public void Set_ImplementerModelOverride(string orchId, string? model) => _inner.Set_ImplementerModelOverride(orchId, model);
 
+    public void Mark_TopicDeletePending(string orchId) => _inner.Mark_TopicDeletePending(orchId);
+
+    public void Mark_TopicDeleted(string orchId) => _inner.Mark_TopicDeleted(orchId);
+
+    public void Mark_TopicDeleteFailureReported(string orchId) => _inner.Mark_TopicDeleteFailureReported(orchId);
+
     public void Close_Member(string orchId, string memberId) => _inner.Close_Member(orchId, memberId);
 
     public void Close_Orchestration(string orchId) => _inner.Close_Orchestration(orchId);
