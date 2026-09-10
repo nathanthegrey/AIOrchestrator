@@ -718,7 +718,14 @@ public static class TopicStatusLine_Builder
 
             fields.Add(TopicStatusWording.Describe_State(state));
 
-            var onTaskFor = SessionDuration_Formatter.Describe_SinceStamp_OrNull(brief.DateText, now);
+            // STEPPED, NOT EXACT — the owner's ruling of 2026-09-10. A per-minute duration made
+            // PULSE's text differ on every tick, so a buried line was re-posted for the minute hand
+            // rather than for news: the same defect the heartbeat had, in the one field that reads a
+            // live clock. The step comes from UnchangedFor_Formatter rather than a number of its own,
+            // so this line's two ticking fields move in lockstep and cannot be tuned apart by
+            // accident.
+            var onTaskFor = SessionDuration_Formatter.Describe_SinceStamp_Stepped_OrNull(
+                brief.DateText, now, UnchangedFor_Formatter.STEP_MINUTES);
 
             // A missing duration DROPS ITS FIELD rather than leaving the separator standing: a row
             // ending in a dangling `· ` reads as a value that failed to load, when the truth is that

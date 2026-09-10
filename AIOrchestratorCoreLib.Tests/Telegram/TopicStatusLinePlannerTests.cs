@@ -609,6 +609,78 @@ public class TopicStatusLinePlannerTests
             repostIsImpossible: false);
     }
 
+    /// <summary>
+    /// A LIVE MEMBER NO LONGER MOVES THE LINE FOR THE MINUTE HAND — the owner's ruling of 2026-09-10,
+    /// and the second half of the same defect the heartbeat had.
+    ///
+    /// <para>
+    /// Stage 8d fixed the heartbeat and reported the member row as the remaining case: a row ends in
+    /// "for how long", read from a live clock, so a buried topic with anybody working in it reposted
+    /// about once a minute — carrying no news, which is the exact thing PULSE exists not to do. The
+    /// duration now steps to five minutes, and because the repost gate compares the RENDERED text,
+    /// rounding what the owner reads is what stops the message moving.
+    /// </para>
+    /// <para>
+    /// FOUR MINUTES APART, INSIDE ONE STEP: the two renderings must be identical, so there is nothing
+    /// to repost. Then across the step boundary it moves once — asserted here too, because "it never
+    /// reposts" would also be satisfied by a surface that had stopped reporting durations at all.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AWorkingMemberDoesNotMoveTheLineUntilItsDurationStepsOver()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+        var working = Member("imp-1", "fix the parser", NOW.AddMinutes(-1).ToString("yyyy-MM-dd HH:mm"));
+
+        // The ledger matches Plan_At's, so the ONLY thing that can differ between the two renderings
+        // is the member's duration.
+        var first = Plan(members: [working], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+
+        // +3 minutes: the member is 4 minutes in, still below the first step, so the row reads the same.
+        var insideTheStep = Plan_At(NOW.AddMinutes(3), [working], first.Text, buried);
+
+        // COMPARED WITHOUT THE HEARTBEAT, because field 6 carries a wall clock and always differs
+        // across a clock move — that is stage 8d's rule, and asserting on the raw text here would
+        // measure the heartbeat instead of the duration.
+        Assert.Equal(
+            TopicStatusLine_Builder.Strip_Heartbeat(first.Text),
+            TopicStatusLine_Builder.Strip_Heartbeat(insideTheStep.Text));
+
+        // EDIT, NOT NONE, and not Repost. The heartbeat did change, so the line is rewritten in
+        // place — which is its whole job, and costs no notification. What the ruling forbids is the
+        // MOVE: a delete plus a post, for a minute hand.
+        Assert.Equal(TopicStatusActions.Edit, insideTheStep.Action);
+
+        // +5 minutes: 6 minutes in, over the step, so the row genuinely changed and the line moves.
+        var pastTheStep = Plan_At(NOW.AddMinutes(5), [working], first.Text, buried);
+
+        Assert.NotEqual(
+            TopicStatusLine_Builder.Strip_Heartbeat(first.Text),
+            TopicStatusLine_Builder.Strip_Heartbeat(pastTheStep.Text));
+
+        Assert.Equal(TopicStatusActions.Repost, pastTheStep.Action);
+    }
+
+    /// <summary>As <see cref="Plan_At"/>, with members — the duration cases need one on the line.</summary>
+    static TopicStatusLine_Planner.TopicStatusPlan Plan_At(
+        DateTime now,
+        IReadOnlyList<ITopicStatusMember> members,
+        string? lastWrittenText,
+        TopicStatusLine_Planner.TopicNewestMessage newestTopicMessage)
+    {
+        return TopicStatusLine_Planner.Plan(
+            A_Ledger(),
+            members,
+            now,
+            STATUS_ID,
+            lastWrittenText,
+            TelegramDeliveryModes.Normal,
+            null,
+            BACKOFF,
+            newestTopicMessage,
+            repostIsImpossible: false);
+    }
+
     [Fact]
     public void AfterARestartNothingIsRepostedUntilRealTrafficIsSeen()
     {
