@@ -25,15 +25,48 @@ public class MemberWorkingDeciderTests
     static WorkingVerdicts Decide(
         bool registered = true,
         bool inFlight = false,
+        bool queued = false,
         DateTime? lastTurnEndedUtc = null)
     {
-        return MemberWorking_Decider.Decide(registered, inFlight, lastTurnEndedUtc, NOW);
+        return MemberWorking_Decider.Decide(registered, inFlight, queued, lastTurnEndedUtc, NOW);
     }
 
     [Fact]
     public void ATurnInFlight_IsWorking()
     {
         Assert.Equal(WorkingVerdicts.Working, Decide(inFlight: true));
+    }
+
+    /// <summary>
+    /// QUEUED IS NOT WORKING. On 2026-09-10 the owner read "still at it" for 29 minutes about a
+    /// supervisor whose turn was admitted and waiting for a slot behind five implementer turns — the
+    /// in-flight table alone cannot tell the two apart, so the decider is told, and says so.
+    /// </summary>
+    [Fact]
+    public void ATurnWaitingForASlot_IsQueued_NotWorking()
+    {
+        var verdict = Decide(inFlight: true, queued: true, lastTurnEndedUtc: NOW.AddSeconds(-10));
+
+        Assert.Equal(WorkingVerdicts.Queued, verdict);
+        Assert.NotEqual(WorkingVerdicts.Working, verdict);
+    }
+
+    /// <summary>A "queued" flag with no admitted turn is a contradiction the decider must not trust.</summary>
+    [Fact]
+    public void QueuedWithoutATurnInFlight_IsNotQueued()
+    {
+        Assert.NotEqual(WorkingVerdicts.Queued, Decide(inFlight: false, queued: true, lastTurnEndedUtc: NOW.AddMinutes(-20)));
+    }
+
+    /// <summary>The guards ask "is its turn occupied": a queued member cannot read a nudge any more than a running one.</summary>
+    [Theory]
+    [InlineData(WorkingVerdicts.Working, true)]
+    [InlineData(WorkingVerdicts.Queued, true)]
+    [InlineData(WorkingVerdicts.Idle, false)]
+    [InlineData(WorkingVerdicts.Unknown, false)]
+    public void WorkingAndQueued_AreBusy_TheOthersAreNot(WorkingVerdicts verdict, bool expected)
+    {
+        Assert.Equal(expected, MemberWorking_Decider.Is_Busy(verdict));
     }
 
     /// <summary>The dispatcher's map is empty in the gap between two turns; the member is not idle there.</summary>
@@ -102,6 +135,7 @@ public class MemberWorkingDeciderTests
     /// </summary>
     [Theory]
     [InlineData(WorkingVerdicts.Working, false)]
+    [InlineData(WorkingVerdicts.Queued, false)]
     [InlineData(WorkingVerdicts.Unknown, false)]
     [InlineData(WorkingVerdicts.Idle, true)]
     public void OnlyAPositiveIdle_IsSafeToDisturb(WorkingVerdicts verdict, bool expected)
@@ -122,10 +156,22 @@ public class MemberWorkingDeciderTests
 
     [Theory]
     [InlineData(WorkingVerdicts.Working)]
+    [InlineData(WorkingVerdicts.Queued)]
     [InlineData(WorkingVerdicts.Idle)]
     public void EveryKnownVerdict_HasWords(WorkingVerdicts verdict)
     {
         Assert.False(string.IsNullOrWhiteSpace(MemberWorking_Decider.Describe_OrNull(verdict)));
+    }
+
+    /// <summary>The words for a queued turn must not be the words for a working one — that equivalence was the defect.</summary>
+    [Fact]
+    public void Queued_IsNotDescribedAsWorking()
+    {
+        var words = MemberWorking_Decider.Describe_OrNull(WorkingVerdicts.Queued)!;
+
+        Assert.NotEqual(MemberWorking_Decider.Describe_OrNull(WorkingVerdicts.Working), words);
+        Assert.Contains("queued", words);
+        Assert.DoesNotContain("working", words);
     }
 
     /// <summary>

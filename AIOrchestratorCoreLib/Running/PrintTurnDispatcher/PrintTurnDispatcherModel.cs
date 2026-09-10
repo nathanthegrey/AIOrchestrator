@@ -108,6 +108,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     readonly CancellationTokenSource _draining = new();
     readonly Dictionary<string, Task> _inFlight = [];
+
+    /// <summary>
+    /// The subset of <see cref="_inFlight"/> that HOLDS ITS SLOTS and is executing. A key in the
+    /// in-flight table and not here is queued behind the concurrency cap. Written under
+    /// <see cref="_lock"/> the moment the last slot is acquired, removed with the in-flight entry.
+    /// </summary>
+    readonly HashSet<string> _running = [];
     readonly Dictionary<string, SessionTracker> _trackers = [];
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
     readonly HashSet<string> _warnedStaleRegistrations = [];
@@ -316,6 +323,28 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         lock (_lock)
             return _inFlight.ContainsKey(key);
+    }
+
+    public bool Is_TurnQueued(string orchId, string memberId)
+    {
+        var key = $"{orchId}/{memberId}";
+
+        lock (_lock)
+            return _inFlight.ContainsKey(key) && !_running.Contains(key);
+    }
+
+    /// <summary>
+    /// THE OWNER'S PHONE LINE NEVER QUEUES BEHIND THE WORK IT DISPATCHED. The supervisor, a solo and
+    /// the general supervisor are each ONE session with ONE turn at a time, and their turn is how the
+    /// owner gets answered; the concurrency caps exist for the fan-out of implementers and reviewers.
+    /// Measured 2026-09-10 21:18→21:47 on the VPS: five implementers briefed, three slots per
+    /// orchestration, and the owner's message sat in the FIFO behind imp-7 and imp-8 for 29 minutes —
+    /// the supervisor's turn started the second imp-5 was killed at its deadline. Exempting these
+    /// roles adds at most one concurrent turn per orchestration (owner decision, 2026-09-10).
+    /// </summary>
+    internal static bool Is_ExemptFromSlots(SessionRoles role)
+    {
+        return role is SessionRoles.Supervisor or SessionRoles.Solo or SessionRoles.General;
     }
 
     public void Tick(DateTime nowLocal)
@@ -1072,6 +1101,21 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         try
         {
+            if (Is_ExemptFromSlots(state.Role))
+            {
+                // No slot taken, none released: the exemption is the whole point, and taking a slot
+                // "just to count it" would put the supervisor back in the queue it was lifted out of.
+                Mark_Running(key);
+                admission.Token.ThrowIfCancellationRequested();
+                await Run_Turn_Async(stateFile, state, pending, sources, tracker, configs, cancellationToken);
+                return;
+            }
+
+            // SAID ONCE, at the moment the wait is real: a turn that finds a free slot says nothing,
+            // one that will queue says so — this line is the only trace of a queue the log ever had.
+            if (_globalSlots.CurrentCount == 0 || orchestrationSlots.CurrentCount == 0)
+                _log.Log_Info(state.OrchId, $"Turn for '{state.MemberId}' is queued — waiting for a free turn slot ({_slotsPerOrchestration} per orchestration)");
+
             await _globalSlots.WaitAsync(admission.Token);
 
             try
@@ -1082,6 +1126,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 {
                     // A slot won in the same instant the door closed is not a mandate to start.
                     admission.Token.ThrowIfCancellationRequested();
+                    Mark_Running(key);
                     await Run_Turn_Async(stateFile, state, pending, sources, tracker, configs, cancellationToken);
                 }
                 finally
@@ -1108,8 +1153,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         finally
         {
             lock (_lock)
+            {
                 _inFlight.Remove(key);
+                _running.Remove(key);
+            }
         }
+    }
+
+    void Mark_Running(string key)
+    {
+        lock (_lock)
+            _running.Add(key);
     }
 
     /// <summary>

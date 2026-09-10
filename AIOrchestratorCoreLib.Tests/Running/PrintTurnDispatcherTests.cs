@@ -157,6 +157,72 @@ public class PrintTurnDispatcherTests
         Assert.Equal(2, executed[1].LastEntryIndex);
     }
 
+    /// <summary>
+    /// THE OWNER'S PHONE LINE NEVER QUEUES BEHIND THE WORK IT DISPATCHED. Measured on the VPS,
+    /// 2026-09-10 21:18→21:47: three slots per orchestration, five implementers briefed, and the
+    /// supervisor's answer to the owner sat in the FIFO for 29 minutes until imp-5 was killed at its
+    /// deadline. One slot here, an implementer holding it for eight seconds: the supervisor's turn
+    /// must start anyway, well inside those eight seconds. With the exemption reverted this waits the
+    /// whole eight seconds and the five-second budget expires.
+    /// </summary>
+    [Fact]
+    public async Task TheSupervisor_NeverWaitsForASlot_BehindAnImplementerTurn()
+    {
+        using var harness = new PrintRunnerTestHarness("implementer,supervisor:stream", maxPerOrchestration: 1);
+        var (orchId, implementer) = harness.Register_Member(MemberKinds.Implementer);
+        harness.Write_Scenario("""{"default":{"delay_ms":8000,"result":"slow one\n\nfinished"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Append_Supervisor(harness, orchId, implementer, "slow", "a");
+        // RUNNING and holding the orchestration's only slot: the fake logs its invocation before it sleeps.
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_Invocations().Count == 1, PrintRunnerTestHarness.GENEROUS));
+
+        // Registered now, so its boot turn is the turn that would queue. It carries nothing pending —
+        // which is the ordinary shape of "the owner just texted": one turn, one message.
+        var supervisor = harness.Register_Supervisor(orchId);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        // A stream session logs its start as its own line kind (the print fake logs one line per
+        // invocation), so the supervisor's start is counted by kind, not by total.
+        Assert.True(
+            PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_Invocations().Any(line => line["line_kind"]?.GetValue<string>() == "stream-start"), TimeSpan.FromSeconds(5)),
+            $"the supervisor's turn did not start while the implementer held the only slot — invocations: {string.Join(" | ", harness.Read_Invocations().Select(line => $"{line["line_kind"]}@{line["at"]}"))} · sup state: {(File.Exists(harness.Paths.Get_OwnerChannelFile(orchId)) ? harness.Read_State(SessionRoles.Supervisor, orchId, supervisor).ExecutedTurns.Count : -1)} · inFlight={dispatcher.InFlightCount}");
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"the supervisor waited {stopwatch.Elapsed} for a slot it must not need");
+        Assert.False(dispatcher.Is_TurnQueued(orchId, supervisor));
+
+        await dispatcher.Stop_Async();
+    }
+
+    /// <summary>
+    /// The in-flight table holds a queued turn and a running one alike — that equivalence is what
+    /// told the owner "still at it" about a session that had not started. The dispatcher started
+    /// both, so it can say which is which.
+    /// </summary>
+    [Fact]
+    public async Task AQueuedTurn_IsReportedAsQueued_AndTheRunningOneIsNot()
+    {
+        using var harness = new PrintRunnerTestHarness("implementer", maxPerOrchestration: 1);
+        var (orchId, first) = harness.Register_Member(MemberKinds.Implementer);
+        var (_, second) = harness.Register_Member(MemberKinds.Implementer);
+        harness.Write_Scenario("""{"default":{"delay_ms":3000,"result":"done\n\nok"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+
+        Append_Supervisor(harness, orchId, first, "slow", "a");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_Invocations().Count == 1, PrintRunnerTestHarness.GENEROUS));
+        Append_Supervisor(harness, orchId, second, "queued", "b");
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => dispatcher.InFlightCount == 2, PrintRunnerTestHarness.GENEROUS));
+
+        Assert.True(dispatcher.Is_TurnInFlight(orchId, first));
+        Assert.True(dispatcher.Is_TurnInFlight(orchId, second));
+        Assert.False(dispatcher.Is_TurnQueued(orchId, first));
+        Assert.True(dispatcher.Is_TurnQueued(orchId, second));
+
+        await dispatcher.Stop_Async();
+
+        // Settled: nothing is queued, nothing is running.
+        Assert.False(dispatcher.Is_TurnQueued(orchId, second));
+    }
+
     [Fact]
     public async Task TheGlobalSlotLimit_SerialisesTurnsAcrossMembers()
     {

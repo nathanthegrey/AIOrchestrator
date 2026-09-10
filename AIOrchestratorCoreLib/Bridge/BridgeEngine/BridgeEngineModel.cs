@@ -2337,7 +2337,7 @@ internal sealed class BridgeEngineModel(
                 // wakes costs it a turn.
                 var working = Resolve_MemberWorking(Running.SessionRoles.Implementer, session.OrchId, member.MemberId);
 
-                if (working == WorkingVerdicts.Working)
+                if (MemberWorking_Decider.Is_Busy(working))
                     continue;
 
                 // UNKNOWN FALLS BACK, it does not decide. A terminal-run member does render a status
@@ -2422,7 +2422,7 @@ internal sealed class BridgeEngineModel(
                     // EITHER SOURCE OF LIFE COUNTS. The app's own dispatcher answers for a
                     // bridge-driven member; the status-line probe answers for a terminal one. Asking
                     // both means neither host is judged on evidence it cannot produce.
-                    Resolve_MemberWorking(Running.SessionRoles.Implementer, session.OrchId, member.MemberId) == WorkingVerdicts.Working
+                    MemberWorking_Decider.Is_Busy(Resolve_MemberWorking(Running.SessionRoles.Implementer, session.OrchId, member.MemberId))
                         || SessionActivity_Probe.Is_MidTurn(memberUsageFile),
                     SessionActivity_Probe.Get_LastActivityUtc_OrNull(memberUsageFile),
                     nudgedUtc);
@@ -9517,7 +9517,20 @@ internal sealed class BridgeEngineModel(
             // any reason is never repainted, because a quiet orchestration's text does not move.
             var renderKey = Telegram.TopicStatusLine_RenderKey.Build(text, commandButtonRows);
 
+            // UNDER THE SAME BACK-OFF AS THE PLANNER'S OWN DECISION. This promotion used to consult
+            // only the rendering, and a FAILED edit leaves `lastText` at the last text that was sent
+            // (the catch below keeps it stale on purpose) — so after one 429 the text "differed" on
+            // every tick and the planner's None was overruled every 2 s for as long as Telegram kept
+            // refusing. Measured 2026-09-10, 20:56–21:52 on the VPS: 357 of 382 rate-limit refusals
+            // were this line, retried at the tick rate with `retry_after` counting down 34, 31, 29 …
+            // The 30-second back-off existed, was tested, and never reached this branch.
+            var attemptDue = Telegram.TopicStatusLine_Planner.Is_AttemptDue(
+                _statusLineFailedAtByOrchId.ContainsKey(session.OrchId) ? lastFailedAttemptAt : null,
+                DateTime.Now,
+                _timing.MirrorRetryBackoffSeconds);
+
             if (action == Telegram.TopicStatusActions.None
+                && attemptDue
                 && session.StatusLineMessageId != null
                 && lastText != null
                 && renderKey != lastText)
@@ -10424,29 +10437,13 @@ internal sealed class BridgeEngineModel(
                 }
             }
 
-            try
-            {
-                // The stored QuestionText is the MARKDOWN that was sent, so the rewrite must render
-                // it again — an HTML send followed by a plain edit would put the markers back.
-                await TelegramProse_Sender.Edit_Async(
-                    client, _log, GLOBAL_ORCH_ID, tap.MessageId.Value,
-                    registered.AnswersNothing
-                        ? QuestionPrompt_Builder.Build_TalkText(registered.QuestionText)
-                        : QuestionPrompt_Builder.Build_AnsweredText(registered.QuestionText, registered.OptionText),
-                    cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _log.Log_Warning(GLOBAL_ORCH_ID, $"Answered-question edit failed: {ex.Message}");
+            // The stored QuestionText is the MARKDOWN that was sent, so the rewrite must render
+            // it again — an HTML send followed by a plain edit would put the markers back.
+            var rewrite = registered.AnswersNothing
+                ? QuestionPrompt_Builder.Build_TalkText(registered.QuestionText)
+                : QuestionPrompt_Builder.Build_AnsweredText(registered.QuestionText, registered.OptionText);
 
-                // The record is nice; a live keyboard on an already-answered question is a BUG,
-                // so fall back to at least removing it.
-                await Remove_Buttons_BestEffort_Async(client, tap.MessageId.Value, cancellationToken);
-            }
+            await Rewrite_AnsweredQuestion_WithRetry_Async(client, tap.MessageId.Value, rewrite, cancellationToken);
         }
 
         // SAVED BEFORE THE ANSWER IS ROUTED, and the reason is a TRADE rather than a safety net —
@@ -11701,7 +11698,10 @@ internal sealed class BridgeEngineModel(
     {
         return Resolve_MemberWorking(role, orchId, memberId) switch
         {
-            WorkingVerdicts.Working => true,
+            // QUEUED COUNTS AS OCCUPIED here: this answer feeds "may it be disturbed", and a queued
+            // session can no more read a nudge than a running one. What it must NOT feed is the
+            // wording — the narration and the status text ask Resolve_MemberWorking themselves.
+            WorkingVerdicts.Working or WorkingVerdicts.Queued => true,
             WorkingVerdicts.Idle => false,
             _ => SessionActivity_Probe.Is_MidTurn(usageFilePath),
         };
@@ -11722,6 +11722,7 @@ internal sealed class BridgeEngineModel(
         return MemberWorking_Decider.Decide(
             state != null,
             _printTurns.Is_TurnInFlight(orchId, memberId),
+            _printTurns.Is_TurnQueued(orchId, memberId),
             lastTurnEndedUtc,
             _clock.UtcNow);
     }
@@ -11899,12 +11900,35 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        await Rewrite_AnsweredQuestion_WithRetry_Async(
+            client, question.MessageId,
+            QuestionPrompt_Builder.Build_AnsweredByMessageText(questionText, answerText),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Rewrites an answered question's message — and, when Telegram answers with a rate limit,
+    /// TRIES AGAIN after the wait Telegram named, off the inbound loop, up to
+    /// <see cref="RateLimitedRetry_Policy.MAX_ATTEMPTS"/>.
+    ///
+    /// <para>
+    /// The first attempt is inline, so the common case changes nothing. On a 429 the retries run on
+    /// a detached task: the tap has already been routed by the time this matters, and holding the
+    /// inbound batch for half a minute would delay every other tap and message in it. Only when the
+    /// last attempt fails does the old fallback run — remove the keyboard, best effort — and one
+    /// warning names how long was waited. Measured 2026-09-10 21:11:40: both the rewrite and the
+    /// keyboard removal took ONE 429 each and gave up, and the owner's phone kept a live keyboard on a
+    /// question they had just answered.
+    /// </para>
+    /// </summary>
+    async Task Rewrite_AnsweredQuestion_WithRetry_Async(ITelegramApiClient client, long messageId, string markdown, CancellationToken cancellationToken)
+    {
+        Exception firstFailure;
+
         try
         {
-            await TelegramProse_Sender.Edit_Async(
-                client, _log, GLOBAL_ORCH_ID, question.MessageId,
-                QuestionPrompt_Builder.Build_AnsweredByMessageText(questionText, answerText),
-                cancellationToken);
+            await TelegramProse_Sender.Edit_Async(client, _log, GLOBAL_ORCH_ID, messageId, markdown, cancellationToken);
+            return;
         }
         catch (OperationCanceledException)
         {
@@ -11912,9 +11936,73 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Warning(GLOBAL_ORCH_ID, $"Answered-question edit failed: {ex.Message}");
+            firstFailure = ex;
+        }
 
-            await Remove_Buttons_BestEffort_Async(client, question.MessageId, cancellationToken);
+        var wait = RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(firstFailure, attemptsMade: 1);
+
+        if (wait == null)
+        {
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Answered-question edit failed: {firstFailure.Message}");
+
+            // The record is nice; a live keyboard on an already-answered question is a BUG,
+            // so fall back to at least removing it.
+            await Remove_Buttons_BestEffort_Async(client, messageId, cancellationToken);
+            return;
+        }
+
+        _log.Log_Info(GLOBAL_ORCH_ID, $"Answered-question edit of message {messageId} was rate-limited — retrying in {wait.Value.TotalSeconds:0} s, off the inbound loop");
+
+        // DETACHED ON PURPOSE, and with the flow suppressed like every other detached task in this
+        // engine: it writes to Telegram only, never to a channel.
+        using (ExecutionContext.SuppressFlow())
+        {
+            _ = Task.Run(() => Retry_AnsweredQuestionEdit_Async(client, messageId, markdown, wait.Value, cancellationToken), CancellationToken.None);
+        }
+    }
+
+    async Task Retry_AnsweredQuestionEdit_Async(ITelegramApiClient client, long messageId, string markdown, TimeSpan firstWait, CancellationToken cancellationToken)
+    {
+        var wait = firstWait;
+        var attemptsMade = 1;
+        var waitedFor = TimeSpan.Zero;
+
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(wait, cancellationToken);
+                waitedFor += wait;
+                attemptsMade++;
+
+                try
+                {
+                    await TelegramProse_Sender.Edit_Async(client, _log, GLOBAL_ORCH_ID, messageId, markdown, cancellationToken);
+                    _log.Log_Info(GLOBAL_ORCH_ID, $"Answered-question edit of message {messageId} landed on attempt {attemptsMade} after waiting {waitedFor.TotalSeconds:0} s");
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    var next = RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(ex, attemptsMade);
+
+                    if (next == null)
+                    {
+                        _log.Log_Warning(GLOBAL_ORCH_ID, $"Answered-question edit failed after {attemptsMade} attempts and {waitedFor.TotalSeconds:0} s of waiting: {ex.Message}");
+                        await Remove_Buttons_BestEffort_Async(client, messageId, cancellationToken);
+                        return;
+                    }
+
+                    wait = next.Value;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown mid-wait: the rewrite is cosmetic, the answer was routed long ago.
         }
     }
 
@@ -14007,7 +14095,7 @@ internal sealed class BridgeEngineModel(
     /// The line goes STRAIGHT to Telegram and never into owner-channel.md: the supervisor was told
     /// to ignore communicator entries anyway, so writing them only made its context bigger.
     /// </summary>
-    async Task Narrate_BusySupervisor_Async(string orchId, PendingOwnerReply pending, string supervisorUsageFile, CancellationToken cancellationToken)
+    async Task Narrate_BusySupervisor_Async(string orchId, PendingOwnerReply pending, string supervisorUsageFile, bool queued, CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
         var isFirst = pending.LastNarratedUtc == default;
@@ -14024,9 +14112,13 @@ internal sealed class BridgeEngineModel(
         var activity = SupervisorActivity_Describer.Describe_OrNull(supervisorUsageFile);
         var waitedFor = SessionDuration_Formatter.Describe(now - pending.DeliveredUtc);
 
-        var text = isFirst
-            ? Build_FirstNarration(Describe_Speaker(orchId), activity)
-            : $"{Describe_Speaker(orchId)}: still at it{(activity == null ? "" : $" — {activity}")} · your message has been waiting {waitedFor}";
+        // QUEUED IS NOT "AT IT". The line used to say "still at it" for as long as the in-flight table
+        // held the session, and on 2026-09-10 that was 29 minutes of a supervisor that had not begun.
+        var text = queued
+            ? Build_QueuedNarration(Describe_Speaker(orchId), isFirst, waitedFor)
+            : isFirst
+                ? Build_FirstNarration(Describe_Speaker(orchId), activity)
+                : $"{Describe_Speaker(orchId)}: still at it{(activity == null ? "" : $" — {activity}")} · your message has been waiting {waitedFor}";
 
         // ONE canvas per delivery. The receipt is ALREADY the owner-facing message for this exchange
         // (✓ → ✓✓ → ✓✓ · handoff), and the handoff line has usually just written "Sup: busy" onto
@@ -14395,6 +14487,18 @@ internal sealed class BridgeEngineModel(
         return $"{speaker}: {doing}. Your message is delivered; they pick it up when this turn ends.";
     }
 
+    /// <summary>
+    /// The honest line for a session whose turn is admitted but has no slot: it is not working on
+    /// anything, so "mid-task" and "still at it" would both be false. Same wording as the status
+    /// surfaces (<see cref="MemberWorking_Decider.QUEUED_WORDS"/>), so the phone and the card agree.
+    /// </summary>
+    internal static string Build_QueuedNarration(string speaker, bool isFirst, string waitedFor)
+    {
+        return isFirst
+            ? $"{speaker}: {MemberWorking_Decider.QUEUED_WORDS}. Your message is delivered; they pick it up the moment a slot frees."
+            : $"{speaker}: {MemberWorking_Decider.QUEUED_WORDS} · your message has been waiting {waitedFor}";
+    }
+
     async Task Resolve_PendingOwnerReplies_Async(CancellationToken cancellationToken)
     {
         List<string> trackedOrchIds;
@@ -14440,6 +14544,12 @@ internal sealed class BridgeEngineModel(
                 Running.SessionRoles.Supervisor, orchId,
                 Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsageFile);
 
+            // ASKED SEPARATELY, because Is_Working folds Queued into "occupied" on purpose (a queued
+            // session cannot be disturbed either) — but what the owner is TOLD must not.
+            var supervisorQueued = Resolve_MemberWorking(
+                Running.SessionRoles.Supervisor, orchId,
+                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID) == WorkingVerdicts.Queued;
+
             // THE BUBBLE IS THE WHOLE "THINKING…" STORY NOW: up while the session is mid-turn, and
             // while a free session has not yet picked the message up — down at the nudge, the one
             // moment "an answer is coming" stops being true enough to imply. After the answer it
@@ -14457,7 +14567,7 @@ internal sealed class BridgeEngineModel(
             // every ~3 minutes for as long as it stays busy.
             if (supervisorBusy)
             {
-                await Narrate_BusySupervisor_Async(orchId, pending, supervisorUsageFile, cancellationToken);
+                await Narrate_BusySupervisor_Async(orchId, pending, supervisorUsageFile, supervisorQueued, cancellationToken);
 
                 // AND TELL THE SESSION, not only the owner. This `continue` used to skip everything
                 // below it, including the one channel entry that says "the owner is still waiting for
@@ -14479,7 +14589,11 @@ internal sealed class BridgeEngineModel(
                 // The append is itself what delivers it: the session's watcher fires on the channel
                 // changing, so the entry is waiting to be read at the end of the turn it is currently
                 // inside — which is the first moment it could act on it anyway.
-                if (!pending.BusyNoticeWritten
+                // NOT WHILE QUEUED. "You have been mid-turn since it arrived" is false of a session
+                // that has not started, and the entry would only be read when the queued turn — which
+                // already carries the owner's message — finally runs. Written once it is running.
+                if (!supervisorQueued
+                    && !pending.BusyNoticeWritten
                     && (DateTime.UtcNow - pending.DeliveredUtc).TotalSeconds >= OWNER_REPLY_GRACE_SECONDS)
                 {
                     pending.BusyNoticeWritten = ChannelAppender.Append_AppEntry(

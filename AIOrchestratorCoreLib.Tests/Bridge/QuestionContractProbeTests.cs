@@ -372,6 +372,104 @@ public class QuestionContractProbeTests : IDisposable
         Assert.DoesNotContain("nothing was taken, and the question is still open", dump, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// THE TAP'S REWRITE OUTLIVES A RATE LIMIT. Measured 2026-09-10 21:11:40 on the VPS: the owner
+    /// tapped, Telegram answered the rewrite with <c>429 retry after 24</c>, the keyboard-removal
+    /// fallback got the same, and neither was tried again — old text, live keyboard, on a question
+    /// already answered. Here Telegram refuses the first TWO edits of the question message with a
+    /// one-second wait; the third lands, off the inbound loop. With the retry reverted the message
+    /// is never edited.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ATapWhoseRewriteIsRateLimited_IsRewrittenAnyway_AfterTelegramsWait()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        var startIt = _telegram.Find_ButtonFor("Start it")!;
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        _telegram.Refuse_Edits_WithRateLimit(count: 2, retryAfterSeconds: 1, messageId: questionMessageId);
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, questionMessageId, updateId: 3070));
+
+        // ONE engine run for both outcomes: the retries live on the engine's own cancellation, and a
+        // probe that stopped the engine to look would cancel the very wait it is probing. In
+        // production the engine does not stop between a tap and its rewrite.
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Edited_Containing("✅ Start it"), 20_000),
+            $"the rewrite never landed after the rate limit.{Environment.NewLine}{_log.Dump()}");
+
+        // The answer was routed regardless of the rewrite — that was true before and stays true.
+        Assert.Contains("Start it", Channel(orchId), StringComparison.Ordinal);
+
+        // Rewritten on the THIRD attempt, after two one-second waits.
+        Assert.Equal(3, _telegram.Count_EditAttempts(questionMessageId));
+        Assert.Contains("landed on attempt 3", _log.Dump(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE STATUS LINE HONOURS ITS OWN BACK-OFF. Measured 2026-09-10 20:56–21:52 on the VPS: 357 of
+    /// 382 rate-limit refusals were PULSE, retried every 2 s (the tick) with Telegram's
+    /// <c>retry_after</c> counting down 34, 31, 29 … The planner's 30-second back-off was in place and
+    /// tested — and overruled one line later by the button-only promotion, which compared the
+    /// rendering against the last text SENT, stale by design after a failure. Here every edit of the
+    /// PULSE message is refused; across forty ticks it must be attempted once, not forty times.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task APulseEditThatIsRateLimited_IsNotRetriedEveryTick()
+    {
+        var orchId = await Start_Async();
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_MessageIdOfSentContaining("PULSE") != null, 20_000),
+            $"no status line was ever posted.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
+
+        var pulseId = _telegram.Find_MessageIdOfSentContaining("PULSE")!.Value;
+        _telegram.Refuse_Edits_WithRateLimit(count: int.MaxValue, retryAfterSeconds: 20, messageId: pulseId);
+
+        // Edits accepted BEFORE the refusal are not the subject; only what happens from here on is.
+        var acceptedBefore = _telegram.Count_EditAttempts(pulseId);
+
+        // An open question changes the line ("waiting on you"), so an edit is due — and refused.
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Count_EditAttempts(pulseId) > acceptedBefore, 20_000),
+            $"the status line was never edited after the question.{Environment.NewLine}{_log.Dump()}");
+
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(40));
+
+        var refusedAttempts = _telegram.Count_EditAttempts(pulseId) - acceptedBefore;
+
+        Assert.True(
+            refusedAttempts <= 1,
+            $"the refused status-line edit was attempted {refusedAttempts} times inside the {BridgeTestTiming.RETRY_BACKOFF_SECONDS} s back-off — production saw one every tick.");
+    }
+
+    async Task Run_For_Async(int milliseconds)
+    {
+        using var cancellation = new CancellationTokenSource();
+
+        var loop = _engine.Run_Async(cancellation.Token);
+        await Task.Delay(milliseconds);
+        cancellation.Cancel();
+
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     string Channel(string orchId) => File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));
 
     async Task<string> Start_Async()
