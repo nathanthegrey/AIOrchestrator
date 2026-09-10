@@ -202,6 +202,42 @@ public class ClosingATopicReallyDeletesItTests : IDisposable
         Assert.Null(_store.Get_Session(ORCH_ID).TelegramTopicDeletePendingUtc);
     }
 
+    /// <summary>
+    /// THE TWO PATHS COLLIDE, AND ONE OF THEM STANDS DOWN. A close fires the delete itself while the
+    /// start-up sweep is still reading the sessions, so a pending stamp written in that window is
+    /// picked up by BOTH — and a REFUSED delete attempted twice breaks the one promise this family
+    /// makes: it is not retried inside the process, because a revoked right cannot change while the
+    /// process runs.
+    ///
+    /// <para>
+    /// FOUND BY <c>ADeleteTelegramWillNeverAccept_TellsTheOwnerOnce_AndNeverAgainAfterARestart</c>,
+    /// which failed about one run in four under a full suite and passed alone — the shape of a race.
+    /// Its assertion was right; the code was not. This probe forces the collision instead of waiting
+    /// for it: the pending stamp is already on disk (so the sweep will take it) AND the owner closes
+    /// the same orchestration (so the close path takes it too).
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheCloseAndTheStartUpSweep_NeverAttemptTheSameDeleteTwice()
+    {
+        _telegram.Refuse_AllDeletes(new TelegramApiException(400, "Telegram 'deleteForumTopic' failed with HTTP 400: {\"description\":\"Bad Request: not enough rights to manage topics\"}"));
+
+        // On disk before the engine starts: the sweep will find this and take the delete on.
+        _store.Mark_TopicDeletePending(ORCH_ID);
+
+        // ...and the owner closes the same orchestration as the engine comes up, which fires the
+        // delete down the other path.
+        await Run_Engine_Until_Async(
+            beforeWait: engine => engine.Close_Orchestration_ByOwner(ORCH_ID, "the owner closed it from the app"),
+            until: () => _telegram.DeleteAttempts >= 2,
+            timeoutMilliseconds: BridgeTestTiming.Window_ForTicks(20));
+
+        // ONE attempt, whichever path got there first — and one alert, which is what the owner sees.
+        Assert.Equal(1, _telegram.DeleteAttempts);
+        Assert.Equal(1, Count_GeneralAlerts());
+    }
+
     IBridgeEngine Build_Engine(IOrchestrationLog log)
     {
         return BridgeEngine_Factory.Create_WithTelegramClient(

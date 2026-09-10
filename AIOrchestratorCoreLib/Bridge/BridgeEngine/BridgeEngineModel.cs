@@ -6063,8 +6063,45 @@ internal sealed class BridgeEngineModel(
     /// The retry loop itself, awaitable so the start-up sweep can walk its backlog one at a time
     /// rather than firing every pending delete at Telegram's rate limit simultaneously.
     /// </summary>
+    /// <summary>
+    /// TOPICS THIS PROCESS HAS ALREADY TAKEN ON. Two paths reach the delete: the close itself
+    /// (fire-and-forget, the moment the owner closes an orchestration) and the reconciliation sweep
+    /// that runs at every start for deletes still owed on disk. They can collide — the sweep reads
+    /// the sessions asynchronously at startup, so a close landing in that window is stamped
+    /// "pending" in time for the sweep to pick it up as well.
+    ///
+    /// <para>
+    /// WHICH BREAKS THE ONE PROMISE THIS FAMILY MAKES: a REFUSED delete is not retried inside the
+    /// process, because a revoked right cannot change while the process runs. Two entries meant two
+    /// attempts, and the only reason it did not also mean two alerts to the owner is that the
+    /// "told them once" flag is on disk. Caught by
+    /// <c>ADeleteTelegramWillNeverAccept_TellsTheOwnerOnce_AndNeverAgainAfterARestart</c>, which
+    /// failed about one run in four under load and passed on its own — the shape of a race, and its
+    /// assertion (one attempt) was right.
+    /// </para>
+    /// <para>
+    /// PER PROCESS, NOT PERSISTED, deliberately: a restart is exactly when a delete SHOULD be tried
+    /// again, and the sweep exists for that.
+    /// </para>
+    /// </summary>
+    readonly HashSet<long> _topicDeletesTakenOn = [];
+
+    readonly object _topicDeleteLock = new();
+
+    bool Take_On_TopicDelete(long topicId)
+    {
+        lock (_topicDeleteLock)
+            return _topicDeletesTakenOn.Add(topicId);
+    }
+
     async Task Delete_TelegramTopic_WithRetries_Async(string orchId, long topicId, CancellationToken cancellationToken)
     {
+        if (!Take_On_TopicDelete(topicId))
+        {
+            _log.Log_Info(orchId, $"Telegram topic {topicId} is already being deleted by this process — the second path (close or start-up sweep) stands down instead of attempting it again");
+            return;
+        }
+
         for (var attemptsMade = 1; ; attemptsMade++)
         {
             Exception? failure = null;
