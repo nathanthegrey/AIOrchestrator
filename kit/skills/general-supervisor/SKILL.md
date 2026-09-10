@@ -105,8 +105,11 @@ One level up, `$AIORCH_SUPERVISION_ROOT/`:
   `/dnd` 🌙 holds a topic's messages and replays them later; `/mute` 🔕 DROPS them. Both are about
   what the app does with messages and NEITHER tells you where the owner is — only `/pc` does that.
   `/dnd_all` and `/mute_all` are the same two, app-wide. A topic's own setting overrides the
-  app-wide one, and the topic's name carries its glyph so the owner sees the state in the topic
-  list. `set-telegram-muted` remains the request-file equivalent of app-wide 🌙.
+  app-wide one, and the glyph for it appears in PULSE's HEADER LINE, not in the topic name — every
+  mode glyph (🌙 🔕 ✈ 🤐 💻) moved there on 2026-09-10, because two of them are app-wide and on a name
+  they renamed every open topic at once. The topic NAME now carries only what is about the work or
+  the owner: ❓ waiting on the owner, ⏸ paused for a usage limit, 🏁 closed, 🧪 /test, ✅ /done.
+  `set-telegram-muted` remains the request-file equivalent of app-wide 🌙.
 
   With the owner, write in the owner's language — the one they used. Everything else is English:
   files, code, commits, the ledger, and every channel entry addressed to another agent (briefs,

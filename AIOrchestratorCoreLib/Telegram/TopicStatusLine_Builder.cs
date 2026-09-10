@@ -164,7 +164,7 @@ public static class TopicStatusLine_Builder
     public static string Build(
         IPlanProgress? progress,
         IReadOnlyList<ITopicStatusMember> members,
-        string? lastSubject,
+        TopicLastEvent? lastEvent,
         DateTime now,
         bool aMessageIsAlreadyPosted,
         TimeSpan? figuresUnchangedFor = null,
@@ -199,16 +199,17 @@ public static class TopicStatusLine_Builder
         // question on a topic whose ledger has not been written yet must still reach the owner.
         var hasSubstance = live.Count > 0
             || (progress != null && progress.Total > 0)
-            || !string.IsNullOrWhiteSpace(lastSubject)
+            || !string.IsNullOrWhiteSpace(lastEvent?.Subject)
             || asks.Count > 0;
 
         if (!hasSubstance)
             return aMessageIsAlreadyPosted ? LEAD_WORD : "";
 
         // THE SIX FIELDS IN THE OWNER'S OWN ORDER (2026-09-09), under a header line that carries the
-        // lead word and the topic's mode glyph. Every field omits itself when it has nothing to say;
-        // none of them substitutes a placeholder.
-        List<string> lines = [Build_HeaderLine(fields.Mode)];
+        // lead word and every MODE glyph — 🌙 🔕 ✈ 🤐 💻, all five of which left the topic name on
+        // 2026-09-10. Every field omits itself when it has nothing to say; none of them substitutes a
+        // placeholder.
+        List<string> lines = [Build_HeaderLine(fields)];
 
         if (asks.Count > 0)
             lines.Add(Build_WaitingOnYouLine(asks));
@@ -227,8 +228,8 @@ public static class TopicStatusLine_Builder
         // one more session called "last". Not having the bullet is what separates it now that the
         // divider is gone. It affords two more task words than a member row because it carries no
         // duration — a longer field, in a shorter row.
-        if (!string.IsNullOrWhiteSpace(lastSubject))
-            lines.Add(Build_LastLine(lastSubject, fields.LastEventAt, now));
+        if (lastEvent != null && !string.IsNullOrWhiteSpace(lastEvent.Value.Subject))
+            lines.Add(Build_LastLine(lastEvent.Value, now));
 
         if (progress != null && progress.Total > 0)
             lines.Add(Build_MergedLine(progress, figuresUnchangedFor));
@@ -242,30 +243,45 @@ public static class TopicStatusLine_Builder
     }
 
     /// <summary>
-    /// The lead word, carrying the topic's MODE GLYPH — which moved here off the topic NAME on the
-    /// owner's 2026-09-09 directive.
+    /// PULSE'S HEADER — the lead word, and every MODE glyph the topic name used to carry: `✈ 💻 PULSE`.
     ///
     /// <para>
-    /// The glyph characters come from <see cref="TelegramDeliveryMode_Glyphs"/> rather than being
-    /// spelled again: the app still writes glyphs into topic names for away, quiet, terminal,
-    /// awaiting-test and done, and two definitions of 🌙 is how one surface comes to mean Deferred by
-    /// it while another means something else.
+    /// ALL FIVE LIVE HERE NOW (owner, 2026-09-10): 🌙 deferred, 🔕 silenced, ✈ away, 🤐 quiet,
+    /// 💻 terminal. They describe how the app is DELIVERING, which is not what a topic list is read
+    /// to answer — and two of them are app-wide, so on a name they renamed every open topic at once
+    /// and wrote a service message into each one. Here the same fact costs one silent edit of a
+    /// message that was being edited anyway.
     /// </para>
     /// <para>
-    /// STRIPPING THE MODE GLYPH FROM THE TOPIC NAME IS NOT DONE HERE and is not this class's to do —
-    /// it is <see cref="TelegramDeliveryMode_Glyphs.Decorate_TopicName"/>'s. Until that half lands
-    /// the glyph shows in both places, which is the harmless direction to be caught mid-change in.
+    /// THE PRECEDENCE IS THE TOPIC NAME'S, MOVED VERBATIM, because it was right and because changing
+    /// it in the same commit as the move would make a behaviour change look like a relocation. AWAY
+    /// SUPERSEDES QUIET: away already means every orchestration has stopped asking, so both together
+    /// state one fact twice. TERMINAL REPLACES THE DELIVERY GLYPH: sitting in the terminal is what
+    /// silences the topic, so 💻 🔕 says the same thing in two characters. Away still shows beside
+    /// terminal — it is about the owner's PHONE, which is a different fact from where they are
+    /// sitting for this one endeavour.
     /// </para>
     /// </summary>
-    static string Build_HeaderLine(TelegramDeliveryModes mode)
+    static string Build_HeaderLine(TopicStatusFields fields)
     {
-        return mode switch
+        var presenceOrMode = fields.Presence == OwnerPresenceModes.Terminal
+            ? $"{TelegramDeliveryMode_Glyphs.TERMINAL} "
+            : fields.Mode switch
+            {
+                TelegramDeliveryModes.Normal => "",
+                TelegramDeliveryModes.Deferred => $"{TelegramDeliveryMode_Glyphs.DEFERRED} ",
+                TelegramDeliveryModes.Silenced => $"{TelegramDeliveryMode_Glyphs.SILENCED} ",
+                _ => throw new Exception($"Unhandled TelegramDeliveryModes: {fields.Mode}"),
+            };
+
+        var ownerAttention = fields switch
         {
-            TelegramDeliveryModes.Normal => LEAD_WORD,
-            TelegramDeliveryModes.Deferred => $"{TelegramDeliveryMode_Glyphs.DEFERRED} {LEAD_WORD}",
-            TelegramDeliveryModes.Silenced => $"{TelegramDeliveryMode_Glyphs.SILENCED} {LEAD_WORD}",
-            _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
+            { IsAway: true } => $"{TelegramDeliveryMode_Glyphs.AWAY} ",
+            { IsQuiet: true } => $"{TelegramDeliveryMode_Glyphs.QUIET} ",
+            _ => "",
         };
+
+        return $"{ownerAttention}{presenceOrMode}{LEAD_WORD}";
     }
 
     /// <summary>
@@ -536,17 +552,20 @@ public static class TopicStatusLine_Builder
     /// different field.
     /// </para>
     /// <para>
-    /// WHICH event this is remains <c>TopicStatusLine_Planner.Pick_LastSubject_OrNull</c>'s to decide
-    /// — the last session entry across the live members, by trusted stamp. This method words it.
+    /// WHICH event this is remains <c>TopicStatusLine_Planner.Pick_LastEvent_OrNull</c>'s to decide
+    /// — the last session entry across the live members, by trusted stamp, WITH the stamp of that
+    /// same entry. This method words it, and can no longer be handed a mismatched pair.
     /// </para>
     /// </summary>
-    static string Build_LastLine(string lastSubject, DateTime? lastEventAt, DateTime now)
+    static string Build_LastLine(TopicLastEvent lastEvent, DateTime now)
     {
-        var clock = TopicStatusWording.Clock_OrNull(lastEventAt, now);
+        // ONE ARGUMENT, so the clock and the subject cannot come from different events. They used to
+        // be two parameters filled from two files — see TopicLastEvent for what that rendered.
+        var clock = TopicStatusWording.Clock_OrNull(lastEvent.At, now);
 
         var clockPart = clock == null ? "" : $"{clock}{FIELD_SEPARATOR}";
 
-        return $"last{FIELD_SEPARATOR}{clockPart}{TextSummary_Formatter.Summarize_Task(lastSubject, MEMBER_TASK_WORDS + 2)}";
+        return $"last{FIELD_SEPARATOR}{clockPart}{TextSummary_Formatter.Summarize_Task(lastEvent.Subject, MEMBER_TASK_WORDS + 2)}";
     }
 
     /// <summary>
@@ -594,7 +613,44 @@ public static class TopicStatusLine_Builder
     /// </summary>
     static string Build_UpdatedLine(DateTime now)
     {
-        return $"updated {TopicStatusWording.Clock(now)}";
+        return $"{HEARTBEAT_PREFIX}{TopicStatusWording.Clock(now)}";
+    }
+
+    /// <summary>How the heartbeat line opens, so a reader can recognise it without re-spelling it.</summary>
+    const string HEARTBEAT_PREFIX = "updated ";
+
+    /// <summary>
+    /// THE LINE WITHOUT ITS HEARTBEAT — for the one caller that must ask "has anything actually
+    /// CHANGED?" rather than "is this text different?".
+    ///
+    /// <para>
+    /// The two questions came apart on 2026-09-10, when the owner ruled that PULSE is re-posted only
+    /// when it is buried AND its content changed. The heartbeat is <see cref="Build_UpdatedLine"/> and
+    /// it carries a wall clock, so PULSE's TEXT differs from the previous one at every minute
+    /// boundary whatever the orchestration is doing — and a repost gated on the raw text would have
+    /// degraded the owner's rule to "buried, then within sixty seconds". The delete-plus-post
+    /// carrying no news would still happen; it would merely be late, which is the worse failure
+    /// because it looks fixed.
+    /// </para>
+    /// <para>
+    /// It strips only the LAST line and only when that line is the heartbeat, rather than filtering
+    /// every line that starts with the prefix: the heartbeat is emitted last and unconditionally, and
+    /// a member whose task began with the word "updated" is not a heartbeat.
+    /// </para>
+    /// </summary>
+    public static string? Strip_Heartbeat(string? statusText)
+    {
+        if (statusText == null)
+            return null;
+
+        var lastBreak = statusText.LastIndexOf('\n');
+
+        if (lastBreak < 0)
+            return statusText.StartsWith(HEARTBEAT_PREFIX, StringComparison.Ordinal) ? "" : statusText;
+
+        return statusText.AsSpan(lastBreak + 1).StartsWith(HEARTBEAT_PREFIX, StringComparison.Ordinal)
+            ? statusText[..lastBreak]
+            : statusText;
     }
 
     /// <summary>

@@ -17,7 +17,35 @@ public enum TelegramDeliveryModes
     Silenced,
 }
 
-/// <summary>Topic-name decoration so the owner sees a topic's mode in the Telegram topic list.</summary>
+/// <summary>
+/// THE TWO GLYPH NAMESPACES, and which surface each one belongs to — the owner's ruling of
+/// 2026-09-10.
+///
+/// <para>
+/// THE TOPIC NAME CARRIES WHAT IS ABOUT THE WORK OR ABOUT THE OWNER: ❓ (waiting on the owner),
+/// ⏸ (paused for a usage limit), 🏁 (closed), plus the two the owner sets BY HAND — 🧪 (/test) and
+/// ✅ (/done). Those five answer "what is the state of this endeavour", which is the question a
+/// topic list is read to answer.
+/// </para>
+/// <para>
+/// PULSE'S HEADER CARRIES EVERY MODE GLYPH: 🌙 🔕 ✈ 🤐 💻. These say how the app is DELIVERING right
+/// now, and two of them — ✈ away and 🤐 quiet — are app-wide, so on a name they renamed every topic
+/// at once. Every rename is an `editForumTopic` call and a service message in the topic, so a
+/// machine-wide state change wrote a line into every one of the owner's threads to tell them
+/// something they had just done themselves. In PULSE's header the same fact costs one silent edit of
+/// a message that was being edited anyway.
+/// </para>
+/// <para>
+/// ⛔ IS GONE, FOLDED INTO ❓. It was split from it on 2026-08-19 to distinguish "waiting on you" from
+/// "waiting on you AND stopped", and the owner retired the distinction on 2026-09-10: for them the
+/// two mean the same thing, which is that they have to do something. The constant stays only so
+/// <see cref="Strip_Glyph"/> can still remove it from names decorated by an older build.
+/// </para>
+/// <para>
+/// THE CONSTANTS ALL STAY HERE, on both sides of the move, so the two surfaces cannot come to
+/// disagree about what a muted topic looks like.
+/// </para>
+/// </summary>
 public static class TelegramDeliveryMode_Glyphs
 {
     public const string DEFERRED = "🌙";
@@ -48,8 +76,10 @@ public static class TelegramDeliveryMode_Glyphs
     /// *"for now it's used only in conversations, not in topic titles, so I won't get confused"*.
     /// The app does write ✅ in message BODIES — an answered question, a passed check — but the
     /// topic-list vocabulary is a separate namespace, and inside it this character is unused.
-    /// Not 🏁, which already means a LEDGER LINE finished (`LedgerTransition_Wording.RECAP_GLYPH`)
-    /// and would put two different finished-somethings in one thread.
+    /// Not 🏁 — which in 2026-08 meant a LEDGER RECAP and since 2026-09-10 means a CLOSED
+    /// orchestration (<see cref="CLOSED"/>). The reason has outlived the constant it named: either
+    /// way, 🏁 and ✅ would be two different finished-somethings in one thread. A line finishing is
+    /// `LedgerTransition_Wording.FINISHED_GLYPH` ✔, and the recap now takes 🎯.
     ///
     /// It REPLACES the mode glyph for the same reason 🧪 does: /done is mute underneath, so drawing
     /// 🔕 ✅ together would state one fact twice.
@@ -62,15 +92,46 @@ public static class TelegramDeliveryMode_Glyphs
     public const string REPLY_WANTED = "❓";
 
     /// <summary>
-    /// Waiting on the owner AND STOPPED. A member has declared BLOCKED ON OWNER, so this topic is
-    /// not merely owed an answer — it cannot proceed without one.
+    /// RETIRED 2026-09-10 — folded into <see cref="REPLY_WANTED"/> on the owner's ruling: *"⛔ is
+    /// folded into ❓ (same meaning for the owner)"*.
     ///
-    /// Two glyphs rather than one because the owner asked for exactly that distinction (2026-08-19):
-    /// they want to see from the topic list "if some topic needs me for a response, whether blocking
-    /// or not". One symbol for both would answer half the question and cost them the opening of
-    /// every topic to find out which half.
+    /// It was split off on 2026-08-19, when they asked to see from the topic list "if some topic
+    /// needs me for a response, whether blocking or not". A year of using it answered the question:
+    /// both states mean they have to do something, and which one it is does not change what they do
+    /// next. The distinction still EXISTS in <see cref="OwnerReplyStates"/>, because it is a real
+    /// difference the app acts on; it just no longer earns its own character in the topic list.
+    ///
+    /// THE CONSTANT STAYS so <see cref="Strip_Glyph"/> can remove it from a name an older build
+    /// decorated. Dropping it would leave every currently-blocked topic wearing a ⛔ that no rename
+    /// could ever take off.
     /// </summary>
     public const string REPLY_BLOCKING = "⛔";
+
+    /// <summary>
+    /// PAUSED FOR A USAGE LIMIT — the endeavour has not stopped, it is waiting for a window to
+    /// reset, and there is nothing for the owner to do but know.
+    ///
+    /// It is on the NAME rather than only in PULSE because it is the state most likely to be
+    /// mistaken for a stall: a topic that has gone quiet reads as broken, and the false alerts of
+    /// 2026-09-09 were exactly this state being reported as "waiting on your reply". One character
+    /// in the topic list answers it without opening anything.
+    ///
+    /// The character is the one the app already uses for a hold (`⏸ Wait`, `⏸ DISPATCH PAUSED`), so
+    /// paused means paused everywhere.
+    /// </summary>
+    public const string PAUSED_FOR_LIMIT = "⏸";
+
+    /// <summary>
+    /// CLOSED — the orchestration is over. Its topic is normally DELETED on close, so this is what
+    /// the owner sees in the window between the close and a delete that has not happened yet, or
+    /// will never happen: Telegram refuses to delete some topics, and a closed endeavour still
+    /// wearing its working name is one the owner cannot tell from a live one.
+    ///
+    /// 🏁 KEEPS THIS MEANING and the ledger recap gave the character up for it (owner, 2026-09-10) —
+    /// see <c>LedgerTransition_Wording.RECAP_GLYPH</c>. Two different finished-somethings sharing one
+    /// symbol is the collision <see cref="DONE"/>'s own summary refused when it was chosen.
+    /// </summary>
+    public const string CLOSED = "🏁";
 
     /// <summary>
     /// Away mode's own glyph — app-wide. Deliberately NOT the moon: that already means Deferred,
@@ -92,100 +153,90 @@ public static class TelegramDeliveryMode_Glyphs
     /// </summary>
     public const string TERMINAL = "💻";
 
-    /// <summary>Prefixes the topic name with the mode's glyph (Normal = the bare name).</summary>
-    public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode)
-    {
-        return Decorate_TopicName(baseName, mode, isAway: false, isQuiet: false);
-    }
-
-    public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode, bool isAway)
-    {
-        return Decorate_TopicName(baseName, mode, isAway, isQuiet: false);
-    }
+    /// <summary>
+    /// EVERYTHING THE TOPIC NAME SHOWS, as one named value.
+    ///
+    /// <para>
+    /// A RECORD BECAUSE THE OLD SIGNATURE WAS A TRAP the compiler could not see. `Decorate_TopicName`
+    /// took eight positional arguments of which four were `bool` — away, quiet, awaiting-test, done —
+    /// and the one production call site passed them in a row. Any two of them could be swapped with
+    /// everything still compiling, and the engine that calls it is `internal sealed`, so the suite
+    /// could not see the swap either. That is the trap `TopicStatusFields` records for its own
+    /// timestamps, in the class next door.
+    /// </para>
+    /// <para>
+    /// FOUR OF THOSE EIGHT ARE GONE rather than carried unused: mode, away, quiet and presence moved
+    /// to PULSE's header on 2026-09-10, and keeping them here as ignored parameters would leave every
+    /// caller still able to ask for a glyph this surface no longer draws.
+    /// </para>
+    /// </summary>
+    /// <param name="OwnerReply">
+    /// Whether someone is waiting on the owner. Both non-None values draw ❓ — see
+    /// <see cref="TelegramDeliveryMode_Glyphs.REPLY_BLOCKING"/> for why the second character retired.
+    /// </param>
+    /// <param name="IsPausedForUsageLimit">The endeavour is waiting for a usage window, not stalled.</param>
+    /// <param name="IsClosed">The orchestration is over and its topic has outlived it.</param>
+    /// <param name="IsAwaitingTest">/test — the owner's own "finished, but I have not checked it".</param>
+    /// <param name="IsDone">/done — the owner's own "I have checked it, leave the topic open".</param>
+    public readonly record struct TopicNameFlags(
+        OwnerReplyStates OwnerReply = OwnerReplyStates.None,
+        bool IsPausedForUsageLimit = false,
+        bool IsClosed = false,
+        bool IsAwaitingTest = false,
+        bool IsDone = false);
 
     /// <summary>
-    /// Delivery mode is per topic; away is app-wide; quiet is per topic. Mode and presence are
-    /// orthogonal and show together ("✈ 🔕 crm bug"), but AWAY SUPERSEDES QUIET — away already
-    /// means every orchestration has stopped asking, so showing both would be noise.
+    /// The topic's name as the owner reads it in their topic list: `❓ ✅ crm bug`.
+    ///
+    /// <para>
+    /// ❓ IS OUTERMOST, ahead of everything — the owner asked for it "at the beginning of the topic
+    /// name, to concatenate with other possible icons". It is also the only glyph here that asks
+    /// something OF them; the rest describe where the work stands.
+    /// </para>
+    /// <para>
+    /// EXACTLY ONE STATE GLYPH FOLLOWS IT, never a row of them, and the order is most-final-first:
+    /// 🏁 closed, then ✅ done, then 🧪 awaiting-test, then ⏸ paused. A closed endeavour is not also
+    /// awaiting a test; a signed-off one is not also asking to be tested (the owner's own rule of
+    /// 2026-08-21, kept); and a topic the owner has finished with does not need to say why the
+    /// machine stopped. Each one REPLACES the ones below it for the same reason 💻 used to replace the
+    /// mode glyph: stating one fact twice is what made this list too long to read.
+    /// </para>
     /// </summary>
-    public static string Decorate_TopicName(string baseName, TelegramDeliveryModes mode, bool isAway, bool isQuiet)
+    public static string Compose_TopicName(string baseName, TopicNameFlags flags)
     {
-        return Decorate_TopicName(baseName, mode, isAway, isQuiet, OwnerPresenceModes.Remote);
-    }
-
-    /// <summary>
-    /// TERMINAL presence REPLACES the delivery glyph — it already implies silence, so showing both
-    /// would say one thing twice. Away still shows: it is app-wide and about the owner's phone,
-    /// which is a different fact from where they are sitting for THIS orchestration.
-    /// </summary>
-    public static string Decorate_TopicName(
-        string baseName,
-        TelegramDeliveryModes mode,
-        bool isAway,
-        bool isQuiet,
-        OwnerPresenceModes presence,
-        bool isAwaitingTest = false,
-        OwnerReplyStates ownerReply = OwnerReplyStates.None,
-        bool isDone = false)
-    {
-        // OUTERMOST, ahead of every other glyph — the owner asked for it "at the beginning of the
-        // topic name, to concatenate with other possible icons". It is also the only glyph here that
-        // asks something OF them; the rest describe what the app is doing.
-        var replyPrefix = ownerReply switch
+        var replyPrefix = flags.OwnerReply switch
         {
-            OwnerReplyStates.Blocking => $"{REPLY_BLOCKING} ",
+            // BOTH ASKING STATES DRAW THE SAME CHARACTER. The enum keeps the distinction because the
+            // app acts on it; the topic list stopped spending a glyph on it (owner, 2026-09-10).
+            OwnerReplyStates.Blocking => $"{REPLY_WANTED} ",
             OwnerReplyStates.Wanted => $"{REPLY_WANTED} ",
             OwnerReplyStates.None => "",
-            _ => throw new Exception($"Unhandled OwnerReplyStates: {ownerReply}"),
+            _ => throw new Exception($"Unhandled OwnerReplyStates: {flags.OwnerReply}"),
         };
 
-        // DONE OUTRANKS AWAITING-TEST, and everything below it. 🧪 asks the owner for something —
-        // go and test this — while 📦 records that the asking is over; showing the request on a
-        // topic they have already signed off would be telling them to do a job they have done. The
-        // command clears the other flag when it sets this one, so both should never be true at
-        // once; if they somehow are, the later statement is the one worth showing.
-        if (isDone)
+        var stateGlyph = flags switch
         {
-            var withDone = $"{DONE} {baseName}";
-
-            return replyPrefix + (isAway ? $"{AWAY} {withDone}" : withDone);
-        }
-
-        // AWAITING-TEST OUTRANKS BOTH the mode glyph and terminal presence, and that ordering is the
-        // point of the state. The other two describe how messages are being delivered right now;
-        // this one says DO NOT CLOSE THIS YET. Losing it because the owner happens to be sitting in
-        // the terminal would hide the reminder at exactly the moment they might act on it.
-        if (isAwaitingTest)
-        {
-            var withTest = $"{AWAITING_TEST} {baseName}";
-
-            return replyPrefix + (isAway ? $"{AWAY} {withTest}" : withTest);
-        }
-
-        if (presence == OwnerPresenceModes.Terminal)
-        {
-            var withTerminal = $"{TERMINAL} {baseName}";
-
-            return replyPrefix + (isAway ? $"{AWAY} {withTerminal}" : withTerminal);
-        }
-
-        var withMode = mode switch
-        {
-            TelegramDeliveryModes.Normal => baseName,
-            TelegramDeliveryModes.Deferred => $"{DEFERRED} {baseName}",
-            TelegramDeliveryModes.Silenced => $"{SILENCED} {baseName}",
-            _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
+            { IsClosed: true } => $"{CLOSED} ",
+            { IsDone: true } => $"{DONE} ",
+            { IsAwaitingTest: true } => $"{AWAITING_TEST} ",
+            { IsPausedForUsageLimit: true } => $"{PAUSED_FOR_LIMIT} ",
+            _ => "",
         };
 
-        if (isAway)
-            return $"{replyPrefix}{AWAY} {withMode}";
-
-        return replyPrefix + (isQuiet ? $"{QUIET} {withMode}" : withMode);
+        return $"{replyPrefix}{stateGlyph}{baseName}";
     }
 
     /// <summary>
     /// Strips every leading state glyph, so a decorated name never gets decorated twice. Loops,
-    /// because a name can carry both the away glyph and a mode glyph.
+    /// because a name can carry more than one.
+    ///
+    /// <para>
+    /// IT STILL KNOWS THE GLYPHS THIS SURFACE NO LONGER DRAWS — 🌙 🔕 ✈ 🤐 💻 ⛔ — and that is the
+    /// migration. Every topic in the owner's list was named by the build before this one, so the
+    /// first rename after the change has to be able to take a moon off a name nothing will ever put
+    /// a moon on again. Narrowing this list to what is currently drawn would strand the old glyph on
+    /// the name for as long as the topic lives.
+    /// </para>
     /// </summary>
     public static string Strip_Glyph(string topicName)
     {
@@ -205,6 +256,8 @@ public static class TelegramDeliveryMode_Glyphs
             || topicName.StartsWith(REPLY_BLOCKING, StringComparison.Ordinal)
             || topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal)
             || topicName.StartsWith(SILENCED, StringComparison.Ordinal)
+            || topicName.StartsWith(PAUSED_FOR_LIMIT, StringComparison.Ordinal)
+            || topicName.StartsWith(CLOSED, StringComparison.Ordinal)
             || topicName.StartsWith(AWAY, StringComparison.Ordinal)
             || topicName.StartsWith(QUIET, StringComparison.Ordinal)
             || topicName.StartsWith(TERMINAL, StringComparison.Ordinal);
@@ -233,6 +286,12 @@ public static class TelegramDeliveryMode_Glyphs
 
         if (topicName.StartsWith(AWAITING_TEST, StringComparison.Ordinal))
             return AWAITING_TEST.Length;
+
+        if (topicName.StartsWith(PAUSED_FOR_LIMIT, StringComparison.Ordinal))
+            return PAUSED_FOR_LIMIT.Length;
+
+        if (topicName.StartsWith(CLOSED, StringComparison.Ordinal))
+            return CLOSED.Length;
 
         if (topicName.StartsWith(SILENCED, StringComparison.Ordinal))
             return SILENCED.Length;

@@ -61,6 +61,12 @@ Also fixed here, though it belongs to another branch: **`e85a53d`** — a real r
 
 ## PARKED (found on the way, not in the row — decision 22)
 
+> **Six of these were not mine to park.** The owner ruled on 2026-09-10 that points 1–6 below were
+> already DECIDED in brief C's own Decisions and Done-when sections, so they were in scope all along.
+> They are delivered on `stage/8d-pulse-glyphs-and-the-general-bar` — see
+> `2026-09-10-stage-8d-the-six-decided-points-of-brief-c.md`. The last item, the silent-deadlock
+> removal, the owner confirmed stays removed.
+
 - **PULSE is still re-posted when buried even if unchanged** — and a live test, `TheRepostFiresEvenWhenTheTextHasNotChanged`, pins the contrary rule. The brief says otherwise; changing it means retiring that test, which is a behaviour decision.
 - **The topic-name glyphs were never reduced to ❓ ⏸ 🏁**, so the mode glyph now shows in the topic name *and* in PULSE's header; and 🏁 clashes with `LedgerTransition_Wording.RECAP_GLYPH`.
 - **DND still freezes the General dashboard** and holds silent app entries with the rest.

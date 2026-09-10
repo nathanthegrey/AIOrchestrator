@@ -476,18 +476,36 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// WHICH QUESTION each orchestration has already been alerted about — the entry index, not a
-    /// bool.
+    /// WHICH QUESTION each orchestration has already been alerted about — a hash of what the question
+    /// SAYS and who asked it, not a bool and not the `[n]`.
     ///
     /// <para>
-    /// The owner's ruling, 2026-09-09: the ⚠️ fires *"once per question (key: the question's entry
-    /// index)"*. A bool could only be re-armed by traffic resuming, which is how the old alert fired
-    /// three times in one evening about the same nothing: their own words, of an alert at 17:30
-    /// after the supervisor had said "Nothing more needed from you", and again at 18:38 and 20:25.
-    /// Keyed on the question, a second alert needs a second QUESTION rather than merely more silence.
+    /// The owner's ruling, 2026-09-09: the ⚠️ fires *"once per question"*. A bool could only be
+    /// re-armed by traffic resuming, which is how the old alert fired three times in one evening
+    /// about the same nothing: their own words, of an alert at 17:30 after the supervisor had said
+    /// "Nothing more needed from you", and again at 18:38 and 20:25. Keyed on the question, a second
+    /// alert needs a second QUESTION rather than merely more silence.
+    /// </para>
+    /// <para>
+    /// IT WAS THE ENTRY INDEX UNTIL 2026-09-10 — the owner's own first wording, corrected by them on
+    /// the grounds of decision 12: the `[n]` is agent-written and is a guess unless the writer
+    /// re-read the file, and `option-lab-2` really did carry two `[80]` and two `[81]` in one
+    /// evening. On a duplicate index the SECOND question was silent (one key, and the alert fires
+    /// once per key); across a compaction that renumbered an entry, the SAME question earned a second
+    /// alert. Both failures are silent, and both produce exactly the noise this brief removes.
     /// </para>
     /// </summary>
-    readonly Dictionary<string, int> _stallAlertedQuestionIndexByOrchId = [];
+    /// <remarks>
+    /// CLEARED WHEN THE OWNER SPEAKS into the orchestration (`Route_OwnerMessage_Async`), which is
+    /// what stops "once per question" from meaning "once per WORDING, forever". Agents reuse subjects
+    /// and bodies, so without it a byte-identical question asked again hours later hashed to the
+    /// remembered key and was never alerted about. Keeping the memo across traffic that does NOT
+    /// answer is still right, and that is the case the stall loop itself handles.
+    ///
+    /// Guarded by `_ownerStateLock` at all three sites: the alert reads and writes it on the tick
+    /// thread, the clear runs on the inbound loop.
+    /// </remarks>
+    readonly Dictionary<string, string> _stallAlertedQuestionKeyByOrchId = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
@@ -1478,11 +1496,39 @@ internal sealed class BridgeEngineModel(
         // when there is one the pass runs off this thread so a slow adapter cannot stall the tick.
         Start_PlanBackendPass();
 
-        // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
-        // in one catch-up burst (including supervisors' questions that waited for the owner).
-        // Crash-loop alerts stay queued in the watchdog until unmute for the same reason.
+        // DND HOLDS ONLY WHAT RINGS — the owner's ruling of 2026-09-09 (brief C): "🌙 holds only what
+        // rings (supervisor entries, actionable alerts); PULSE and the dashboard keep updating
+        // silently".
+        //
+        // Everything below this line stays held: tailing is skipped entirely, so offsets freeze and
+        // unmute delivers the whole backlog in one catch-up burst (supervisors' questions included),
+        // and crash-loop alerts stay queued in the watchdog for the same reason.
+        //
+        // THE TWO SILENT SURFACES RUN FIRST INSTEAD OF BEING SKIPPED WITH THE REST. They are the two
+        // things the owner READS when they come back rather than things that reach them — the
+        // check-in ritual is "show me where everything stands", and it was reading a PULSE and a
+        // dashboard frozen at the moment the mute went on. A status surface that stops updating while
+        // the owner is away is not quiet, it is WRONG, and it is wrong exactly when it is being used.
+        //
+        // WHAT THEY COST, precisely, because the first version of this comment overstated it. Every
+        // write is SILENT, and neither reads the tailer — they build from the channel files and the
+        // ledger directly, so no offset moves and nothing the catch-up burst needs is consumed. But
+        // they are not all "one message edited in place": a buried PULSE is still MOVED under 🌙, and
+        // a move is a delete plus a send, which mints a new message and spends the per-minute send
+        // budget. That budget blocks rather than drops, so nothing is lost — the unmute burst simply
+        // shares an allowance PULSE used while nobody was reading. Bounded by the quiet window to one
+        // move per burst of traffic, and by the substance rule to moves that carry news.
+        //
+        // What they cannot do is reach past their own gates: PULSE still refuses to POST or move
+        // under 🔕, and both surfaces answer None when their text has not changed, which under a mute
+        // is most ticks.
         if (_telegramMuted && _telegramClient != null)
+        {
+            await Refresh_TopicStatusLines_Async(cancellationToken);
+            await Push_GeneralDashboard_Async(cancellationToken);
+
             return;
+        }
 
         // PROMPTING stays after the DND return — nothing is asked, and so nothing closes, while the
         // owner is not being disturbed. Expiry ran above, before the gate, because lapsing is not a
@@ -1950,7 +1996,7 @@ internal sealed class BridgeEngineModel(
 
             if (quietFor.TotalMinutes < STALL_ALERT_MINUTES)
             {
-                // Traffic resumed. The remembered question index is deliberately KEPT: the alert is
+                // Traffic resumed. The remembered question key is deliberately KEPT: the alert is
                 // once per question now, and traffic that does not answer it — the supervisor's own
                 // follow-up, an app entry — must not buy a second ⚠️ about the same question.
                 continue;
@@ -1982,14 +2028,27 @@ internal sealed class BridgeEngineModel(
             // progress, or saying that nothing more is needed, has asked for nothing. It produced
             // six false alerts across two topics in one evening — including one at 17:30, thirty
             // minutes after the supervisor wrote "Nothing more needed from you".
-            var unansweredQuestionIndex = Status.OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+            var unansweredQuestion = Status.OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
                 ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId)));
 
-            if (unansweredQuestionIndex == null)
+            if (unansweredQuestion == null)
                 continue;
 
-            if (_stallAlertedQuestionIndexByOrchId.TryGetValue(session.OrchId, out var alreadyAlertedFor)
-                && alreadyAlertedFor == unansweredQuestionIndex.Value)
+            // WHAT IT SAYS, NOT WHERE IT SITS. See the field's own summary for the two silent
+            // failures the `[n]` produced.
+            var questionKey = Status.OwnerOwesReply_Decider.Identify_Question(unansweredQuestion);
+
+            // UNDER THE LOCK, all three accesses, because this map stopped being tick-thread-only on
+            // 2026-09-10: the owner speaking clears it, and that happens on the INBOUND loop. A plain
+            // Dictionary read concurrently with a Remove is not merely stale, it can corrupt or throw.
+            bool alreadyAlertedForThisQuestion;
+
+            lock (_ownerStateLock)
+                alreadyAlertedForThisQuestion =
+                    _stallAlertedQuestionKeyByOrchId.TryGetValue(session.OrchId, out var alreadyAlertedFor)
+                    && alreadyAlertedFor == questionKey;
+
+            if (alreadyAlertedForThisQuestion)
                 continue;
 
             // NEVER WHILE THE SUPERVISOR IS PAUSED FOR A USAGE LIMIT (owner's ruling, same day, from
@@ -2021,7 +2080,8 @@ internal sealed class BridgeEngineModel(
 
                 // After a CONFIRMED send, so a failed one retries next tick — and keyed on the
                 // question, so the next alert needs a new one.
-                _stallAlertedQuestionIndexByOrchId[session.OrchId] = unansweredQuestionIndex.Value;
+                lock (_ownerStateLock)
+                    _stallAlertedQuestionKeyByOrchId[session.OrchId] = questionKey;
                 _log.Log_Warning(session.OrchId, alertText);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
@@ -3283,9 +3343,13 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient == null)
             return;
 
-        // The same gate the other outbound sites use. DND holds and Silenced drops, and a dashboard
-        // that ignored the owner's own switch would be the loudest thing in the app.
-        if (Resolve_EffectiveMode(ChannelDiscovery.GENERAL_ORCH_ID) != TelegramDeliveryModes.Normal)
+        // SILENCED DROPS THIS, DEFERRED DOES NOT — narrowed on the owner's ruling of 2026-09-09.
+        // The gate used to refuse every mode but Normal, and the dashboard was the loudest thing in
+        // the app when it was written: it posted with sound. It is a silent edit of one message now,
+        // so under 🌙 there is nothing to protect the owner from, and freezing it costs them the one
+        // surface their check-in ritual reads. Under 🔕 they are watching the same thing live in a
+        // terminal and asked not to have it twice, which is the mode's whole contract.
+        if (Resolve_EffectiveMode(ChannelDiscovery.GENERAL_ORCH_ID) == TelegramDeliveryModes.Silenced)
             return;
 
         // Backoff after a failure. Without it the retry is a 2-second hammer at an endpoint that is
@@ -3305,13 +3369,24 @@ internal sealed class BridgeEngineModel(
 
         try
         {
+            // GENERAL'S COMMAND BAR RIDES ON THE DASHBOARD, for the reason the topic bar rides on
+            // PULSE: this is the one message in General the app already keeps current and already
+            // keeps near the bottom, so the buttons stay within reach without a pin the owner has
+            // refused.
+            //
+            // THE ROW-AWARE CALLS, NOT THE PLAIN ONES. A plain edit sends no reply_markup and
+            // Telegram reads the absence as "remove the keyboard", so editing this message the old
+            // way would strip the bar off it on the very next tick — the same trap the per-topic
+            // line documents at its own edit.
+            var commandButtonRows = Build_GeneralCommandButtonRows();
+
             if (action == Telegram.TopicStatusActions.Edit && _generalDashboardMessageId != null)
             {
-                await _telegramClient.Edit_MessageText_Async(_generalDashboardMessageId.Value, text, cancellationToken);
+                await _telegramClient.Edit_MessageTextWithButtonRows_Async(_generalDashboardMessageId.Value, text, commandButtonRows, cancellationToken);
             }
             else
             {
-                var messageId = await _telegramClient.Send_Message_Async(null, text, TelegramSendSounds.Silent, cancellationToken);
+                var messageId = await _telegramClient.Send_MessageWithButtonRows_Async(null, text, commandButtonRows, TelegramSendSounds.Silent, cancellationToken);
 
                 if (messageId == null)
                     return;
@@ -6631,7 +6706,7 @@ internal sealed class BridgeEngineModel(
                     }
                     else if (command == "summary")
                     {
-                        routableMessages.Add(Build_GeneralCommandMessage(message, "Make a summary of what is going on across all orchestrations."));
+                        routableMessages.Add(Build_GeneralCommandMessage(message, GENERAL_SUMMARY_REQUEST));
                     }
                     else if (command == "pending")
                     {
@@ -6964,15 +7039,38 @@ internal sealed class BridgeEngineModel(
         return command.ToLowerInvariant();
     }
 
+    /// <summary>
+    /// The sentence `/summary` becomes, whether the owner TYPED it or TAPPED it. A constant because
+    /// the button and the command must ask the general supervisor the same question — two spellings
+    /// of it would be two commands wearing one name, which is the drift the shared bar exists to
+    /// prevent.
+    /// </summary>
+    const string GENERAL_SUMMARY_REQUEST = "Make a summary of what is going on across all orchestrations.";
+
     /// <summary>A command becomes a canned English request for the GENERAL supervisor (thread null = general channel).</summary>
     static ITelegramOwnerMessage Build_GeneralCommandMessage(ITelegramOwnerMessage original, string cannedText)
     {
-        // APP-COMPOSED, like a tap: the owner typed `/summary`, and the SENTENCE that reaches the
-        // general supervisor was written here. Left unmarked, it met the typed-answer binding — so
-        // with one question open in General, asking for a summary filed that canned sentence as the
-        // owner's answer to it. Same defect the tap fix closed (stage 8a), one route further along.
+        return Build_GeneralCommandMessage(original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, cannedText);
+    }
+
+    /// <summary>
+    /// The same canned request, built from IDS rather than from a message — because a TAP has no
+    /// owner message to copy. `ITelegramCallbackTap` carries an update id and a message id and
+    /// nothing else, so a tapped `/summary` passes zeros for chat and sender, exactly as the
+    /// close-confirmation tap already does for its own synthetic message.
+    ///
+    /// <para>
+    /// ONE CONSTRUCTION SITE ON PURPOSE. The `isAppComposed` flag below is the whole reason this
+    /// helper exists, and a second place that built this message would be a second place that could
+    /// forget it: left unmarked, the canned sentence met the typed-answer binding — so with one
+    /// question open in General, asking for a summary filed that sentence as the owner's answer to
+    /// it. Same defect the tap fix closed (stage 8a), one route further along.
+    /// </para>
+    /// </summary>
+    static ITelegramOwnerMessage Build_GeneralCommandMessage(long updateId, long? messageId, long chatId, long fromUserId, string cannedText)
+    {
         return TelegramOwnerMessage_Factory.Create(
-            original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, null, cannedText, null, null,
+            updateId, messageId, chatId, fromUserId, null, cannedText, null, null,
             isAppComposed: true);
     }
 
@@ -7612,7 +7710,38 @@ internal sealed class BridgeEngineModel(
 
     static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_CommandButtonRows(long messageThreadId)
     {
-        var buttons = Telegram.TopicCommandButtons.Build_ForTopic(messageThreadId);
+        return Chunk_IntoRows(Telegram.TopicCommandButtons.Build_ForTopic(messageThreadId));
+    }
+
+    /// <summary>
+    /// GENERAL's own bar — `/summary /pending /limits /resume /dnd_all`, the owner's list of
+    /// 2026-09-09.
+    ///
+    /// <para>
+    /// THREAD ID ZERO IS DELIBERATE and is what the parser round-trips for General. General is not a
+    /// topic, so there is no thread to name; the tap handler reads a zero as "use the tap's own
+    /// thread", which in General is null, which every command below already treats as General. A
+    /// sentinel would be a second spelling of the same nothing.
+    /// </para>
+    /// <para>
+    /// The bar was BUILT AND UNIT-TESTED SINCE 2026-09-09 AND NEVER RENDERED: `Build_ForGeneral` had
+    /// no production caller at all, and the wiring guard that would have caught the three unhandled
+    /// buttons walked `Commands` only, never `GeneralCommands`. Both halves are fixed here — this
+    /// call site, and the guard.
+    /// </para>
+    /// </summary>
+    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_GeneralCommandButtonRows()
+    {
+        return Chunk_IntoRows(Telegram.TopicCommandButtons.Build_ForGeneral(0));
+    }
+
+    /// <summary>
+    /// ONE chunker for both bars. The loop existed once per caller for as long as there was one
+    /// caller; a second copy of it is how the two bars come to wrap differently for no reason anybody
+    /// decided.
+    /// </summary>
+    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Chunk_IntoRows(IReadOnlyList<(string Data, string Label)> buttons)
+    {
         List<IReadOnlyList<(string Data, string Label)>> rows = [];
 
         for (var index = 0; index < buttons.Count; index += COMMAND_BUTTONS_PER_ROW)
@@ -8762,9 +8891,24 @@ internal sealed class BridgeEngineModel(
     {
         var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
 
-        return TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-            baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-            session.AwaitingTest, Last_OwnerReplyState(session.OrchId), session.Done);
+        // FOUR INPUTS LEFT AND TWO ARRIVED, on 2026-09-10. Mode, away, quiet and presence moved to
+        // PULSE's header, so nothing about DELIVERY renames a topic any more — away and quiet were
+        // the expensive pair, both app-wide, so one toggle used to rename every open topic at once
+        // and every rename writes a service message into the thread it renames. Paused-for-a-limit
+        // and closed arrived, because both are facts about the WORK, which is what this surface is
+        // for.
+        //
+        // They travel as a named record rather than as seven positional arguments, four of them
+        // bool: any two of those could be swapped with everything still compiling, and this caller
+        // is `internal sealed`, so the suite could not see the swap either.
+        return TelegramDeliveryMode_Glyphs.Compose_TopicName(
+            baseName,
+            new TelegramDeliveryMode_Glyphs.TopicNameFlags(
+                OwnerReply: Last_OwnerReplyState(session.OrchId),
+                IsPausedForUsageLimit: Is_SupervisorPausedForUsageLimit(session),
+                IsClosed: session.ClosedUtc != null,
+                IsAwaitingTest: session.AwaitingTest,
+                IsDone: session.Done));
     }
 
     async Task Sync_TopicNames_Inside_Gate_Async(CancellationToken cancellationToken)
@@ -8774,7 +8918,23 @@ internal sealed class BridgeEngineModel(
 
         foreach (var session in _store.Load_All())
         {
-            if (session.ClosedUtc != null || session.TelegramTopicId == null)
+            if (session.TelegramTopicId == null)
+                continue;
+
+            // A CLOSED ORCHESTRATION IS SKIPPED ONLY ONCE ITS TOPIC IS GONE, which is what makes 🏁
+            // reachable at all. This loop refused every closed session outright, so the CLOSED glyph
+            // the owner asked for on 2026-09-10 could never be composed into a name — a glyph built,
+            // documented, unit-tested and never rendered, which is precisely the `Build_ForGeneral`
+            // defect this same branch went and fixed. A review caught it before it shipped.
+            //
+            // THE PREDICATE IS THE DELETE MARKER, not the close. Closing normally DELETES the topic,
+            // and renaming a topic that no longer exists is churn plus a failure per tick — so the
+            // window this glyph is for is the one where the delete did not happen: Telegram refuses
+            // some (past 48 hours, or without `can_delete_messages`) and stage 9a's own path can run
+            // out of attempts. In that window the endeavour is over and its topic still wears a
+            // working name, which the owner cannot tell from a live one. `TelegramTopicDeletedUtc` is
+            // the fact that says which case this is.
+            if (session.ClosedUtc != null && session.TelegramTopicDeletedUtc != null)
                 continue;
 
             var wantedName = Build_WantedTopicName(session);
@@ -9151,8 +9311,23 @@ internal sealed class BridgeEngineModel(
                 // produce nothing instead of a confident wrong clock.
                 SupervisorDeclaredAt = declared == null ? null : Read_TrustedStamp_OrNull(lastSpoken?.DateText),
                 UsageLimitResumeAt = Read_UsageLimitResumeAt_OrNull(session),
-                LastEventAt = Read_TrustedStamp_OrNull(lastSpoken?.DateText),
                 OwnerAsks = asks,
+
+                // THE THREE THAT MOVED OFF THE TOPIC NAME on 2026-09-10. `Mode` is deliberately NOT
+                // among them: the planner already takes it for its own delivery gate, and asking the
+                // engine to pass the same value twice is how two surfaces come to disagree about
+                // whether a topic is muted.
+                //
+                // PRESENCE IS PASSED EVEN THOUGH THE MODE ALREADY FOLDED IT IN, and that is not the
+                // same mistake. `Resolve_EffectiveMode` maps Terminal presence to Silenced, so by the
+                // time the planner sees a mode, 💻 and a hand-typed /mute are indistinguishable — and
+                // the header has to tell them apart, because one says "you are sitting in front of
+                // this" and the other says "you asked me to stop". The cost is that the two readings
+                // are taken from different snapshots and could disagree for one tick; the worst that
+                // renders is 💻 beside a mode glyph that has just changed.
+                IsAway = Is_AwayMode(),
+                IsQuiet = Is_Quiet(session.OrchId),
+                Presence = session.OwnerPresence,
             };
         }
         catch (Exception ex)
@@ -9656,7 +9831,7 @@ internal sealed class BridgeEngineModel(
 
         // Whose move it is, read once for this whole status block: the supervisor row and a solo's
         // member row are the same conversation, so they must not answer it differently.
-        var ownerOwesReply = Status.OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+        var ownerOwesReply = Status.OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
             ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId))) != null;
 
         var supervisorContextSuffix = Build_ContextSuffix_ForSupervisor(supervisorUsage);
@@ -9802,10 +9977,11 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
-            var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-                session.AwaitingTest, Last_OwnerReplyState(session.OrchId), session.Done);
+            // THE ONE COMPOSER, not a second copy of the expression. This site duplicated
+            // `Build_WantedTopicName`'s argument list verbatim, which is the drift decision 12 is
+            // about: the eight-argument call was written twice and the recreated topic would have
+            // kept whichever glyph set the last editor forgot to change here.
+            var topicName = Build_WantedTopicName(session);
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
@@ -11821,6 +11997,34 @@ internal sealed class BridgeEngineModel(
                 await Apply_PresenceCommand_Async(client, threadId, cancellationToken);
                 return true;
 
+            // GENERAL'S THREE, unrendered until 2026-09-10 and unhandled with them. A tap on any of
+            // these used to reach the `default:` arm below and be told the button came from an older
+            // build — while the bar it came from had never been drawn by any build at all.
+            case "summary":
+                // ROUTED, not answered here. /summary is the one General command whose answer is a
+                // model's to write: the general supervisor reads every channel and says what is going
+                // on. The app knows the counts (that is /left) and not the meaning.
+                await Route_OwnerMessage_Async(
+                    Build_GeneralCommandMessage(tap.UpdateId, tap.MessageId, 0, 0, GENERAL_SUMMARY_REQUEST),
+                    cancellationToken);
+                return true;
+
+            case "resume":
+                await Resume_AllSessions_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "dnd_all":
+                // THE LITERAL COMMAND STRING, because that is the argument this method takes: it
+                // derives the wanted mode from the "mute"/"dnd" stem and the app-wide scope from the
+                // "_all" suffix. Passing the string the button already carries keeps the tap and the
+                // typed command on one implementation.
+                //
+                // NOT deferred the way the typed command is. That deferral keeps the toggle from
+                // racing the ✓ acks of the batch it arrived in — this tap was acknowledged above,
+                // before the switch, so there is nothing left to race. Same reasoning as /pc.
+                await Apply_ModeCommand_Async(client, "dnd_all", threadId, cancellationToken);
+                return true;
+
             case "close":
                 // Parks the same request a session would, so a MISTAP cannot end an orchestration:
                 // the owner still confirms with ✅/✋. That is why this calls the command's own
@@ -12054,6 +12258,21 @@ internal sealed class BridgeEngineModel(
         if (!message.IsAppComposed)
             await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
         Clear_AwaitingAnswerFlag(orchId);
+
+        // THE STALL ALERT'S MEMORY IS SETTLED BY THE OWNER SPEAKING, and forgetting it here is what
+        // keeps "once per question" from becoming "once per WORDING, for the life of the process".
+        //
+        // The key is a hash of what the question said (2026-09-10), which fixed the duplicate-`[n]`
+        // failures and opened a new one: agents reuse subjects and bodies, so a supervisor asking the
+        // BYTE-IDENTICAL question again two hours later hashed to the remembered key and was never
+        // alerted about. Keeping the memo across an answer was right for traffic that does not answer
+        // — a supervisor's own follow-up must not buy a second ⚠️ about the same debt — and wrong for
+        // traffic that does. This is the site that knows the difference: the owner has just spoken
+        // into this orchestration, so whatever they owed, they no longer owe.
+        lock (_ownerStateLock)
+        {
+            _stallAlertedQuestionKeyByOrchId.Remove(orchId);
+        }
 
         // The owner is engaged, so nothing is deadlocked — a suppressed entry from before must not
         // surface later, out of context, as if it were still waiting for them.
@@ -12899,6 +13118,23 @@ internal sealed class BridgeEngineModel(
     async Task Tell_LedgerMovement_Async(IOrchestrationSession session, Planning.PlanProgress.IPlanProgress? ledger, CancellationToken cancellationToken)
     {
         if (ledger == null)
+            return;
+
+        // IT CANNOT TELL, SO IT MUST NOT CONSUME. This method REMEMBERS the reading it compares
+        // against, and everything it has to say goes out through `Send_AwayNotice_Async`, which
+        // returns silently in any mode but Normal. Gated after the write instead of before it, every
+        // muted tick advanced the remembered ledger while the notice it produced was dropped on the
+        // floor: on unmute `previous == ledger`, nothing was worth telling, and the accumulated
+        // movement of the whole mute was gone. The end-of-endeavour recap was worse — `_recappedOrchIds`
+        // had already been armed, so `Add` returned false and the recap could never be sent again for
+        // the life of the process. The owner would simply never be told their endeavour had finished.
+        //
+        // It has been latent since the per-topic modes existed (a 🌙 topic hits this on any tick), and
+        // it became the common case on 2026-09-10, when app-wide DND started running this refresh
+        // instead of skipping it. Returning here leaves the previous reading standing, so the FIRST
+        // Normal tick compares against it and reports the whole delta at once — which is what
+        // decision 9 promises a mute delivers.
+        if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
             return;
 
         Planning.PlanProgress.IPlanProgress? previous;
