@@ -75,7 +75,7 @@ public static class TelegramProse_Sender
         {
             log.Log_Warning(orchId, Describe_Refusal("sendMessage", plainFallback, ex));
 
-            return await client.Send_Message_Async(messageThreadId, plainFallback, sound, cancellationToken);
+            return await client.Send_Message_Async(messageThreadId, plainFallback, TelegramSendSounds.Silent, cancellationToken);
         }
     }
 

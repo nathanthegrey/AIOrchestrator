@@ -12712,6 +12712,7 @@ internal sealed class BridgeEngineModel(
             // word for it — however good its content is. What survives here is the AWAY digest
             // above, which is not a cadence: it fires only while the owner is away and only when
             // its content has changed.
+            Post_StatusEntry(session.OrchId, "STATUS\nreinstated by a review mutation", session.OwnerPresence);
             continue;
         }
     }
