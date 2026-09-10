@@ -110,9 +110,11 @@ public class OwnerPushPolicyTests
 
         Assert.True(OwnerPush_Policy.Is_OwnerRestatement(entry));
 
-        // The PUSH half of this claim retired with the narration filter (2026-09-09):
-        // everything the supervisor writes reaches the phone now, greeting or not. What
-        // Is_OnlineGreeting still decides is the topic's own bookkeeping, never the push.
+        // THE SECOND OF THE TWO SURVIVING REFUSALS, and it is refused even while they ARE waiting —
+        // the one condition that used to push anything. Their own words with the session's label on
+        // them say nothing they did not just type, and they would spend the wait the real answer
+        // needs.
+        Assert.False(OwnerPush_Policy.Should_Push(entry, ownerIsWaitingForAReply: true));
     }
 
     [Theory]
@@ -150,10 +152,10 @@ public class OwnerPushPolicyTests
     /// </summary>
     public void AnEmptyEntry_IsStillNotPushed()
     {
-
-        // The PUSH half of this claim retired with the narration filter (2026-09-09):
-        // everything the supervisor writes reaches the phone now, greeting or not. What
-        // Is_OnlineGreeting still decides is the topic's own bookkeeping, never the push.
+        // ONE OF THE TWO SURVIVING REFUSALS, and the reason it is not a filter: Telegram refuses an
+        // empty message, and there is nothing in one to read.
+        Assert.False(OwnerPush_Policy.Should_Push("", ownerIsWaitingForAReply: false));
+        Assert.False(OwnerPush_Policy.Should_Push("   \n  ", ownerIsWaitingForAReply: true));
     }
 
     /// <summary>
@@ -248,9 +250,10 @@ public class OnlineGreetingPushTests
     {
         Assert.False(OwnerPush_Policy.Is_OnlineGreeting(subject));
 
-        // The PUSH half of this claim retired with the narration filter (2026-09-09):
-        // everything the supervisor writes reaches the phone now, greeting or not. What
-        // Is_OnlineGreeting still decides is the topic's own bookkeeping, never the push.
+        // AND IT IS PUSHED ANYWAY, which is the change: the greeting exemption existed because the
+        // filter suppressed everything else. With the filter gone (2026-09-09) what Is_OnlineGreeting
+        // still decides is the topic's own bookkeeping, never whether the entry reaches the phone.
+        Assert.True(OwnerPush_Policy.Should_Push($"## [3] FROM supervisor — d — {subject}\nbody", ownerIsWaitingForAReply: false, subject));
     }
 
     [Fact]
@@ -259,9 +262,8 @@ public class OnlineGreetingPushTests
         Assert.False(OwnerPush_Policy.Is_OnlineGreeting(null));
         Assert.False(OwnerPush_Policy.Is_OnlineGreeting("   "));
 
-        // The PUSH half of this claim retired with the narration filter (2026-09-09):
-        // everything the supervisor writes reaches the phone now, greeting or not. What
-        // Is_OnlineGreeting still decides is the topic's own bookkeeping, never the push.
+        // A caller with no subject to offer pushes exactly as one with a subject does.
+        Assert.True(OwnerPush_Policy.Should_Push("## [3] FROM supervisor — d — s\nbody", ownerIsWaitingForAReply: false));
     }
 
     [Fact]
@@ -278,14 +280,15 @@ public class OnlineGreetingPushTests
             ownerIsWaitingForAReply: false));
     }
 
+    /// <summary>
+    /// Renamed with the filter's removal: a prose mention of ATTACH:/IMAGE: no longer decides
+    /// anything about the PUSH (everything the supervisor writes is pushed). What it still decides
+    /// is whether an UPLOAD happens, which is what this always actually tested.
+    /// </summary>
     [Fact]
-    public void AProseMentionOfTheMarkers_DoesNotPush_BecauseItDeliversNoFile()
+    public void AProseMentionOfTheMarkers_DeliversNoFile()
     {
         // Only a column-0 marker line produces an upload — the engine's extractor is anchored.
-
-        // The PUSH half of this claim retired with the narration filter (2026-09-09):
-        // everything the supervisor writes reaches the phone now, greeting or not. What
-        // Is_OnlineGreeting still decides is the topic's own bookkeeping, never the push.
 
         Assert.False(OwnerPush_Policy.Carries_FileForTheOwner("ATTACH:"));
         Assert.False(OwnerPush_Policy.Carries_FileForTheOwner("ATTACH:   "));
