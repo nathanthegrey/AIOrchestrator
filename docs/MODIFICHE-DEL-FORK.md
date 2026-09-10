@@ -1025,6 +1025,93 @@ per sessione; il beneficio è un revisore che può provare invece di ragionare.
 
 **Dove.** `stage/18-the-reviewer-gets-a-scratch-folder`.
 
+### Un numero fatto per il 97 % di una cosa sola non è un numero
+
+**Com'era.** Lo strumento che misura quanto costa il sistema sommava in un totale unico quattro
+quantità diverse: il testo che il modello elabora davvero, quello che gli viene ripassato identico
+alla richiesta precedente, e la risposta. Misurato sul server il 2026-09-10, **il 97 % di quel
+totale è la seconda** — contesto che il modello aveva già ricevuto e che gli viene ripresentato.
+Il guadagno annunciato dopo il lavoro sulla memoria fra i turni, «meno 23 %», era un movimento
+dentro quella parte lì.
+
+**Cos'è adesso.** Le tre quantità si leggono separate e non si sommano mai. Quella che conta si
+chiama contesto per chiamata, ed è la sola che il lavoro sulla memoria sposti davvero: una cache
+mancata non la cambia, sposta soltanto token da «ripassato» a «nuovo». Lo strumento accetta un
+intervallo di date qualsiasi, e non ha più dentro né una data, né un elenco di sessioni, né un
+divisore.
+
+**Perché.** Un metro che somma cose di significato diverso non misura: dà un numero che si muove
+per la ragione sbagliata. E quattro dei difetti che aveva erano di questa stessa famiglia — ogni
+membro che non fosse un implementatore veniva dichiarato revisore; i divisori per «cosa abbiamo
+consegnato» erano stati stimati a occhio, con accanto un commento dell'autore che diceva di non
+esserne sicuro; lo stesso istante era scritto in due formati diversi in due file, confrontati come
+testo. Il quinto era il più istruttivo: **i supervisori venivano riconosciuti da un elenco di due
+sessioni scritto a mano**, perché l'informazione vera vive in un file nascosto che il criterio di
+ricerca usato non poteva vedere. Non era pigrizia, era una cosa invisibile. Leggendola, per il solo
+8 settembre, **423 chiamate da 539 mila token di contesto l'una** escono da «non attribuito» ed
+entrano sotto «supervisore».
+
+**Il prezzo.** I due strumenti precedenti sono stati rimossi, quindi i numeri pubblicati a suo tempo
+non si rigenerano più con il codice che li aveva prodotti: restano nella storia del repository e
+nel rapporto che li discute. La scelta è voluta — un metro rotto lasciato lì viene riusato.
+
+**Verificato** il 2026-09-10 contro gli stessi dati misurati a mano, senza modificare nessuna
+costante: il contesto per chiamata di un implementatore è 390 mila nella finestra dell'8 settembre e
+104 mila in quella del 10; la serie ora per ora sale da 146 a 442 mila prima del cambiamento e resta
+piatta dopo. Una seconda lettura, che prende i dati da tutt'altra parte, dà lo stesso risultato: il
+contesto della prima chiamata di un turno passa da 207 a 66 mila.
+
+**E un errore evitato per un soffio, scritto qui perché non torni.** La prima versione dello
+strumento mostrava anche «il contesto della prima chiamata» in una lettura per intervallo, e dava
+zero. Su una finestra non si distingue l'avvio di una sessione dalla prima chiamata che capita
+dentro l'intervallo, e una chiamata a metà sessione è tutta cache. La colonna è stata tolta, non
+spiegata: un numero sbagliato è peggio di un numero mancante.
+
+**Dove.** `stage/21-the-instrument`.
+
+### Il conto di quello che è stato consegnato adesso ha una storia
+
+**Com'era.** Il sistema sapeva dire quanto consuma e non quanto produce. «Ieri sono stati bruciati
+600 milioni di token» non è giudicabile da solo: lo stesso numero è un affare contro venti righe
+consegnate e un disastro contro una. Il conto non mancava — il piano di lavoro lo porta — ma
+mancava la sua storia. Misurato sul server il 2026-09-10: **nessuna delle sei lavorazioni tiene il
+proprio piano sotto controllo di versione**, il file viene riscritto sopra se stesso, e il registro
+dell'app annota «il piano è in ritardo sui verdetti» e non annota mai «questa riga si è chiusa alle
+14:23». Il conto di ieri non esiste più e non è recuperabile.
+
+**Cos'è adesso.** Un campionatore legge i piani a ogni ora e ne annota i conteggi. Da lì si ricava
+quante righe si sono chiuse fra due momenti, che è il divisore che mancava: non più «ieri abbiamo
+speso Y», ma «questa consegna è costata X».
+
+**Perché non dentro l'app.** Un evento scritto dall'applicazione sarebbe esatto al minuto e
+costerebbe una compilazione e una messa in produzione che riavvia sei lavorazioni vive — e le tre
+regole più dure di questo progetto parlano proprio di quanto si perda fra ciò che si compila, ciò
+che si installa e ciò che gira davvero. Il costo per consegna non ha bisogno del minuto: «fra le 14
+e le 15 si sono chiuse due righe» divide altrettanto bene. Il campionatore vive accanto
+all'applicazione, non tocca niente di suo, e si toglie cancellando due file di avvio, uno script e
+una cartella.
+
+**Conta come conta l'app, non «più o meno».** I sei marcatori del piano, la voce «non si fa» tenuta
+fuori dal totale, «bloccato sul proprietario» contato sia fra i bloccati sia a parte, e soprattutto
+le sezioni **parcheggiate** saltate — così una scoperta che nessuno ha chiesto non può muovere la
+barra del proprietario. Un divisore che non è d'accordo con la barra di avanzamento è peggio di
+nessun divisore.
+
+**La metà che i dati veri non toccano.** Al momento dell'installazione tutti e sette i piani vivi
+avevano zero righe sotto una sezione parcheggiata: un'esclusione che avesse smesso di funzionare
+sarebbe sembrata corretta, perché ogni conteggio coincideva con quello ingenuo. Il controllo interno
+usa quindi un piano finto che la esercita, e **è stato rotto apposta tre volte prima di crederci** —
+spegnendo l'esclusione, contando «non si fa» nel totale, togliendo «bloccato sul proprietario» dai
+bloccati: rosso tutte e tre le volte.
+
+**Il prezzo, e va detto subito.** Il campionatore **parte da zero**: la prima misura è la linea di
+partenza, e di tutto quello che è stato consegnato prima non resta niente. E duplica le regole di
+conteggio dell'applicazione: se quelle cambiano, va cambiato anche lui, altrimenti i due numeri
+divergono in silenzio.
+
+**Dove.** `stage/21-the-instrument`; installato sul server come temporizzatore d'utente, che è la
+convenzione della macchina, senza privilegi di amministratore.
+
 ## 6. Il ponte con Telegram: che cosa regge sotto
 
 L'audit del 2026-09-09 sull'integrazione Telegram (i brief in
@@ -1179,7 +1266,7 @@ risolvibile da sola» che tre sonde pinnano. Scelta del proprietario, la variant
 ## 7. Che cosa stiamo facendo adesso
 
 Questa sezione è l'unica che parla al futuro, quindi invecchia in fretta: **aggiornata al
-2026-09-10, sera**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
+2026-09-10, notte**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
 
 **Sei rami fusi e non ancora in produzione — un solo riavvio, quando i batch in corso hanno finito
 (decisione del proprietario, 2026-09-10 sera).** `stage/15` (la PULSE ogni cinque minuti, il freno
@@ -1201,6 +1288,27 @@ La prima sera è una misura: quante volte vibra il telefono, e se i sei campi di
 (le ricevute come reazioni e le voci tipizzate sono atterrate il 10/9 pomeriggio); il deploy — binario e
 kit nello stesso passo, lo strumento di scrittura compreso — è del proprietario. Resta da fare G, la suite
 affidabile sotto carico, deciso per dopo.
+
+**Il lavoro sui token è stato riletto da fuori, e il risultato regge — ma non per la ragione che
+era stata scritta.** Una sessione che non l'aveva fatto ha rimisurato la produzione il 2026-09-10.
+Il guadagno c'è ed è più grande di quanto annunciato: il contesto per chiamata di un implementatore
+scende del 76 %, a modello e ruolo costanti. La prova però non è il totale di giornata — quel
+confronto metteva una giornata intera contro mezza, sommava classi di token diverse, e cambiava di
+un ordine di grandezza a seconda di quale giorno si prendesse come partenza. La prova è **la
+forma**: prima il contesto di ogni chiamata cresceva senza fermarsi dentro la sessione, adesso è
+piatto. E il merito è di **una sola** delle cinque modifiche spedite, il pacchetto di memoria, andato
+in produzione la sera dell'8 e non del 9: attraverso la messa in produzione del 9 sera i numeri non
+si muovono di niente. Il rapporto, gli script e le due revisioni che l'hanno corretto stanno in
+`docs/superpowers/specs/2026-09-10-independent-review/`.
+
+**Il passo del supervisore resta in calendario, e adesso si sa che ci si arriva senza la protezione
+prevista.** Il piano dei token voleva prima il raggruppamento dei rapporti, sul conto che avrebbe
+dimezzato i risvegli del supervisore — «meno 40 %» a stima. Misurato: **circa il 9 %**, un quarto
+di quello. La condizione non era «se questo fallisce il passo è pericoloso», era di ordine: prima la
+cosa gratis. Quella cosa gratis non è arrivata, il supervisore è ancora l'unico ruolo che si
+trascina la trascrizione a **546 mila token per chiamata** — sei volte un implementatore — e il suo
+pacchetto è già scritto e spento. Il rischio, che è sul giudizio e non sul costo, è esattamente
+quello di prima.
 
 **Cose aperte, dette perché non sembrino risolte.**
 - **La suite non è affidabile sotto carico — deciso: si fa dopo A–F.** Verde in seriale a macchina
