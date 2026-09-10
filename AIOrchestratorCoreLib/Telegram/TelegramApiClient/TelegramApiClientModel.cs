@@ -19,33 +19,56 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     readonly long _supergroupChatId;
 
     /// <summary>
-    /// THE ONE PLACE THE OUTBOUND RATE LIMIT LIVES. Guarded by its own lock because sends come from
-    /// both loops — the mirror tick and the inbound batch — and a bucket read-modify-written from
-    /// two threads hands the same token out twice, which is the burst it exists to prevent.
-    /// See <see cref="TokenBucket_Gate"/> for why a bucket and not a delay.
+    /// THE ONE PLACE THE OUTBOUND RATE LIMIT LIVES — now two buckets rather than one, and held
+    /// OUTSIDE this class so the send allowance can survive a restart (brief F5). See
+    /// <see cref="TelegramSendBudget.ITelegramSendBudget"/> for both, and
+    /// <see cref="TokenBucket_Gate"/> for why a bucket and not a delay.
     /// </summary>
-    readonly Lock _bucketLock = new();
-    double _bucketTokens = TokenBucket_Gate.DEFAULT_CAPACITY;
-    DateTime _bucketRefilledUtc = DateTime.UtcNow;
+    readonly TelegramSendBudget.ITelegramSendBudget _budget;
 
-    public TelegramApiClientModel(string botToken, long supergroupChatId)
+    public TelegramApiClientModel(string botToken, long supergroupChatId, TelegramSendBudget.ITelegramSendBudget budget)
     {
+        _budget = budget;
         _botToken = botToken;
         _supergroupChatId = supergroupChatId;
-        _httpClient = new HttpClient
+        // POOLED CONNECTIONS ARE RECYCLED, and this daemon is the case that needs it: it runs for
+        // WEEKS on the VPS, and SocketsHttpHandler's default PooledConnectionLifetime is Infinite —
+        // a connection opened at start is kept and reused for the life of the process, so it never
+        // re-resolves DNS. api.telegram.org sits behind a rotating set of addresses; when the one
+        // this process pinned is withdrawn, every call fails on a socket that will never be
+        // replaced, and only a restart brings the bridge back. Two minutes is the documented remedy
+        // (it is also what ASP.NET Core's own factory defaults to): the handler retires idle-able
+        // connections at that age and the next request re-resolves, at the cost of one handshake.
+        //
+        // The idle timeout is separate and shorter for the same reason it always is: an idle
+        // connection that a middlebox has already dropped is worse than no connection.
+        var handler = new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
+        };
+
+        _httpClient = new HttpClient(handler)
         {
             // Must exceed the getUpdates long-poll timeout with margin.
             Timeout = TimeSpan.FromSeconds(90),
         };
     }
 
-    public async Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken)
+    public async Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
         var payload = new JsonObject
         {
             ["chat_id"] = _supergroupChatId,
             ["name"] = topicName,
         };
+
+        // GUARDED AT THE WIRE, not only at the caller. Telegram refuses the WHOLE call for a colour
+        // outside its six, and a refused createForumTopic costs the orchestration its topic — its
+        // entries then mirror into General, which Resolve_ThreadId_OrNull_Async calls the one
+        // failure here worse than a lost tick. config.json is hand-edited, so this is reachable.
+        if (iconColor != null && TopicColor_Rotation.Is_Permitted(iconColor.Value))
+            payload["icon_color"] = iconColor.Value;
 
         var resultJson = await Post_Async("createForumTopic", payload, cancellationToken);
 
@@ -67,7 +90,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["name"] = newName,
         };
 
-        await Post_Async("editForumTopic", payload, cancellationToken);
+        await Post_Async("editForumTopic", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     public async Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken)
@@ -81,7 +104,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["name"] = newName,
         };
 
-        await Post_Async("editGeneralForumTopic", payload, cancellationToken);
+        await Post_Async("editGeneralForumTopic", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     public async Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken)
@@ -92,7 +115,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["message_thread_id"] = messageThreadId,
         };
 
-        await Post_Async("deleteForumTopic", payload, cancellationToken);
+        await Post_Async("deleteForumTopic", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     public async Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken)
@@ -115,7 +138,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
                 ["message_id"] = messageThreadId,
             };
 
-            await Post_Async("deleteMessage", deletePayload, cancellationToken);
+            await Post_Async("deleteMessage", deletePayload, cancellationToken, TelegramCallClasses.Control);
         }
         catch (OperationCanceledException)
         {
@@ -138,7 +161,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
-        var responseJson = await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true);
+        var responseJson = await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message);
 
         return Read_MessageId_OrNull(responseJson);
     }
@@ -155,7 +178,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
-        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message));
     }
 
     /// <summary>
@@ -189,7 +212,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         if (messageThreadId != null)
             payload["message_thread_id"] = messageThreadId.Value;
 
-        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message));
     }
 
     public async Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
@@ -201,7 +224,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["text"] = text,
         };
 
-        await Post_Async("editMessageText", payload, cancellationToken);
+        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     public async Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
@@ -214,7 +237,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["parse_mode"] = "HTML",
         };
 
-        await Post_Async("editMessageText", payload, cancellationToken);
+        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     /// <summary>
@@ -241,7 +264,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(buttonRows) },
         };
 
-        await Post_Async("editMessageText", payload, cancellationToken);
+        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     /// <summary>
@@ -316,7 +339,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             payload["message_thread_id"] = messageThreadId.Value;
 
         // The id is needed later: on a tap this message is rewritten to show the chosen option.
-        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, rateLimited: true));
+        return Read_MessageId_OrNull(await Post_Async("sendMessage", payload, cancellationToken, TelegramCallClasses.Message));
     }
 
     public async Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
@@ -327,7 +350,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["text"] = text,
         };
 
-        await Post_Async("answerCallbackQuery", payload, cancellationToken);
+        await Post_Async("answerCallbackQuery", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     public async Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken)
@@ -338,7 +361,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["message_id"] = messageId,
         };
 
-        await Post_Async("editMessageReplyMarkup", payload, cancellationToken);
+        await Post_Async("editMessageReplyMarkup", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     public async Task Delete_Message_Async(long messageId, CancellationToken cancellationToken)
@@ -349,7 +372,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["message_id"] = messageId,
         };
 
-        await Post_Async("deleteMessage", payload, cancellationToken);
+        await Post_Async("deleteMessage", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
     public async Task Send_Photo_Async(long? messageThreadId, string filePath, CancellationToken cancellationToken)
@@ -357,6 +380,9 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         using var form = Build_MultipartForm(messageThreadId);
 
         var photoBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
+
+        Refuse_IfOverCap(photoBytes.Length, TelegramFileCaps.MAX_PHOTO_BYTES, "sendPhoto", $"'{filePath}'");
+
         form.Add(new ByteArrayContent(photoBytes), "photo", Path.GetFileName(filePath));
 
         await Post_Multipart_Async("sendPhoto", form, $"for '{filePath}'", cancellationToken);
@@ -372,11 +398,36 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     {
         using var form = Build_MultipartForm(messageThreadId);
 
+        Refuse_IfOverCap(content.Length, TelegramFileCaps.MAX_DOCUMENT_BYTES, "sendDocument", $"'{fileName}'");
+
         form.Add(new StringContent(captionHtml), "caption");
         form.Add(new StringContent("HTML"), "parse_mode");
         form.Add(new ByteArrayContent(content), "document", fileName);
 
         await Post_Multipart_Async("sendDocument", form, $"for '{fileName}' ({content.Length} bytes)", cancellationToken);
+    }
+
+    /// <summary>
+    /// THE LAST LINE OF DEFENCE ON A SIZE CAP (brief F7). <see cref="Bridge.EntryAttachment_Policy"/>
+    /// already refuses an oversized <c>IMAGE:</c> or <c>ATTACH:</c> and tells the AGENT why — that is
+    /// the useful refusal and it stays where it is. This one exists because the policy guards ONE
+    /// path: the screenshots and the undelivered-entry digest call these methods directly, and an
+    /// oversized one reached Telegram to be answered with a 413 or an opaque 400.
+    ///
+    /// <para>
+    /// A plain <see cref="Exception"/> rather than a <see cref="TelegramApiException"/>, deliberately:
+    /// Telegram did not answer this, we did, and manufacturing a status code for a call that never
+    /// left the machine would put a fiction in front of every caller that classifies by status.
+    /// </para>
+    /// </summary>
+    static void Refuse_IfOverCap(long lengthBytes, long capBytes, string method, string subject)
+    {
+        if (lengthBytes <= capBytes)
+            return;
+
+        throw new Exception(
+            $"Telegram '{method}' refused before sending: {subject} is {TelegramFileCaps.In_Megabytes(lengthBytes)} MB, "
+            + $"over Telegram's {TelegramFileCaps.In_Megabytes(capBytes)} MB cap");
     }
 
     /// <summary>The part every multipart upload shares: which chat, and which topic inside it.</summary>
@@ -417,7 +468,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     /// </summary>
     async Task Post_Multipart_Async(string method, MultipartFormDataContent form, string subject, CancellationToken cancellationToken)
     {
-        await Wait_ForBucket_Async(cancellationToken);
+        await Wait_ForBudget_Async(TelegramCallClasses.Message, cancellationToken);
 
         var response = await _httpClient.PostAsync(Build_MethodUrl(method), form, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -544,11 +595,24 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         var filePath = root["result"]?["file_path"]?.GetValue<string>()
             ?? throw new Exception($"getFile response has no result.file_path: {resultJson}");
 
+        // REFUSED BEFORE A BYTE IS PULLED (brief F7). The download is read fully into memory, so an
+        // unbounded one is a way to take the bridge down from a phone — and 20 MB is Telegram's own
+        // ceiling for a bot anyway, so anything above it would fail after we had paid for it.
+        // getFile's file_size is advisory (it can be absent), which is why the read below is capped
+        // as well rather than instead.
+        var declaredSize = root["result"]?["file_size"]?.GetValue<long>();
+
+        if (declaredSize > TelegramFileCaps.MAX_DOWNLOAD_BYTES)
+            throw new Exception($"Telegram file '{fileId}' is {TelegramFileCaps.In_Megabytes(declaredSize.Value)} MB, over the {TelegramFileCaps.In_Megabytes(TelegramFileCaps.MAX_DOWNLOAD_BYTES)} MB a bot may download — not fetched");
+
         var downloadUrl = $"https://api.telegram.org/file/bot{_botToken}/{filePath}";
         var response = await _httpClient.GetAsync(downloadUrl, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
             throw new TelegramApiException((int)response.StatusCode, $"Telegram file download failed with HTTP {(int)response.StatusCode} for file id '{fileId}'");
+
+        if (response.Content.Headers.ContentLength > TelegramFileCaps.MAX_DOWNLOAD_BYTES)
+            throw new Exception($"Telegram file '{fileId}' is {TelegramFileCaps.In_Megabytes(response.Content.Headers.ContentLength!.Value)} MB, over the {TelegramFileCaps.In_Megabytes(TelegramFileCaps.MAX_DOWNLOAD_BYTES)} MB a bot may download — not fetched");
 
         return await response.Content.ReadAsByteArrayAsync(cancellationToken);
     }
@@ -572,12 +636,11 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     /// before, so every caller's existing classification of the failure is unchanged.
     /// </para>
     /// </summary>
-    async Task<string> Post_Async(string method, JsonObject payload, CancellationToken cancellationToken, bool rateLimited = false)
+    async Task<string> Post_Async(string method, JsonObject payload, CancellationToken cancellationToken, TelegramCallClasses callClass = TelegramCallClasses.Unmetered)
     {
         for (var attempt = 0; ; attempt++)
         {
-            if (rateLimited)
-                await Wait_ForBucket_Async(cancellationToken);
+            await Wait_ForBudget_Async(callClass, cancellationToken);
 
             var response = await _httpClient.PostAsJsonAsync(Build_MethodUrl(method), payload, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -601,7 +664,13 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             //
             // Past the inline cap the failure is handed to the caller, which is where the per-channel
             // backoff and the outcome classification already live.
-            if (statusCode == 429 && rateLimited && attempt < RATE_LIMIT_RETRIES)
+            // CONTROL CALLS ARE RETRIED TOO NOW (brief F5), under a much shorter cap. The comment
+            // above records why they were forbidden outright: a retry_after of 300 slept five
+            // minutes twice inside one two-second mirror tick, and a callback query is dead after
+            // about ten seconds anyway. Both objections are about the LENGTH of the wait, not about
+            // retrying, so the fix is the cap — two seconds — rather than the ban. An unmetered
+            // call is still never retried: it is unmetered precisely because it must not queue.
+            if (statusCode == 429 && callClass != TelegramCallClasses.Unmetered && attempt < RATE_LIMIT_RETRIES)
             {
                 var wait = TokenBucket_Gate.Read_RetryAfter(retryAfterSeconds);
 
@@ -610,7 +679,11 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
                 if (wait <= TimeSpan.Zero)
                     wait = TimeSpan.FromSeconds(TokenBucket_Gate.DEFAULT_REFILL_SECONDS / TokenBucket_Gate.DEFAULT_CAPACITY);
 
-                if (wait <= TokenBucket_Gate.MAXIMUM_INLINE_RETRY_WAIT)
+                var ceiling = callClass == TelegramCallClasses.Control
+                    ? TokenBucket_Gate.MAXIMUM_CONTROL_RETRY_WAIT
+                    : TokenBucket_Gate.MAXIMUM_INLINE_RETRY_WAIT;
+
+                if (wait <= ceiling)
                 {
                     await Task.Delay(wait, cancellationToken);
                     continue;
@@ -621,30 +694,15 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         }
     }
 
-    /// <summary>
-    /// Blocks until the bucket has a token. Recomputed after each sleep rather than sleeping the
-    /// whole predicted wait in one go: several senders race here, and the one that wakes first
-    /// should take the token that actually became available.
-    /// </summary>
-    async Task Wait_ForBucket_Async(CancellationToken cancellationToken)
+    /// <summary>Blocks until the class of call named by <paramref name="callClass"/> may go out.</summary>
+    Task Wait_ForBudget_Async(TelegramCallClasses callClass, CancellationToken cancellationToken)
     {
-        while (true)
+        return callClass switch
         {
-            TimeSpan wait;
-
-            lock (_bucketLock)
-            {
-                var (tokens, refilledUtc, computedWait) = TokenBucket_Gate.Take(_bucketTokens, _bucketRefilledUtc, DateTime.UtcNow);
-                _bucketTokens = tokens;
-                _bucketRefilledUtc = refilledUtc;
-                wait = computedWait;
-            }
-
-            if (wait <= TimeSpan.Zero)
-                return;
-
-            await Task.Delay(wait, cancellationToken);
-        }
+            TelegramCallClasses.Message => _budget.Wait_ForSend_Async(cancellationToken),
+            TelegramCallClasses.Control => _budget.Wait_ForControl_Async(cancellationToken),
+            _ => Task.CompletedTask,
+        };
     }
 
     /// <summary>

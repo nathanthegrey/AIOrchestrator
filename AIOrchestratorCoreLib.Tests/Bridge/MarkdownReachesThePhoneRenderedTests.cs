@@ -356,7 +356,7 @@ internal sealed class ByMethodTelegram_Fake : ITelegramApiClient
 
     public Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken) => Task.FromResult(7777L);
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => Task.FromResult(7777L);
 
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
 

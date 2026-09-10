@@ -97,11 +97,18 @@ public static class OrchestratorConfig_Loader
         var reposArray = new JsonArray();
         foreach (var repo in config.Repos)
         {
-            reposArray.Add(new JsonObject
+            var repoObject = new JsonObject
             {
                 ["name"] = repo.Name,
                 ["path"] = repo.Path,
-            });
+            };
+
+            // WRITTEN ONLY WHEN IT EXISTS, so a config.json belonging to an owner who has never
+            // started a topic stays exactly as clean as it was (brief F1).
+            if (repo.TopicColor != null)
+                repoObject["topicColor"] = repo.TopicColor.Value;
+
+            reposArray.Add(repoObject);
         }
 
         var configRoot = Read_JsonObject_ForEditing(paths.ConfigFile);
@@ -190,7 +197,7 @@ public static class OrchestratorConfig_Loader
             if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(path))
                 continue;
 
-            repos.Add(RepoEntry_Factory.Create(name, path));
+            repos.Add(RepoEntry_Factory.Create(name, path, Get_Int_OrNull(repoObject, "topicColor")));
         }
 
         return repos;

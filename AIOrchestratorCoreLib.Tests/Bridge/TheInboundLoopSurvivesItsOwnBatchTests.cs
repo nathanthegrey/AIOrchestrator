@@ -547,7 +547,7 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             return Task.FromResult(_downloadBytes);
     }
 
-    public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken) => Task.FromResult(1L);
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => Task.FromResult(1L);
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;

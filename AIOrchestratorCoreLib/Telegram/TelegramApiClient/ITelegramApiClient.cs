@@ -6,7 +6,13 @@ namespace AIOrchestratorCoreLib.Telegram.TelegramApiClient;
 /// </summary>
 public interface ITelegramApiClient
 {
-    Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken);
+    /// <param name="iconColor">
+    /// One of Telegram's six permitted <c>icon_color</c> values (see
+    /// <see cref="TopicColor_Rotation.PALETTE"/>), or null for its default. An explicit parameter
+    /// rather than an optional one: a topic's colour is fixed at creation and can never be changed
+    /// afterwards, so every call site has to have decided.
+    /// </param>
+    Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken);
 
     /// <summary>Renames a topic (used when the supervisor sets the short goal name).</summary>
     Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken);

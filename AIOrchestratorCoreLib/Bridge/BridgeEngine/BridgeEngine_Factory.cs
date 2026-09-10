@@ -10,6 +10,7 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tailing.ChannelTailer;
 using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
+using AIOrchestratorCoreLib.Telegram.TelegramSendBudget;
 using AIOrchestratorCoreLib.Time.Clock;
 using AIOrchestratorCoreLib.Watchdog.SessionWatchdog;
 
@@ -51,6 +52,7 @@ public static class BridgeEngine_Factory
     {
         var startupConfig = configProvider.Get_Current();
         ITelegramApiClient? telegramClient = null;
+        ITelegramSendBudget? sendBudget = null;
 
         if (startupConfig.Is_TelegramConfigured())
         {
@@ -59,10 +61,20 @@ public static class BridgeEngine_Factory
             var supergroupChatId = startupConfig.TelegramSupergroupChatId
                 ?? throw new Exception("Is_TelegramConfigured returned true but the supergroup chat id is null");
 
-            telegramClient = TelegramApiClient_Factory.Create(botToken, supergroupChatId);
+            // THE SEND ALLOWANCE IS RESTORED, NOT RESET (brief F5). The same object goes to the
+            // client, which spends from it, and to the engine, which writes it back into
+            // .bridge-state.json on every tick — so a restart resumes where the last process
+            // stopped instead of granting a free burst of twenty messages.
+            var persisted = BridgeState_Store.Load_SendBucket_OrNull(paths);
+
+            sendBudget = persisted == null
+                ? TelegramSendBudget_Factory.Create_Fresh()
+                : TelegramSendBudget_Factory.Create_FromPersisted(persisted.Value.Tokens, persisted.Value.RefilledUtc, DateTime.UtcNow);
+
+            telegramClient = TelegramApiClient_Factory.Create(botToken, supergroupChatId, sendBudget);
         }
 
-        return Create_WithTelegramClient(paths, configProvider, store, launcher, log, telegramClient, timing);
+        return Create_WithTelegramClient(paths, configProvider, store, launcher, log, telegramClient, timing, sendBudget);
     }
 
     /// <summary>
@@ -89,13 +101,19 @@ public static class BridgeEngine_Factory
         IOrchestrationLauncher launcher,
         IOrchestrationLog log,
         ITelegramApiClient? telegramClient,
-        IBridgeEngineTiming timing)
+        IBridgeEngineTiming timing,
+        ITelegramSendBudget? sendBudget = null)
     {
+        // NAMED, not positional. The rebase onto brief B put an `IHostWindowing?` in the slot this
+        // argument used to occupy, and the only thing that stopped it being handed to the wrong
+        // parameter was that the two types differ. The next optional parameter added here might not
+        // be so lucky, so the trailing ones are named from now on.
         return Create_WithDecisionState(
             paths, configProvider, store, launcher, log, telegramClient,
             EngineStateStore_Factory.Create_File(paths, log),
             Clock_Factory.Create_System(),
-            timing);
+            timing,
+            sendBudget: sendBudget);
     }
 
     /// <summary>
@@ -132,7 +150,11 @@ public static class BridgeEngine_Factory
         // HostWindowing_Factory.Create_Unsupported() to assert the refusal REGARDLESS of the OS the
         // suite happens to run on — a probe that depends on its own host being Linux is a probe that
         // silently stops testing anything on Windows.
-        Hosting.HostWindowing.IHostWindowing? hostWindowing = null)
+        Hosting.HostWindowing.IHostWindowing? hostWindowing = null,
+
+        // Null in file-only mode and on the test seams that hand in their own client: with no
+        // budget the engine simply writes no sendBucket key, and the next start begins full.
+        ITelegramSendBudget? sendBudget = null)
     {
         // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
         var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
@@ -161,6 +183,7 @@ public static class BridgeEngine_Factory
         return new BridgeEngineModel(
             paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, transcriber,
             printTurns, lastUpdateId, engineStateStore, restoredState, clock, timing,
-            hostWindowing ?? Hosting.HostWindowing.HostWindowing_Factory.Create_ForThisHost());
+            hostWindowing ?? Hosting.HostWindowing.HostWindowing_Factory.Create_ForThisHost(),
+            sendBudget);
     }
 }
