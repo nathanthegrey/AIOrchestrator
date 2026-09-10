@@ -343,6 +343,33 @@ internal sealed class OrchestrationSessionStoreModel(ISupervisionPaths paths) : 
         }
     }
 
+    public void Mark_TopicDeletePending(string orchId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithTopicDeletePending(session, DateTime.UtcNow));
+        }
+    }
+
+    public void Mark_TopicDeleted(string orchId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithTopicDeleted(session, DateTime.UtcNow));
+        }
+    }
+
+    public void Mark_TopicDeleteFailureReported(string orchId)
+    {
+        lock (_writeLock)
+        {
+            var session = Get_Session(orchId);
+            Save(OrchestrationSession_Factory.CreateFrom_Existing_WithTopicDeleteFailureReported(session));
+        }
+    }
+
     public void Close_Orchestration(string orchId)
     {
         lock (_writeLock)

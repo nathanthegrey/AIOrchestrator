@@ -20,13 +20,19 @@ internal sealed class OrchestrationSessionModel(
     DateTime? closedUtc,
     long? statusLineMessageId,
     bool awaitingTest,
-    bool done) : IOrchestrationSession
+    bool done,
+    DateTime? telegramTopicDeletePendingUtc,
+    DateTime? telegramTopicDeletedUtc,
+    bool telegramTopicDeleteFailureReported) : IOrchestrationSession
 {
     public string OrchId { get; } = orchId;
     public string RepoName { get; } = repoName;
     public string RepoPath { get; } = repoPath;
     public DateTime CreatedUtc { get; } = createdUtc;
     public long? TelegramTopicId { get; } = telegramTopicId;
+    public DateTime? TelegramTopicDeletePendingUtc { get; } = telegramTopicDeletePendingUtc;
+    public DateTime? TelegramTopicDeletedUtc { get; } = telegramTopicDeletedUtc;
+    public bool TelegramTopicDeleteFailureReported { get; } = telegramTopicDeleteFailureReported;
 
     public long? StatusLineMessageId { get; } = statusLineMessageId;
     public int? SupervisorPid { get; } = supervisorPid;

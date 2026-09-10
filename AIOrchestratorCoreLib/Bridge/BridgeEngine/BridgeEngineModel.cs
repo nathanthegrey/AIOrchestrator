@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Bridge.OwnerDeliveryBuffer;
 using AIOrchestratorCoreLib.Bridge.PendingAnnouncements;
+using AIOrchestratorCoreLib.Bridge.TopicDeletion;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.DiscoveredChannel;
 using AIOrchestratorCoreLib.Configuration;
@@ -1090,6 +1091,12 @@ internal sealed class BridgeEngineModel(
 
         if (_telegramClient != null)
             loops.Add(Run_Supervised_Async("inbound", Run_InboundLoop_Async, cancellationToken));
+
+        // NOT A LOOP AND NOT AWAITED. It runs once, works through whatever the last process could
+        // not delete, and ends — so it is neither supervised nor part of the WhenAll below: a bridge
+        // that would not start until Telegram answered a housekeeping delete would be a bridge the
+        // owner loses whenever Telegram is slow.
+        _ = Task.Run(() => Sweep_PendingTopicDeletes_Async(cancellationToken), cancellationToken);
 
         _log.Log_Info(GLOBAL_ORCH_ID, _telegramClient == null
             ? "Bridge started (file-only mode — Telegram not configured)"
@@ -5028,7 +5035,13 @@ internal sealed class BridgeEngineModel(
             SessionTerminator.Kill_OrchestrationSessions(_paths, orchId);
 
             if (_telegramClient != null && session.TelegramTopicId != null)
+            {
+                // STAMPED BEFORE THE ASK, not after it. The stamp is what a later start reads to
+                // know a delete is owed; written after the attempt it would be missing for exactly
+                // the case it exists to cover — the process dying while the delete was failing.
+                _store.Mark_TopicDeletePending(orchId);
                 Delete_TelegramTopic_FireAndForget(orchId, session.TelegramTopicId.Value);
+            }
 
             Append_GeneralAppEntry(AppEntryAudiences.Owner,
                 $"orchestration '{orchId}' closed — {reason}",
@@ -5918,22 +5931,199 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// Deletes an orchestration's topic and KEEPS TRYING — the point of effect for brief E1; the
+    /// decisions are <see cref="TopicDelete_Decider"/>'s.
+    ///
+    /// <para>
+    /// It was one call, fire-and-forget, its failure swallowed into a log line and recorded nowhere
+    /// (audit 2026-09-09). The owner's ruling is that closed topics ARE deleted, so a delete that
+    /// silently did not happen is that ruling quietly not kept — an orphan topic on a phone that
+    /// will hold thousands of them, with nothing on disk that any later start could act on.
+    /// </para>
+    /// <para>
+    /// STILL DETACHED, and deliberately: closing an orchestration must not wait on Telegram. What
+    /// changed is that the detached task is now BOUNDED (four attempts) and LEAVES A RECORD — the
+    /// pending stamp is written by the caller BEFORE this runs, so a process killed at any point in
+    /// the loop still hands the work to <see cref="Sweep_PendingTopicDeletes_Async"/> at the next
+    /// start.
+    /// </para>
+    /// </summary>
     void Delete_TelegramTopic_FireAndForget(string orchId, long topicId)
     {
-        _ = Task.Run(async () =>
+        _ = Task.Run(() => Delete_TelegramTopic_WithRetries_Async(orchId, topicId, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The retry loop itself, awaitable so the start-up sweep can walk its backlog one at a time
+    /// rather than firing every pending delete at Telegram's rate limit simultaneously.
+    /// </summary>
+    async Task Delete_TelegramTopic_WithRetries_Async(string orchId, long topicId, CancellationToken cancellationToken)
+    {
+        for (var attemptsMade = 1; ; attemptsMade++)
         {
+            Exception? failure = null;
+
             try
             {
                 var client = _telegramClient
                     ?? throw new Exception($"Telegram client vanished while deleting topic {topicId} of '{orchId}'");
 
-                await client.Delete_ForumTopic_Async(topicId, CancellationToken.None);
+                await client.Delete_ForumTopic_Async(topicId, cancellationToken);
+            }
+            // A SHUTDOWN IS NOT A REFUSAL. Rethrowing here would abandon the delete WITHOUT recording
+            // anything — but the pending stamp is already on disk, so the next start picks it up.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _log.Log_Info(orchId, $"Telegram topic {topicId} delete abandoned at shutdown after attempt {attemptsMade} — still pending, the next start retries it");
+                return;
             }
             catch (Exception ex)
             {
-                _log.Log_Error(orchId, $"Telegram deleteForumTopic({topicId}) failed", ex);
+                // Broad by intent: the classification is TopicDelete_Decider's job and it reads the
+                // type and the status, never this catch's shape.
+                failure = ex;
             }
-        });
+
+            var outcome = TopicDelete_Decider.Classify(failure);
+
+            if (TopicDelete_Decider.Is_Settled(outcome))
+            {
+                Record_TopicDeleted(orchId, topicId, outcome, attemptsMade);
+                return;
+            }
+
+            if (TopicDelete_Decider.Should_RetryNow(outcome, attemptsMade))
+            {
+                var retryAfterSeconds = (failure as Telegram.TelegramApiClient.TelegramApiException)?.RetryAfterSeconds;
+                var delay = TopicDelete_Decider.Build_BackoffDelay(attemptsMade, retryAfterSeconds);
+
+                _log.Log_Warning(orchId, $"Telegram deleteForumTopic({topicId}) attempt {attemptsMade} gave no answer ({failure?.Message}) — retrying in {delay.TotalSeconds:0.#} s");
+
+                try
+                {
+                    await Task.Delay(delay, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    _log.Log_Info(orchId, $"Telegram topic {topicId} delete abandoned at shutdown — still pending, the next start retries it");
+                    return;
+                }
+
+                continue;
+            }
+
+            Report_TopicDeleteFailure(orchId, topicId, outcome, attemptsMade, failure);
+            return;
+        }
+    }
+
+    /// <summary>Writes the fact down and says which door it came through — deleted by us, or already gone.</summary>
+    void Record_TopicDeleted(string orchId, long topicId, TopicDeleteOutcomes outcome, int attemptsMade)
+    {
+        try
+        {
+            _store.Mark_TopicDeleted(orchId);
+        }
+        catch (Exception ex)
+        {
+            // The topic IS gone; failing to write that down must not turn a success into a crash on a
+            // detached task. The sweep will re-attempt at the next start and get AlreadyGone, which
+            // settles it again — costing one API call, which is the right price for this failure.
+            _log.Log_Warning(orchId, $"Telegram topic {topicId} is gone but session.json could not record it ({ex.Message}) — the next start will confirm it again");
+            return;
+        }
+
+        _log.Log_Info(orchId, outcome == TopicDeleteOutcomes.AlreadyGone
+            ? $"Telegram topic {topicId} was already gone (attempt {attemptsMade}) — recorded as deleted"
+            : $"Telegram topic {topicId} deleted (attempt {attemptsMade})");
+    }
+
+    /// <summary>
+    /// A delete that did not land. ONE line in the log every time; ONE message in General ever, and
+    /// only for a refusal — an unknown outcome is not something the owner can act on (decision 15),
+    /// and repeating a refusal at every start is decision 14's waterfall.
+    /// </summary>
+    void Report_TopicDeleteFailure(string orchId, long topicId, TopicDeleteOutcomes outcome, int attemptsMade, Exception? failure)
+    {
+        var alreadyReported = _store.Get_Session_OrNull(orchId)?.TelegramTopicDeleteFailureReported ?? false;
+
+        _log.Log_Error(orchId, outcome == TopicDeleteOutcomes.Refused
+            ? $"Telegram refused to delete topic {topicId} of '{orchId}' after {attemptsMade} attempt(s) — the topic stays on the owner's phone until the bot's rights are restored"
+            : $"Telegram topic {topicId} of '{orchId}' still not deleted after {attemptsMade} attempt(s) — left pending, the next start retries it",
+            failure);
+
+        if (!TopicDelete_Decider.Should_ReportToOwner(outcome, alreadyReported))
+            return;
+
+        // Marked BEFORE the append, and that order is the guarantee: an append that throws leaves the
+        // flag set and the owner untold once, which is a missing alert; the other order leaves the
+        // flag unset after a successful append, which is the alert repeating at every start for ever.
+        // One missed line beats a waterfall.
+        try
+        {
+            _store.Mark_TopicDeleteFailureReported(orchId);
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(orchId, $"Could not record that the topic-delete failure of '{orchId}' was reported ({ex.Message}) — the alert is suppressed for this run only");
+            return;
+        }
+
+        Append_GeneralAppEntry(AppEntryAudiences.Owner,
+            $"Telegram would not delete the topic of '{orchId}'",
+            $"The orchestration is closed and its topic (thread {topicId}) is still in the group — Telegram refused the delete: {failure?.Message}. "
+            + "The usual cause is the bot losing 'Manage topics' rights in the supergroup. Restore them and the next app start deletes it; "
+            + "until then you can delete the topic yourself from Telegram. Said once — it is not repeated at every start.");
+    }
+
+    /// <summary>
+    /// EVERY START PAYS OFF THE DELETES THE LAST ONE COULD NOT — the half of brief E1 that an
+    /// in-process retry cannot cover, because the case that actually strands a topic is the app
+    /// being closed or killed while the delete was still failing.
+    ///
+    /// <para>
+    /// Sequential and detached: sequential because a backlog fired at once spends the group's whole
+    /// message allowance on housekeeping, and detached because the bridge must come up whether or
+    /// not Telegram is answering. Only orchestrations carrying a PENDING stamp are touched — see
+    /// <see cref="TopicDeleteSweep_Planner"/> for why the stamp's absence is load-bearing.
+    /// </para>
+    /// </summary>
+    async Task Sweep_PendingTopicDeletes_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        IReadOnlyList<Sessions.OrchestrationSession.IOrchestrationSession> pending;
+
+        try
+        {
+            pending = TopicDeleteSweep_Planner.Select_PendingDeletes(_store.Load_All());
+        }
+        catch (Exception ex)
+        {
+            // Broad by intent: an unreadable session folder must not stop the bridge from starting.
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Topic-delete reconciliation could not read the sessions ({ex.Message}) — skipped for this start");
+            return;
+        }
+
+        if (pending.Count == 0)
+            return;
+
+        _log.Log_Info(GLOBAL_ORCH_ID, $"Topic-delete reconciliation: {pending.Count} closed orchestration(s) still owe Telegram a topic delete");
+
+        foreach (var session in pending)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return;
+
+            var topicId = session.TelegramTopicId;
+
+            if (topicId == null)
+                continue;
+
+            await Delete_TelegramTopic_WithRetries_Async(session.OrchId, topicId.Value, cancellationToken);
+        }
     }
 
     /// <summary>
