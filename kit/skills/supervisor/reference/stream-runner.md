@@ -22,6 +22,11 @@ above its own subject, and that sentence is what would have been filed as the en
 The same applies to anything a machine prints before you: a `SessionStart` banner lands in your
 first message, and a session that repeats it makes the banner its subject.
 
+**And never write that final message while a background sub-agent is still running** — wait for every
+agent to return first, because a late return re-opens the turn and a later message replaces the
+entry. (The bridge files the superseded one for you and tells you it did; the entry the owner reads
+is still the LAST thing you said.)
+
 ## 1. The environment is resolved by a command, first, always
 
 This is not different for stream, it is the same rule the main protocol opens with, and it is

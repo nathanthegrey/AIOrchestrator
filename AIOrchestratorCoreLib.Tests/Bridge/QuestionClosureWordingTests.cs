@@ -70,6 +70,7 @@ public class QuestionClosureWordingTests
             QuestionClosure_Wording.CONFIRMED_HIGH_RISK,
             QuestionClosure_Wording.DEADLINE,
             QuestionClosure_Wording.AWAY_PARKED,
+            QuestionClosure_Wording.SUPERSEDED,
             QuestionClosure_Wording.UNRECORDED,
         ];
 

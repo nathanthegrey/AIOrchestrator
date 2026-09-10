@@ -67,6 +67,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     const string DEADLINE_KILLS_SUBJECT = PrintTurn_Words.DEADLINE_KILLS_SUBJECT;
     const string TURN_LIMITED_SUBJECT = PrintTurn_Words.TURN_LIMITED_SUBJECT;
     const string MISADDRESSED_SUBJECT = PrintTurn_Words.MISADDRESSED_SUBJECT;
+    const string SUPERSEDED_FINAL_SUBJECT = PrintTurn_Words.SUPERSEDED_FINAL_SUBJECT;
     const int ENTRY_APPEND_ATTEMPTS = 3;
     const int ENTRY_APPEND_RETRY_MILLISECONDS = 300;
     /// <summary>
@@ -108,6 +109,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     readonly CancellationTokenSource _draining = new();
     readonly Dictionary<string, Task> _inFlight = [];
+
+    /// <summary>
+    /// The subset of <see cref="_inFlight"/> that HOLDS ITS SLOTS and is executing. A key in the
+    /// in-flight table and not here is queued behind the concurrency cap. Written under
+    /// <see cref="_lock"/> the moment the last slot is acquired, removed with the in-flight entry.
+    /// </summary>
+    readonly HashSet<string> _running = [];
     readonly Dictionary<string, SessionTracker> _trackers = [];
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
     readonly HashSet<string> _warnedStaleRegistrations = [];
@@ -316,6 +324,28 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         lock (_lock)
             return _inFlight.ContainsKey(key);
+    }
+
+    public bool Is_TurnQueued(string orchId, string memberId)
+    {
+        var key = $"{orchId}/{memberId}";
+
+        lock (_lock)
+            return _inFlight.ContainsKey(key) && !_running.Contains(key);
+    }
+
+    /// <summary>
+    /// THE OWNER'S PHONE LINE NEVER QUEUES BEHIND THE WORK IT DISPATCHED. The supervisor, a solo and
+    /// the general supervisor are each ONE session with ONE turn at a time, and their turn is how the
+    /// owner gets answered; the concurrency caps exist for the fan-out of implementers and reviewers.
+    /// Measured 2026-09-10 21:18→21:47 on the VPS: five implementers briefed, three slots per
+    /// orchestration, and the owner's message sat in the FIFO behind imp-7 and imp-8 for 29 minutes —
+    /// the supervisor's turn started the second imp-5 was killed at its deadline. Exempting these
+    /// roles adds at most one concurrent turn per orchestration (owner decision, 2026-09-10).
+    /// </summary>
+    internal static bool Is_ExemptFromSlots(SessionRoles role)
+    {
+        return role is SessionRoles.Supervisor or SessionRoles.Solo or SessionRoles.General;
     }
 
     public void Tick(DateTime nowLocal)
@@ -1072,6 +1102,21 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         try
         {
+            if (Is_ExemptFromSlots(state.Role))
+            {
+                // No slot taken, none released: the exemption is the whole point, and taking a slot
+                // "just to count it" would put the supervisor back in the queue it was lifted out of.
+                Mark_Running(key);
+                admission.Token.ThrowIfCancellationRequested();
+                await Run_Turn_Async(stateFile, state, pending, sources, tracker, configs, cancellationToken);
+                return;
+            }
+
+            // SAID ONCE, at the moment the wait is real: a turn that finds a free slot says nothing,
+            // one that will queue says so — this line is the only trace of a queue the log ever had.
+            if (_globalSlots.CurrentCount == 0 || orchestrationSlots.CurrentCount == 0)
+                _log.Log_Info(state.OrchId, $"Turn for '{state.MemberId}' is queued — waiting for a free turn slot ({_slotsPerOrchestration} per orchestration)");
+
             await _globalSlots.WaitAsync(admission.Token);
 
             try
@@ -1082,6 +1127,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 {
                     // A slot won in the same instant the door closed is not a mandate to start.
                     admission.Token.ThrowIfCancellationRequested();
+                    Mark_Running(key);
                     await Run_Turn_Async(stateFile, state, pending, sources, tracker, configs, cancellationToken);
                 }
                 finally
@@ -1108,8 +1154,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         finally
         {
             lock (_lock)
+            {
                 _inFlight.Remove(key);
+                _running.Remove(key);
+            }
         }
+    }
+
+    void Mark_Running(string key)
+    {
+        lock (_lock)
+            _running.Add(key);
     }
 
     /// <summary>
@@ -1279,12 +1334,25 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (TurnOutcomes.Is_Success(result))
         {
+            // BEFORE THE TURN'S OWN ENTRY, in the order they were written. A final message the turn
+            // then superseded is content the result does not carry, and this is the only place it
+            // still exists — see ITurnResult.SupersededFinals.
+            if (!await Write_SupersededFinals_Async(state, sources, result, requestId))
+            {
+                _log.Log_Error(state.OrchId, $"Turn {requestId} completed but a superseded final message could not be appended — the channel stayed locked; the turn will be retried", null);
+                Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
+                return;
+            }
+
             if (!(await Write_Reply_Async(state, sources, result.ResultText)).AllLanded)
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
                 return;
             }
+
+            // AFTER BOTH ARE FILED, because it says both were.
+            Append_SupersededNotice(state, result);
 
             Append_TurnEnded(state, requestId, attempt, pending, result, outcome, null);
 
@@ -1680,6 +1748,68 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// thing a non-null signature bought was a compiler warning at the one call site — and a signature
     /// that promises what its caller cannot give is a lie that the next reader resolves with a `!`.
     /// </param>
+    /// <summary>
+    /// FILES EVERY FINAL MESSAGE THE TURN SUPERSEDED, oldest first, through the SAME splitters and
+    /// under the same author word as the turn's own entry — because that is what each of them was:
+    /// a message the session wrote intending it to be its entry.
+    ///
+    /// <para>
+    /// Measured 3× on 2026-09-09/10: a session writes its report, a BACKGROUND sub-agent
+    /// (<c>Task</c> with <c>run_in_background</c>) returns, the CLI resumes the session, a later
+    /// message is produced, and THAT becomes the entry. A 19,771-character report and a nine-agent
+    /// review were lost that way, and both turns reported success.
+    /// </para>
+    /// <para>
+    /// IT CAN COST A SECOND, DIFFERENT ANSWER, exactly as <see cref="Write_Reply_Async"/> can and for
+    /// the same reason: a superseded final that lands, followed by a final one that cannot, fails the
+    /// turn and re-runs it, so what landed here may be written again. That trade is the existing one
+    /// — bad WHERE SOMEONE CAN SEE IT — and it is not made worse by writing these first: writing them
+    /// AFTER the entry would file them behind the answer they preceded, which is the one ordering a
+    /// reader cannot recover from.
+    /// </para>
+    /// </summary>
+    async Task<bool> Write_SupersededFinals_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, ITurnResult result, string requestId)
+    {
+        if (result.SupersededFinals.Count == 0)
+            return true;
+
+        _log.Log_Info(state.OrchId, $"Turn {requestId} wrote {result.SupersededFinals.Count} final message(s) before the one that became its entry — filing {(result.SupersededFinals.Count == 1 ? "it" : "them")} first so nothing is lost");
+
+        foreach (var superseded in result.SupersededFinals)
+        {
+            if (!(await Write_Reply_Async(state, sources, superseded)).AllLanded)
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// TELLS THE SESSION, in its own channel, that it did this — the same shape as the misaddressed
+    /// note, and for the same reason: the alternative is a channel that has grown an entry nobody
+    /// asked for, with no way to find out why. Agent audience (decision 15): the action is the
+    /// session's, and the owner cannot take it.
+    /// </summary>
+    void Append_SupersededNotice(IPrintSessionState state, ITurnResult result)
+    {
+        var count = result.SupersededFinals.Count;
+
+        if (count == 0)
+            return;
+
+        var plural = count == 1 ? string.Empty : "s";
+
+        ChannelAppender.Append_AppEntry(
+            state.ChannelFilePath,
+            AppEntryAudiences.Agent,
+            $"{SUPERSEDED_FINAL_SUBJECT} — {state.MemberId}, {count} message{plural}",
+            $"This turn wrote {count} final-looking message{plural} and then carried on working; a LATER message became the turn's result, and the result is what the bridge files as the entry. "
+                + $"Nothing was dropped — {(count == 1 ? "the earlier message was" : "the earlier messages were")} filed above, in order, before the final one.\n\n"
+                + "This is what a BACKGROUND sub-agent does when it returns after you have written your report: it re-opens the turn, and your next message replaces your entry. "
+                + "Wait for every sub-agent to return BEFORE you write your final message.",
+            DateTime.Now);
+    }
+
     async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
     {
         var author = SessionRole_Names.Get_Author(state.Role);

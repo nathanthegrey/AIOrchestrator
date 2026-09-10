@@ -29,6 +29,7 @@ public static class QuestionClosure_Wording
     public const string CONFIRMED_HIGH_RISK = "a high-risk choice confirmed by code";
     public const string DEADLINE = "its own deadline";
     public const string AWAY_PARKED = "away mode parking it";
+    public const string SUPERSEDED = "a newer question, asked after the owner had replied in words";
     public const string UNRECORDED = "something this process no longer remembers — it restarted since";
 
     const string PREAMBLE = "A high-risk read-back window closed with no code typed — nothing was taken, and ";

@@ -118,7 +118,8 @@ public static class StreamJson_Responder
             if (turn.RateLimit != null)
                 Write_Event(output, StreamEventJson_Builder.Build_RateLimitEvent(sessionId, turn.RateLimit));
 
-            Write_Event(output, StreamEventJson_Builder.Build_Assistant(sessionId, model, turn.Result));
+            foreach (var assistantEvent in StreamEventJson_Builder.Build_AssistantSequence(turn, sessionId, model))
+                Write_Event(output, assistantEvent);
 
             // The Stop hook STARTS before the result and its response lands AFTER it — measured in
             // the same run, where turn 1's second `hook_response Stop` arrived two events into turn

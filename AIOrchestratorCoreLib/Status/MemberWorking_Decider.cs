@@ -6,6 +6,15 @@ public enum WorkingVerdicts
     /// <summary>A turn is running right now, or one ended moments ago. Positive knowledge.</summary>
     Working,
 
+    /// <summary>
+    /// A turn has been ADMITTED but is waiting for a concurrency slot — nothing is executing for this
+    /// member. Positive knowledge, and NOT a spelling of Working: measured 2026-09-10 21:18→21:47 on
+    /// the VPS, the owner was told "still at it" for 29 minutes about a supervisor that was sitting in
+    /// the per-orchestration queue behind five implementer turns, and the session was told "the owner
+    /// is waiting on you" while it could not even start.
+    /// </summary>
+    Queued,
+
     /// <summary>No turn running and nothing recent. Positive knowledge — it really is between turns.</summary>
     Idle,
 
@@ -54,13 +63,15 @@ public static class MemberWorking_Decider
     /// </summary>
     public const int RECENTLY_WORKED_SECONDS = 90;
 
-    /// <param name="turnInFlight">The dispatcher has a turn running for this member right now.</param>
+    /// <param name="turnInFlight">The dispatcher has admitted a turn for this member (running OR waiting for a slot).</param>
+    /// <param name="turnQueued">That admitted turn is still waiting for a concurrency slot — nothing executes yet.</param>
     /// <param name="lastTurnEndedUtc">End of the most recent completed turn, or null if none is recorded.</param>
     /// <param name="sessionRegistered">A bridge-driven session state exists — i.e. these inputs mean something.</param>
     /// <param name="nowUtc">Now.</param>
     public static WorkingVerdicts Decide(
         bool sessionRegistered,
         bool turnInFlight,
+        bool turnQueued,
         DateTime? lastTurnEndedUtc,
         DateTime nowUtc)
     {
@@ -68,6 +79,11 @@ public static class MemberWorking_Decider
         // answering "idle" for it would rebuild the exact fiction this replaces, one layer up.
         if (!sessionRegistered)
             return WorkingVerdicts.Unknown;
+
+        // QUEUED BEFORE WORKING: a queued turn is in the in-flight table too, and reading the table
+        // alone is exactly how "still at it" was said about a session that had not started.
+        if (turnInFlight && turnQueued)
+            return WorkingVerdicts.Queued;
 
         if (turnInFlight)
             return WorkingVerdicts.Working;
@@ -93,6 +109,16 @@ public static class MemberWorking_Decider
     }
 
     /// <summary>
+    /// For the guards that ask "is this member's turn occupied": Working and Queued both are — a
+    /// queued member can no more read its channel than a running one, so waking it is a wasted
+    /// turn either way. Unknown is NOT busy; it is the absence of an answer.
+    /// </summary>
+    public static bool Is_Busy(WorkingVerdicts verdict)
+    {
+        return verdict is WorkingVerdicts.Working or WorkingVerdicts.Queued;
+    }
+
+    /// <summary>
     /// For the surfaces. Null means SAY NOTHING — never "idle", which would be an assertion the app
     /// cannot back.
     /// </summary>
@@ -101,8 +127,12 @@ public static class MemberWorking_Decider
         return verdict switch
         {
             WorkingVerdicts.Working => "working now",
+            WorkingVerdicts.Queued => QUEUED_WORDS,
             WorkingVerdicts.Idle => "between turns",
             _ => null,
         };
     }
+
+    /// <summary>The one wording for a turn that is admitted but has no slot yet — shared by every surface.</summary>
+    public const string QUEUED_WORDS = "queued — waiting for a free turn slot";
 }

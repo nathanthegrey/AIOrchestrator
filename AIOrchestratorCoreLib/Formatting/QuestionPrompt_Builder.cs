@@ -107,6 +107,25 @@ public static class QuestionPrompt_Builder
         return $"{questionText}\n\n{Bridge.OwnerPush_Policy.TALK_ACKNOWLEDGEMENT}";
     }
 
+    /// <summary>
+    /// The record left on a question the asker moved past AFTER the owner had replied in words.
+    ///
+    /// <para>
+    /// With two questions open a typed reply binds to neither (the app will not guess which one was
+    /// meant), so both stayed open — for hours, on the PULSE line, as "waiting on you" (measured
+    /// 2026-09-10: three questions from 15:58, 16:46 and 16:56 still listed at 21:50). The reply
+    /// followed by a NEWER question from the same asker is the app's evidence that the older ones
+    /// were dealt with in prose; they are closed as superseded and say so. Nothing is invented: if
+    /// one still mattered, the asker re-asks it.
+    /// </para>
+    /// </summary>
+    public static string Build_SupersededText(string questionText)
+    {
+        return $"{questionText}\n\n{SUPERSEDED_SUFFIX}";
+    }
+
+    public const string SUPERSEDED_SUFFIX = "⏭ superseded — you had replied in words and a newer question followed. It will be re-asked if it still matters.";
+
     /// <summary>The record left on a question that nobody answered before its deadline.</summary>
     public static string Build_TimedOutText(string questionText, string outcome)
     {

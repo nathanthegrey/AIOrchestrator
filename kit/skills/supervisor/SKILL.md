@@ -753,6 +753,9 @@ coordination: read, decide, brief, verify at the boundary, report.
   only for something genuinely brief. **This rule is about YOUR turn ONLY.** An implementer fanning
   out to parallel agents is the intended shape, not a violation — its turn is supposed to be busy.
   Never relay this ban to a member.
+- **And never write your final message while a background sub-agent is still running.** Wait for
+  every agent to return first: a late return re-opens your turn, and the message you write after it
+  replaces your entry — so the verdict the member is waiting for is not the one it reads.
 - Reading a diff, checking a test result, deciding, writing a verdict: yours, and quick.
   Producing the diff, running the suite, hunting the bug: an implementer's.
 - If you find yourself about to start something long, stop and ask: *"why is this not a brief?"*

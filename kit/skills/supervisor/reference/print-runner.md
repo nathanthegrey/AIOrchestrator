@@ -11,6 +11,10 @@ config.json. Then, and only then, these things change — and nothing else in th
   append — if you have no task, your final message is that greeting; if you have one, it is your
   reply to it.
 - **A question ends the turn** exactly as an answer does; the reply arrives as your next turn.
+- **Never write that final message while a background sub-agent is still running** — wait for every
+  agent to return first, because a late return re-opens the turn and a later message replaces the
+  entry. (The bridge files the superseded one for you and tells you it did; the entry your
+  counterpart reads is still the LAST thing you said.)
 
 ## The channels that wake you, and how you address them, are the same here
 

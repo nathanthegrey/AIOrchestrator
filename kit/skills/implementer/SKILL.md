@@ -284,6 +284,10 @@ for nothing.
   it only after you have verified the results. A parallel write batch IS a multi-file write batch,
   so the existing rule already covers it — and without the window your supervisor may audit
   half-written state and report it as defects.
+- **NEVER write your final message while a background sub-agent is still running.** Wait for every
+  agent you dispatched to return first: a late return RE-OPENS your turn, and whatever you write
+  after it REPLACES your report as your channel entry — the app files the superseded one for you
+  and says so, but the entry your supervisor reads is the last thing you said, not the report.
 - **A sub-agent's report is NOT evidence.** Your own rule — claims without evidence are worthless —
   applies one level down. Before you report: read the actual diff, run the suite yourself, count the
   tests yourself. Never forward an agent's summary as your result; you did not see what it saw.

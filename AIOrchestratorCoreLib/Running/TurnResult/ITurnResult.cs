@@ -36,6 +36,26 @@ public interface ITurnResult
 
     /// <summary>The session's final message — what becomes its channel entry.</summary>
     string? ResultText { get; }
+
+    /// <summary>
+    /// THE FINAL MESSAGES THIS TURN WROTE BEFORE THE ONE THAT BECAME <see cref="ResultText"/> —
+    /// empty on every ordinary turn, and the whole point of this member when it is not.
+    ///
+    /// <para>
+    /// A session's final message IS its channel entry, and only the <c>result</c> event's text was
+    /// ever filed. Measured three times on 2026-09-09/10: a session wrote its report, a BACKGROUND
+    /// sub-agent (<c>Task</c> with <c>run_in_background</c>) returned afterwards, the CLI re-opened
+    /// the turn, and the later message became the result — so a 19,771-character report and, on
+    /// another run, a nine-agent review were both LOST, with the turn reporting success. Nothing
+    /// upstream can tell those two messages apart after the fact; only the transport, watching the
+    /// events go by, still knows there was an earlier one.
+    /// </para>
+    /// <para>
+    /// Carried here in ORDER, oldest first, so the dispatcher can file each one as its own entry
+    /// before the turn's own. <see cref="SupersededFinals_Rule"/> owns what counts as one.
+    /// </para>
+    /// </summary>
+    IReadOnlyList<string> SupersededFinals { get; }
     string? SessionId { get; }
     double? TotalCostUsd { get; }
     long? DurationMs { get; }

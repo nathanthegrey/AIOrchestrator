@@ -184,7 +184,8 @@ public class StreamTurnDispatcherTests
         // stepping over `bg`, which this stage does not implement.
         var printArgs = PrintRunnerTestHarness.Args(Lines(harness, "invocation")[0]);
         Assert.Contains("--output-format", printArgs);
-        Assert.Equal("json", printArgs[printArgs.IndexOf("--output-format") + 1]);
+        Assert.Equal(PrintTurnCommand_Builder.OUTPUT_FORMAT, printArgs[printArgs.IndexOf("--output-format") + 1]);
+        Assert.DoesNotContain("--input-format", printArgs);
 
         Assert.Contains(logged, message => message.Contains("falls back from runner 'stream' to 'print'", StringComparison.Ordinal));
         Assert.Contains(logged, message => message.Contains("over 'bg'", StringComparison.Ordinal));
