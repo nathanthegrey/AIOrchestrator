@@ -83,7 +83,7 @@ public class PlanBackendConfigTests : IDisposable
         // Exactly what the Settings window does: build a config from its own fields — which have no
         // plan-backend box — and save it.
         OrchestratorConfig_Loader.Save(
-            OrchestratorConfig_Factory.Create([], "sonnet", null, null, null, null, null, null, null, null, null),
+            OrchestratorConfig_Factory.Create([], "sonnet", null, null, null, null, null, null, null, null, null, null, null),
             _paths);
 
         var reloaded = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
@@ -114,7 +114,7 @@ public class PlanBackendConfigTests : IDisposable
         var settings = new PlanBackendSettings(PlanBackendSettings.KIND_EXTERNAL, "/opt/x.dll", "X.Backend");
 
         var config = OrchestratorConfig_Factory.Create(
-            [], null, null, null, null, null, null, null, null, null, null, settings);
+            [], null, null, null, null, null, null, null, null, null, null, null, null, settings);
 
         Assert.Equal(settings, OrchestratorConfig_Factory.Create_WithStatusScreenshots(config, true).PlanBackend);
     }

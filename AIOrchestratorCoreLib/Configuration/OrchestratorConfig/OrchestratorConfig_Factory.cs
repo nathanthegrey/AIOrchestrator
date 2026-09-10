@@ -13,6 +13,18 @@ public static class OrchestratorConfig_Factory
     public const string DEFAULT_SUPERVISOR_MODEL = "opus";
     public const string DEFAULT_IMPLEMENTER_MODEL = "opus";
     public const string DEFAULT_COMMUNICATOR_MODEL = "sonnet";
+
+    /// <summary>
+    /// Reviewing stays opus even after the implementer moves to sonnet (owner, 2026-09-09): a bad
+    /// implementation gets found and fixed, a bad APPROVAL does not announce itself.
+    /// </summary>
+    public const string DEFAULT_REVIEWER_MODEL = "opus";
+
+    /// <summary>
+    /// A solo is supervisor, implementer and reviewer in one session with nobody above it, so it
+    /// takes the supervision price rather than the implementation one.
+    /// </summary>
+    public const string DEFAULT_SOLO_MODEL = "opus";
     /// <summary>Opt-in: a screenshot raises a real window, so an absent key must read as OFF.</summary>
     public const bool DEFAULT_TELEGRAM_STATUS_SCREENSHOTS = false;
 
@@ -20,6 +32,13 @@ public static class OrchestratorConfig_Factory
         IReadOnlyList<IRepoEntry> repos,
         string? supervisorModel,
         string? implementerModel,
+
+        // AFTER THE IMPLEMENTER AND BEFORE THE GENERAL, which is SessionRole_Names.ALL's own order —
+        // and inserted positionally rather than appended, deliberately: every existing call site
+        // fails to compile instead of silently binding a string to the wrong role. Measured while
+        // writing this: all six of them do.
+        string? reviewerModel,
+        string? soloModel,
         string? generalSupervisorModel,
         string? communicatorModel,
         long? telegramSupergroupChatId,
@@ -45,7 +64,7 @@ public static class OrchestratorConfig_Factory
         Telegram.TelegramInboundModes? telegramInbound = null)
     {
         return Create(
-            repos, supervisorModel, implementerModel, generalSupervisorModel, communicatorModel,
+            repos, supervisorModel, implementerModel, reviewerModel, soloModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
             RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound);
@@ -60,6 +79,13 @@ public static class OrchestratorConfig_Factory
         IReadOnlyList<IRepoEntry> repos,
         string? supervisorModel,
         string? implementerModel,
+
+        // AFTER THE IMPLEMENTER AND BEFORE THE GENERAL, which is SessionRole_Names.ALL's own order —
+        // and inserted positionally rather than appended, deliberately: every existing call site
+        // fails to compile instead of silently binding a string to the wrong role. Measured while
+        // writing this: all six of them do.
+        string? reviewerModel,
+        string? soloModel,
         string? generalSupervisorModel,
         string? communicatorModel,
         long? telegramSupergroupChatId,
@@ -77,10 +103,22 @@ public static class OrchestratorConfig_Factory
     {
         return new OrchestratorConfigModel(
             repos,
-            supervisorModel ?? DEFAULT_SUPERVISOR_MODEL,
-            implementerModel ?? DEFAULT_IMPLEMENTER_MODEL,
-            generalSupervisorModel ?? DEFAULT_GENERAL_SUPERVISOR_MODEL,
-            communicatorModel ?? DEFAULT_COMMUNICATOR_MODEL,
+            First_StatedModel([supervisorModel], DEFAULT_SUPERVISOR_MODEL),
+            First_StatedModel([implementerModel], DEFAULT_IMPLEMENTER_MODEL),
+
+            // THE LADDER IS THE COMPATIBILITY PROMISE, and it is resolved HERE so that
+            // IOrchestratorConfig.ReviewerModel is the EFFECTIVE answer and no reader has to
+            // remember the fallback. An absent reviewerModel means "what the reviewer got until
+            // now", which was implementerModel — including the case that matters, an owner who had
+            // set implementerModel by hand and never heard of this key. Only when neither is set
+            // does the shipped default apply, and it is opus, which is what the reviewer already ran.
+            // Through First_StatedModel like every other rung: an empty or whitespace reviewerModel
+            // must be absent too, or it slips past implementerModel and the reviewer spawns with no
+            // --model flag at all (proven 2026-09-10, see WithAnEmptyReviewerModel_... below).
+            First_StatedModel([reviewerModel, implementerModel], DEFAULT_REVIEWER_MODEL),
+            First_StatedModel([soloModel, implementerModel], DEFAULT_SOLO_MODEL),
+            First_StatedModel([generalSupervisorModel], DEFAULT_GENERAL_SUPERVISOR_MODEL),
+            First_StatedModel([communicatorModel], DEFAULT_COMMUNICATOR_MODEL),
             telegramSupergroupChatId,
             telegramOwnerUserId,
             telegramBotToken,
@@ -112,9 +150,51 @@ public static class OrchestratorConfig_Factory
             telegramInbound ?? Telegram.TelegramInboundModes.Poll);
     }
 
+    /// <summary>
+    /// THE LADDER'S ONE COALESCE — the first rung the owner actually stated, or the shipped default.
+    /// Every per-role model in this file resolves through it, so "what counts as the owner having
+    /// said nothing" has a single answer for all six roles rather than one per call site (CLAUDE.md
+    /// decision 12's rule about formatters, applied to a ladder).
+    ///
+    /// <para>
+    /// AN EMPTY OR WHITESPACE VALUE IS ABSENT, and it takes a method to say so because <c>??</c>
+    /// cannot. Proven 2026-09-10: <c>{"implementerModel":"sonnet","reviewerModel":""}</c> handed the
+    /// reviewer the empty string, which <c>??</c> passed straight through — and both spawn-command
+    /// builders add <c>--model</c> only when the value is not whitespace, so the reviewer was
+    /// launched with NO model flag at all: the CLI's own default, neither the ladder's answer nor
+    /// this file's, and no line anywhere saying so. An empty key is a cleared field or a leftover,
+    /// never a model. The whitespace is trimmed for the same reason a blank value is dropped: what
+    /// survives here goes on a command line.
+    /// </para>
+    /// <para>
+    /// THE WORD ITSELF IS NOT VALIDATED, and that is a decision rather than an omission (2026-09-10).
+    /// An allowlist here would be a TYPO guard, not a security one — it authenticates nothing about
+    /// who wrote the file, so a session that can edit config.json defeats it simply by writing a
+    /// word that IS on the list. What it would cost is real: <c>claude --model</c> takes more words
+    /// than any list compiled into this build, so a new alias would need a rebuild, and until then
+    /// the app would silently substitute its own default for a model the owner deliberately named —
+    /// a worse failure than the CLI refusing the word out loud, because it looks healthy.
+    /// <c>fable</c> is refused on the REQUEST path
+    /// (<c>OrchestrationRequests_Reader.FORBIDDEN_MEMBER_MODEL</c>) precisely because an agent writes
+    /// that file; config.json is the owner's own, and that refusal's own message names the owner as
+    /// the one who selects fable. Guarding two of the six keys and not the other four would also
+    /// give one config file two answers about what a valid model word is.
+    /// </para>
+    /// </summary>
+    static string First_StatedModel(IReadOnlyList<string?> ladder, string shippedDefault)
+    {
+        foreach (var rung in ladder)
+        {
+            if (!string.IsNullOrWhiteSpace(rung))
+                return rung.Trim();
+        }
+
+        return shippedDefault;
+    }
+
     public static IOrchestratorConfig Create_Empty()
     {
-        return Create([], null, null, null, null, null, null, null, null, null, null);
+        return Create([], null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /// <summary>
@@ -128,6 +208,8 @@ public static class OrchestratorConfig_Factory
             source.Repos,
             source.SupervisorModel,
             source.ImplementerModel,
+            source.ReviewerModel,
+            source.SoloModel,
             source.GeneralSupervisorModel,
             source.CommunicatorModel,
             source.TelegramSupergroupChatId,

@@ -59,6 +59,12 @@ public partial class SettingsWindow : Window
             _config.Repos,
             Null_IfEmpty(SupervisorModelTextBox.Text),
             Null_IfEmpty(ImplementerModelTextBox.Text),
+
+            // NO FIELD FOR THESE TWO, and none is wanted: reviewerModel/soloModel are hand-edited
+            // keys the loader reads and never writes, so the window carries whatever the config it
+            // was opened with resolved to and Save leaves the file's own value alone.
+            _config.ReviewerModel,
+            _config.SoloModel,
             Null_IfEmpty(GeneralModelTextBox.Text),
             Null_IfEmpty(CommunicatorModelTextBox.Text),
             chatId,

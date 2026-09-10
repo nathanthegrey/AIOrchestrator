@@ -2,6 +2,7 @@ using AIOrchestratorCoreLib.Configuration.DefaultsSettings;
 using AIOrchestratorCoreLib.Configuration.GuardrailSettings;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Configuration.TelegramProseSettings;
+using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.RunnerConfigs;
 
 namespace AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
@@ -15,6 +16,34 @@ public interface IOrchestratorConfig
     IReadOnlyList<IRepoEntry> Repos { get; }
     string? SupervisorModel { get; }
     string? ImplementerModel { get; }
+
+    /// <summary>
+    /// THE REVIEWER'S OWN DEFAULT, which it did not have until 2026-09-09: it rode
+    /// <see cref="ImplementerModel"/>, which made the owner's decision — implementer sonnet, reviewer
+    /// opus — unstateable rather than merely unset. Nothing was broken while both were opus; the split
+    /// is the prerequisite for the half that moves.
+    ///
+    /// <para>
+    /// Reviewing is the expensive half on purpose. A bad implementation gets found and fixed; a bad
+    /// APPROVAL lets bad code survive indefinitely, which is why <c>rev-1</c> exists before the first
+    /// task does (<c>OrchestrationLauncherModel.Start_Orchestration</c>).
+    /// </para>
+    /// <para>
+    /// NEVER NULL, and the ladder behind it is <see cref="ImplementerModel"/> then the shipped
+    /// default — so a config.json written before this key existed gives the reviewer exactly what it
+    /// got before, including when its owner had set an implementer model by hand.
+    /// </para>
+    /// </summary>
+    string? ReviewerModel { get; }
+
+    /// <summary>
+    /// The single session of a BASIC orchestration. Split from <see cref="ImplementerModel"/> in the
+    /// same change and for the same reason, but the decision behind it is the opposite one: a solo
+    /// supervises, implements and reviews in one session, with nobody above it, so it cannot be
+    /// cheapened alongside the implementer it resembles. Same ladder — solo, then implementer, then
+    /// the shipped default.
+    /// </summary>
+    string? SoloModel { get; }
 
     /// <summary>The general supervisor only routes "work on X" requests — a cheap model suffices (default: sonnet).</summary>
     string? GeneralSupervisorModel { get; }
@@ -89,6 +118,15 @@ public interface IOrchestratorConfig
     /// shipped defaults, the same rule <see cref="Guardrails"/> and <see cref="Defaults"/> follow.
     /// </summary>
     ITelegramProseSettings TelegramProse { get; }
+
+    /// <summary>
+    /// THE ONE READER OF THE PER-ROLE DEFAULT — the same rule <see cref="IRunnerConfigs.Get_ForRole"/>
+    /// already follows for the runners, and for the reason CLAUDE.md decision 12 states about
+    /// formatters: six roles resolved at four call sites is how two of them come to disagree. Every
+    /// spawn and every turn asks this method rather than picking a property, so adding a role means
+    /// adding it here and nowhere else.
+    /// </summary>
+    string? Get_ModelForRole(SessionRoles role);
 
     bool Is_TelegramConfigured();
 }
