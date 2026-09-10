@@ -319,8 +319,8 @@ parsing), `kit/skills/supervisor/SKILL.md`, `kit/skills/solo/SKILL.md`, tests.
 
 ## Brief D — Receipts as reactions (after C has been observed live)
 
-**Status: APPROVED in principle by the owner, 2026-09-09; starts only after C is in production and has
-been watched for a few evenings.** Depends on C (silence by default).
+**Status: APPROVED by the owner, 2026-09-09; START ORDERED 2026-09-10** — the owner deploys C and tests it
+while D is built ("nel mentre testo e finiamo D"). Depends on C (silence by default), which is merged.
 
 **OWNER REQUEST (2026-09-09):** "Acknowledge my messages with a reaction on my bubble instead of a ✓
 message. 👀 → 👌 is fine."
@@ -432,7 +432,8 @@ by type; suite green; **[owner reads]** one evening with zero coaching entries a
 1. **Topic colour per repo** at `createForumTopic`: Telegram's six `icon_color` values, assigned per repo
    in a stable rotation (7th repo reuses the 1st); same repo → same colour while it exists. Recorded in
    `config.json` beside the repo entry.
-2. **Command menu:** keep ALL 33 commands, descriptions in ENGLISH (app-string rule), reordered by
+2. **Command menu:** keep ALL 32 commands (the brief first said 33 — a counting error; code and
+   brief list the same 32), descriptions in ENGLISH (app-string rule), reordered by
    frequency of use (`setMyCommands` preserves order): `/pending /left /progress /tail /limits /cost
    /merge /close /dnd /mute /summary /resume /status /tasks /tokens /context /diff /imp /log /test /done
    /refresh /switch /clear /pc /dnd_all /mute_all /screens /screen /show /organize /organize_mains` —
