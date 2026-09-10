@@ -459,6 +459,37 @@ by type; suite green; **[owner reads]** one evening with zero coaching entries a
 
 ---
 
+## Brief G — The suite is reliably green under load (DECIDED, AFTER A–F)
+
+**Status: owner's decision 2026-09-10 — "finish A B C D E F first, then G".** Not started; nobody may
+start it unasked.
+
+**Owner request (2026-09-10):** "The suite must be green even when another suite is running on this
+machine; a red must mean a claim about the app was falsified, never 'load'."
+
+**Measured 2026-09-10 (352 test files):** 62 files wait on real time (`Thread.Sleep`/`Task.Delay`; 29 of
+them drive the real engine), 91 read the wall clock, 7 are on an injected clock, 144 delete their temp tree
+with a bare recursive delete (4 use `TempTree.Delete_BestEffort`). Two full parallel runs of the tip at
+load ~10 gave one red each, in two different wall-clock probes, both 5/5 green in isolation; the same
+family went red on the untouched base under load (up to 5). Every Done-when in this file says "suite
+green", so this blocks requested lines (decision 22 admission).
+
+**G-light first (≈1 agent-day [estimate]):**
+1. The 144 bare recursive deletes adopt `TempTree.Delete_BestEffort` (mechanical, scripted, one full run).
+2. Wall-clock probes move into an xUnit collection that runs serially while the rest stays parallel — no
+   conversion, no assertion touched; cost: tens of seconds on the suite.
+3. Working rule, written into the kit skills and CLAUDE-adjacent docs: `pgrep -f "dotnet test"` must be
+   empty before a run; whoever touches a wall-clock probe converts it to the injected clock
+   (`BridgeEngineTiming`, as stage 7d did).
+
+**Done when (G-light):** 5 consecutive full parallel runs green while another suite is running (load ≥ 10);
+no assertion weakened (each converted or moved probe still fails under mutation).
+
+**G-full (only if G-light is not enough; 3–5 agent-days [estimate]):** inject the clock into the remaining
+wall-clock probes, the 29 engine probes first through the existing timing seam.
+
+---
+
 ## PARKED (from the same audit — outside A–F; owner decides when)
 
 - Docs (Manu's, report only): CLAUDE.md decision 4 describes direction tags that do not exist; the

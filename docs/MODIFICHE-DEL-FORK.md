@@ -1056,11 +1056,16 @@ stessa costante. Parte da solo, dopo che il blocco Telegram è in produzione, te
 lettura di entrambe le forme.
 
 **Cose aperte, dette perché non sembrino risolte.**
-- **La suite non è affidabile sotto carico.** Verde in seriale a macchina quieta; in parallelo con
-  un'altra suite in corsa ha circa un rosso a corsa, sempre in un test a tempo reale diverso, sempre verde
-  da solo. Ogni «fatto quando» futuro dipende da questo: la proposta è iniettare l'orologio in tutte le
-  sonde a tempo reale e bonificare le 113 fixture che cancellano la cartella temporanea senza guardia.
-  In attesa della decisione del proprietario.
+- **La suite non è affidabile sotto carico — deciso: si fa dopo A–F.** Verde in seriale a macchina
+  quieta; in parallelo con un'altra suite in corsa ha circa un rosso a corsa, sempre in un test a tempo
+  reale diverso, sempre verde da solo. Misurato il 10/9: su 352 file di test, 62 aspettano tempo reale,
+  91 leggono l'orologio vero, 7 usano un orologio finto, 144 cancellano la cartella temporanea senza
+  guardia. Il proprietario ha deciso di finire prima i sei pacchetti Telegram e poi fare **G**: prima la
+  versione leggera (bonifica delle 144 cancellazioni; le sonde a tempo reale in una collezione che gira
+  una alla volta; la regola «nessuna suite mentre ne gira un'altra», e «chi tocca una sonda a tempo
+  reale la converte»), circa un giorno `[stima]`; la conversione completa all'orologio finto (3–5 giorni
+  `[stima]`) solo se la leggera non basta. Fatto quando: cinque corse parallele consecutive verdi con
+  un'altra suite in corsa. Il brief è la sezione G del file dei brief.
 - ~~I guadagni sono misurati prima della messa in produzione~~ — **rifatti sul server il
   2026-09-10**, diciannove ore dopo la messa in produzione delle correzioni del 9: **zero** righe
   «said nothing for» (il difetto dell'orologio del silenzio, che prima ne produceva ventisei),
