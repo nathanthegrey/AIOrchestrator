@@ -44,6 +44,19 @@ Unit, on the pure decision surfaces (the engine is `internal sealed` with no `In
 
 `EveryTopicButtonIsWired` walked `TopicCommandButtons.Commands` and never `GeneralCommands`, so `/summary`, `/resume` and `/dnd_all` sat with no case in the switch under a green suite. It had also never been possible to notice by hand, because the bar was never drawn — nobody can tap a button that is not there. A guard reporting "every button wired" over a list it had never read is decision 20's harness, in the file written to prevent it. It walks both lists now, concatenated rather than duplicated, so a third bar is covered by construction.
 
+## What the branch review found, and why it mattered
+
+An adversarial review after the six points were written found that **two of them did not actually hold**, and that two of my own probes proved less than they claimed. All of it is in `a67b651`. The two that matter:
+
+- **Point 4 turned held traffic into LOST traffic.** `Tell_LedgerMovement_Async` remembers the reading it compares against and *then* sends through a method that returns silently in any mode but Normal — mutate first, gate second. Running the status refresh under a mute advanced the remembered ledger on every tick while the notice was dropped, so on unmute there was nothing left to report; and because `_recappedOrchIds` was already armed, the owner could **never** be told their endeavour had finished. It now gates before it consumes, which also closes the case a per-topic 🌙 has always had.
+- **Point 1 was defeated by PULSE's own heartbeat.** Field 6 is `updated HH:MM`, emitted unconditionally, so the text differs at every minute boundary however still the orchestration is: "buried AND content changed" silently meant "buried, then within sixty seconds" — worse than the old rule, because it looks fixed. The whole suite was blind to it, since every planner test freezes `now` and both compared texts come from one clock.
+- **🏁 could never render** — every caller of the name composer skips closed sessions, so the owner's glyph was built, documented, unit-tested and unreachable. That is the `Build_ForGeneral` defect, reintroduced by the commit that fixed it.
+- **Point 6 opened a new silent failure**: a byte-identical question asked again hashed to the remembered key and was never alerted about. The key is now cleared where the debt is settled.
+
+And two of mine: the DND probe was carried by the moon glyph rather than by the event it claimed to measure, and the sound guard had two routes to passing. Both rewritten and mutation-checked.
+
+**The lesson worth keeping:** four of these six findings are the same shape — *a statement that was true when it was written and that my change made false*. Two were comments, one was a test's own summary, and two were behaviours whose justification I inherited without re-checking. Writing the change is not the work; re-reading what the change makes untrue is.
+
 ## Not in this branch
 
 - **`Push_PeriodicStatus_Async` is still misnamed** — there is no periodic status any more. A rename touching every call site is not one of the six.
@@ -51,3 +64,6 @@ Unit, on the pure decision surfaces (the engine is `internal sealed` with no `In
 - **An unreadable member state file can still log on every tick.**
 - **~100 test fixtures delete their temp tree unguarded**, any of which can hit the macOS teardown race `TempTree` was written for; only the fixture that actually failed uses it.
 - **`⛔`'s constant is kept** though nothing draws it, so `Strip_Glyph` can take it off names an older build wrote. Every currently-blocked topic is wearing one.
+- **A member row's duration ticks with the clock too**, so a topic with a live member can still move its line about once a minute — the same class as the heartbeat, with a narrower blast radius. Whether "5 min instead of 4" is news worth moving the message for is the owner's ruling, not mine to assume.
+- **📸 is still a mode glyph on a name.** The General topic's own name carries the status-screenshots marker, which is a delivery setting — the category point 2 moved to PULSE's header. General has a dashboard rather than a PULSE, so where it should go is a design question. `Strip_Glyph` does not know 📸 either.
+- **`AwayMode_Policy.AWAY_GLYPH` / `QUIET_GLYPH`** are a second spelling of two characters, read by nothing but the test that keeps them in step with the first spelling. Two lines to delete; outside the six.
