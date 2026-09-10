@@ -8,6 +8,7 @@ internal sealed class RunnerConfigsModel(
     int maxConcurrentTurnsPerOrchestration,
     TimeSpan turnTimeout,
     TimeSpan coalesceWindow,
+    TimeSpan memberDigestWindow,
     TimeSpan silenceLimit,
     string sessionMemoryMax,
     IReadOnlyList<string> rejections) : IRunnerConfigs
@@ -18,6 +19,7 @@ internal sealed class RunnerConfigsModel(
     public int MaxConcurrentTurnsPerOrchestration { get; } = maxConcurrentTurnsPerOrchestration;
     public TimeSpan TurnTimeout { get; } = turnTimeout;
     public TimeSpan CoalesceWindow { get; } = coalesceWindow;
+    public TimeSpan MemberDigestWindow { get; } = memberDigestWindow;
     public TimeSpan SilenceLimit { get; } = silenceLimit;
     public string SessionMemoryMax { get; } = sessionMemoryMax;
     public IReadOnlyList<string> Rejections { get; } = rejections;

@@ -24,6 +24,25 @@ public interface IRunnerConfigs
     TimeSpan CoalesceWindow { get; }
 
     /// <summary>
+    /// THE LONGEST A MEMBER'S ORDINARY ENTRY IS HELD BEFORE IT BUYS ITS SUPERVISOR A TURN — the digest
+    /// window of <see cref="PendingTraffic.WakeUp_Policy"/>.
+    ///
+    /// <para>
+    /// Measured on the VPS 6–9 Sep 2026: 247 of an orchestration supervisor's ~400 wake-ups came from
+    /// member traffic, and one wake-up is on the order of 1 M input tokens (2.5 calls × ~398 k mean
+    /// context). Held for a few minutes, several members' reports ride ONE turn instead of buying one
+    /// each. The owner is never held, a member declaring itself blocked is never held, and a held entry
+    /// rides whatever starts the next turn — so this delays nothing but the moment a report is read.
+    /// </para>
+    /// <para>
+    /// ZERO OR NEGATIVE TURNS THE DIGEST OFF, restoring one-entry-one-turn. It is a real setting rather
+    /// than an accident of parsing: this is the one lever in the token plan that changes WHEN a
+    /// supervisor reads its crew, so the owner keeps a way to put it back without a deployment.
+    /// </para>
+    /// </summary>
+    TimeSpan MemberDigestWindow { get; }
+
+    /// <summary>
     /// How long a LIVING stream process may say nothing before it is treated as hung, killed and
     /// resumed. Shorter than <see cref="TurnTimeout"/> on purpose: a process that is alive and mute
     /// is a different animal from a turn that is genuinely thinking for half an hour, and waiting
@@ -52,10 +71,20 @@ public interface IRunnerConfigs
     string SessionMemoryMax { get; }
 
     /// <summary>
-    /// Configurations the loader REFUSED, in the owner's own terms — one line each, logged once by
-    /// the launcher. A refusal is not a parse error (config.json still loads, the role falls back to
-    /// terminal): it is a setting that would have done something the app must not do, and the only
-    /// unacceptable outcome is applying it silently.
+    /// Configurations the loader REFUSED, in the owner's own terms — one line each. A refusal is not a
+    /// parse error (config.json still loads, the role falls back to terminal): it is a setting that
+    /// would have done something the app must not do, and the only unacceptable outcome is applying it
+    /// silently.
+    ///
+    /// <para>
+    /// THE READER IS <c>PrintTurnDispatcherModel.Report_ConfigRejections_Once</c>, which logs each
+    /// distinct line once. This docstring said "logged once by the launcher" for four stages and no
+    /// launcher did: <c>grep -rn Rejections</c> on 2026-09-10 found the model, the factory, this
+    /// interface and five test files, so every refusal the loader wrote reached nobody at all
+    /// (adversarial review; CLAUDE.md decision 21 — a silence is not an acceptable outcome). Naming
+    /// the reader here is deliberate: this is a list whose whole value is that somebody prints it, so
+    /// the next reader can check the claim in one grep instead of believing it.
+    /// </para>
     /// </summary>
     IReadOnlyList<string> Rejections { get; }
 }

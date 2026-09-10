@@ -15,6 +15,35 @@ public static class MemberState_Resolver
     public const string MUTATION_WINDOW_CLOSED_MARKER = "MUTATION WINDOW CLOSED";
     public const string BLOCKED_ON_OWNER_MARKER = "BLOCKED ON OWNER";
 
+    /// <summary>
+    /// A session asking for a decision it cannot take itself. THE SHARED LITERAL, read by the mirror
+    /// (<c>Bridge.OwnerPush_Policy.QUESTION_MARKER</c> is an alias of this field) to raise buttons on
+    /// the owner's phone and by the dispatcher (<c>Running.PendingTraffic.WakeUp_Policy</c>) to refuse
+    /// to hold an entry that is a session asking for help. It lives here because both sides need it
+    /// and neither may own it.
+    ///
+    /// <para>
+    /// TWO COPIES REMAIN AND THIS FIELD IS NOT THEM, which is worth stating plainly because the first
+    /// version of this docstring claimed to be "THE ONE LITERAL for this word in the tree" and a
+    /// review disproved it in one grep on 2026-09-10.
+    /// <c>Bridge/OwnerMessage_Contract.cs</c> carries a private <c>"QUESTION:"</c> for counting
+    /// question markers in a supervisor's outbound message, and
+    /// <c>Bridge/Decisions/OwnerQuestion_Contract.cs</c> carries a public <c>"QUESTION"</c> — the
+    /// colon-less form, which is the one the paragraph below names as the danger, though there it is
+    /// safe because it is used as a LINE-LEADING marker name and the colon is added by the extractor.
+    /// Collapsing both onto this field is the right change and it is one line each in <c>Bridge/</c>,
+    /// outside the file set of the stage that found this, so it is reported rather than done.
+    /// </para>
+    /// <para>
+    /// WHY THE COLON IS PART OF THE WORD. The digest added a fourth spelling on 2026-09-09 in the bare
+    /// colon-less form, and <see cref="Contains_Marker"/> matches a whole token ANYWHERE in a subject
+    /// — so a report reading "the open question about the parser is settled" declared itself a
+    /// question and defeated the hold. The colon is what makes the marker a DECLARATION rather than a
+    /// word (decision 12: never a second copy, and never a broader one).
+    /// </para>
+    /// </summary>
+    public const string QUESTION_MARKER = "QUESTION:";
+
     /// <summary>The second word of the boot subject every member is required to write: "imp-1 online".</summary>
     public const string BOOT_ANNOUNCEMENT_WORD = "online";
 

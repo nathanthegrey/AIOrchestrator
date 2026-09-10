@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Status;
+
 namespace AIOrchestratorCoreLib.Bridge;
 
 /// <summary>
@@ -16,8 +18,12 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// </summary>
 public static class OwnerPush_Policy
 {
-    /// <summary>Written by the supervisor when it needs a decision — rendered as tappable buttons.</summary>
-    public const string QUESTION_MARKER = "QUESTION:";
+    /// <summary>
+    /// Written by the supervisor when it needs a decision — rendered as tappable buttons. The word
+    /// itself lives with the rest of the channel vocabulary (<see cref="MemberState_Resolver.QUESTION_MARKER"/>);
+    /// this name stays because this file's readers are about the owner's phone, not about member state.
+    /// </summary>
+    public const string QUESTION_MARKER = MemberState_Resolver.QUESTION_MARKER;
     public const string OPTION_MARKER = "OPTION:";
 
     /// <summary>Work has stopped and only the owner can restart it.</summary>
