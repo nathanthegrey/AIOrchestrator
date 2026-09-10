@@ -476,18 +476,26 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// WHICH QUESTION each orchestration has already been alerted about — the entry index, not a
-    /// bool.
+    /// WHICH QUESTION each orchestration has already been alerted about — a hash of what the question
+    /// SAYS and who asked it, not a bool and not the `[n]`.
     ///
     /// <para>
-    /// The owner's ruling, 2026-09-09: the ⚠️ fires *"once per question (key: the question's entry
-    /// index)"*. A bool could only be re-armed by traffic resuming, which is how the old alert fired
-    /// three times in one evening about the same nothing: their own words, of an alert at 17:30
-    /// after the supervisor had said "Nothing more needed from you", and again at 18:38 and 20:25.
-    /// Keyed on the question, a second alert needs a second QUESTION rather than merely more silence.
+    /// The owner's ruling, 2026-09-09: the ⚠️ fires *"once per question"*. A bool could only be
+    /// re-armed by traffic resuming, which is how the old alert fired three times in one evening
+    /// about the same nothing: their own words, of an alert at 17:30 after the supervisor had said
+    /// "Nothing more needed from you", and again at 18:38 and 20:25. Keyed on the question, a second
+    /// alert needs a second QUESTION rather than merely more silence.
+    /// </para>
+    /// <para>
+    /// IT WAS THE ENTRY INDEX UNTIL 2026-09-10 — the owner's own first wording, corrected by them on
+    /// the grounds of decision 12: the `[n]` is agent-written and is a guess unless the writer
+    /// re-read the file, and `option-lab-2` really did carry two `[80]` and two `[81]` in one
+    /// evening. On a duplicate index the SECOND question was silent (one key, and the alert fires
+    /// once per key); across a compaction that renumbered an entry, the SAME question earned a second
+    /// alert. Both failures are silent, and both produce exactly the noise this brief removes.
     /// </para>
     /// </summary>
-    readonly Dictionary<string, int> _stallAlertedQuestionIndexByOrchId = [];
+    readonly Dictionary<string, string> _stallAlertedQuestionKeyByOrchId = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
@@ -1971,7 +1979,7 @@ internal sealed class BridgeEngineModel(
 
             if (quietFor.TotalMinutes < STALL_ALERT_MINUTES)
             {
-                // Traffic resumed. The remembered question index is deliberately KEPT: the alert is
+                // Traffic resumed. The remembered question key is deliberately KEPT: the alert is
                 // once per question now, and traffic that does not answer it — the supervisor's own
                 // follow-up, an app entry — must not buy a second ⚠️ about the same question.
                 continue;
@@ -2003,14 +2011,18 @@ internal sealed class BridgeEngineModel(
             // progress, or saying that nothing more is needed, has asked for nothing. It produced
             // six false alerts across two topics in one evening — including one at 17:30, thirty
             // minutes after the supervisor wrote "Nothing more needed from you".
-            var unansweredQuestionIndex = Status.OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+            var unansweredQuestion = Status.OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
                 ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId)));
 
-            if (unansweredQuestionIndex == null)
+            if (unansweredQuestion == null)
                 continue;
 
-            if (_stallAlertedQuestionIndexByOrchId.TryGetValue(session.OrchId, out var alreadyAlertedFor)
-                && alreadyAlertedFor == unansweredQuestionIndex.Value)
+            // WHAT IT SAYS, NOT WHERE IT SITS. See the field's own summary for the two silent
+            // failures the `[n]` produced.
+            var questionKey = Status.OwnerOwesReply_Decider.Identify_Question(unansweredQuestion);
+
+            if (_stallAlertedQuestionKeyByOrchId.TryGetValue(session.OrchId, out var alreadyAlertedFor)
+                && alreadyAlertedFor == questionKey)
                 continue;
 
             // NEVER WHILE THE SUPERVISOR IS PAUSED FOR A USAGE LIMIT (owner's ruling, same day, from
@@ -2042,7 +2054,7 @@ internal sealed class BridgeEngineModel(
 
                 // After a CONFIRMED send, so a failed one retries next tick — and keyed on the
                 // question, so the next alert needs a new one.
-                _stallAlertedQuestionIndexByOrchId[session.OrchId] = unansweredQuestionIndex.Value;
+                _stallAlertedQuestionKeyByOrchId[session.OrchId] = questionKey;
                 _log.Log_Warning(session.OrchId, alertText);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
@@ -9745,7 +9757,7 @@ internal sealed class BridgeEngineModel(
 
         // Whose move it is, read once for this whole status block: the supervisor row and a solo's
         // member row are the same conversation, so they must not answer it differently.
-        var ownerOwesReply = Status.OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+        var ownerOwesReply = Status.OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
             ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId))) != null;
 
         var supervisorContextSuffix = Build_ContextSuffix_ForSupervisor(supervisorUsage);

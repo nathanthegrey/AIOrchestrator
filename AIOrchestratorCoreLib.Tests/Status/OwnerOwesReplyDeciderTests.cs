@@ -37,18 +37,63 @@ public class OwnerOwesReplyDeciderTests
         return ChannelEntry_Factory.Create(index, author, "2026-09-09 17:00", "subject", body, $"## [{index}] FROM {author}\n{body}");
     }
 
+    /// <summary>
+    /// THE KEY IS WHAT THE QUESTION SAYS, NOT WHERE IT SITS — the owner's correction of 2026-09-10,
+    /// on the grounds of decision 12: the `[n]` in a channel header is agent-written and is a guess
+    /// unless the writer re-read the file.
+    ///
+    /// <para>
+    /// BOTH FAILURES THE INDEX PRODUCED ARE ASSERTED HERE, because each is silent on its own and
+    /// each would look like the other's fix. On a DUPLICATE index — `option-lab-2` carried two `[80]`
+    /// and two `[81]` in one evening — two genuinely different questions shared one key, and the ⚠️
+    /// fires once per key, so the second question was never alerted about at all. Across a
+    /// COMPACTION that renumbers entries, the same question got a new key and bought a second alert
+    /// about a debt the owner already knew of.
+    /// </para>
+    /// <para>
+    /// The third case is the author: the same words from a supervisor and from a solo are two debts
+    /// on two channels, so they must not collapse into one key.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TwoQuestionsSharingAnIndexAreTwoQuestions_AndOneQuestionRenumberedIsStillOne()
+    {
+        var asked = Entry(80, ChannelAuthors.Supervisor, QUESTION_BODY);
+        var anotherAskedUnderTheSameIndex = ChannelEntry_Factory.Create(
+            80, ChannelAuthors.Supervisor, "2026-09-09 17:00", "a different subject", QUESTION_BODY,
+            "## [80] FROM supervisor\n" + QUESTION_BODY);
+        var theSameQuestionRenumbered = ChannelEntry_Factory.Create(
+            3, ChannelAuthors.Supervisor, "2026-09-09 19:42", "subject", QUESTION_BODY,
+            "## [3] FROM supervisor\n" + QUESTION_BODY);
+        var theSameWordsFromASolo = Entry(80, ChannelAuthors.Solo, QUESTION_BODY);
+
+        Assert.NotEqual(
+            OwnerOwesReply_Decider.Identify_Question(asked),
+            OwnerOwesReply_Decider.Identify_Question(anotherAskedUnderTheSameIndex));
+
+        // The renumbered one also carries a LATER stamp, so this pins that neither the index nor the
+        // clock is in the key — a re-stamped entry is not a new question either.
+        Assert.Equal(
+            OwnerOwesReply_Decider.Identify_Question(asked),
+            OwnerOwesReply_Decider.Identify_Question(theSameQuestionRenumbered));
+
+        Assert.NotEqual(
+            OwnerOwesReply_Decider.Identify_Question(asked),
+            OwnerOwesReply_Decider.Identify_Question(theSameWordsFromASolo));
+    }
+
     [Fact]
     public void ADeclaredQuestionFromTheSupervisor_IsWhatTheOwnerOwes()
     {
-        Assert.Equal(2, OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
-            [Entry(1, ChannelAuthors.Owner), Entry(2, ChannelAuthors.Supervisor, QUESTION_BODY)]));
+        Assert.Equal(2, OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
+            [Entry(1, ChannelAuthors.Owner), Entry(2, ChannelAuthors.Supervisor, QUESTION_BODY)])?.Index);
     }
 
     [Fact]
     public void ABlockedOnOwnerEntry_CountsAsAQuestion()
     {
-        Assert.Equal(2, OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
-            [Entry(1, ChannelAuthors.Owner), Entry(2, ChannelAuthors.Solo, BLOCKED_BODY)]));
+        Assert.Equal(2, OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
+            [Entry(1, ChannelAuthors.Owner), Entry(2, ChannelAuthors.Solo, BLOCKED_BODY)])?.Index);
     }
 
     /// <summary>
@@ -59,14 +104,14 @@ public class OwnerOwesReplyDeciderTests
     [Fact]
     public void APlainReportFromTheSupervisor_IsNotADebt()
     {
-        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
             [Entry(1, ChannelAuthors.Owner), Entry(2, ChannelAuthors.Supervisor)]));
     }
 
     [Fact]
     public void TheOwnerSpokeLast_TheyOweNothing()
     {
-        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
             [Entry(1, ChannelAuthors.Supervisor, QUESTION_BODY), Entry(2, ChannelAuthors.Owner)]));
     }
 
@@ -77,7 +122,7 @@ public class OwnerOwesReplyDeciderTests
     [Fact]
     public void AQuestionBehindALaterPlainEntry_IsNotOwedAnyMore()
     {
-        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
         [
             Entry(1, ChannelAuthors.Owner),
             Entry(2, ChannelAuthors.Supervisor, QUESTION_BODY),
@@ -93,25 +138,25 @@ public class OwnerOwesReplyDeciderTests
     [Fact]
     public void AnAppEntryAfterTheQuestion_DoesNotCancelTheDebt()
     {
-        Assert.Equal(2, OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+        Assert.Equal(2, OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
         [
             Entry(1, ChannelAuthors.Owner),
             Entry(2, ChannelAuthors.Supervisor, QUESTION_BODY),
             Entry(3, ChannelAuthors.App),
-        ]));
+        ])?.Index);
     }
 
     [Fact]
     public void AnAppEntryAfterTheOwner_DoesNotCreateADebt()
     {
-        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
             [Entry(1, ChannelAuthors.Supervisor, QUESTION_BODY), Entry(2, ChannelAuthors.Owner), Entry(3, ChannelAuthors.App)]));
     }
 
     [Fact]
     public void NobodyHasSpokenYet_NothingIsOwed()
     {
-        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull([]));
+        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull([]));
     }
 
     /// <summary>
@@ -124,7 +169,7 @@ public class OwnerOwesReplyDeciderTests
     [Fact]
     public void ARhetoricalQuestionInProse_IsNotADeclaredQuestion()
     {
-        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+        Assert.Null(OwnerOwesReply_Decider.Find_UnansweredQuestion_OrNull(
             [Entry(1, ChannelAuthors.Owner), Entry(2, ChannelAuthors.Supervisor, "Why did that fail? Because the token was stale. Fixed.")]));
     }
 

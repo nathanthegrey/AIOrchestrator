@@ -5,7 +5,7 @@ using AIOrchestratorCoreLib.Channels.ChannelEntry;
 namespace AIOrchestratorCoreLib.Status;
 
 /// <summary>
-/// WHICH QUESTION THE OWNER STILL OWES AN ANSWER TO — by entry index, or none.
+/// WHICH QUESTION THE OWNER STILL OWES AN ANSWER TO — the entry itself, or none.
 ///
 /// <para>
 /// WHAT THIS REPLACES, AND WHY. The rule was "the session spoke last, so the owner owes a reply",
@@ -23,10 +23,20 @@ namespace AIOrchestratorCoreLib.Status;
 /// that nothing is needed has asked for nothing.
 /// </para>
 /// <para>
-/// IT RETURNS THE INDEX, not a bool, and that is the "once per question" half of the ruling: the
+/// IT RETURNS THE ENTRY, not a bool, and that is the "once per question" half of the ruling: the
 /// caller remembers WHICH question it has already alerted about, so a second alert needs a second
 /// question rather than merely more silence. A bool could only ever be re-armed by traffic, which is
 /// how the old alert managed to fire three times about the same nothing.
+/// </para>
+/// <para>
+/// IT RETURNED THE `[n]` UNTIL 2026-09-10, which was the owner's own first wording — and it is the
+/// one number in this system that must never be an identity. The header index is written by the
+/// agent and is a guess unless the writer re-read the file: `option-lab-2` carried two `[80]` and
+/// two `[81]` entries in one evening (decision 12). Two different questions sharing an index made
+/// the second one silent — the alert fires ONCE per key, and they had one key — and a question
+/// re-indexed by a compaction became a "new" question and bought a second alert about the same debt.
+/// Both failures are silent, and both are the exact shape of the noise brief C exists to remove.
+/// The key is now <see cref="Identify_Question"/>: what the entry SAYS, and who said it.
 /// </para>
 /// <para>
 /// APP ENTRIES ARE SKIPPED, unchanged from the rule this replaces: the app is not a participant in
@@ -37,7 +47,7 @@ namespace AIOrchestratorCoreLib.Status;
 public static class OwnerOwesReply_Decider
 {
     /// <summary>
-    /// The index of the supervisor entry the owner owes an answer to, or null when they owe nothing.
+    /// The supervisor entry the owner owes an answer to, or null when they owe nothing.
     ///
     /// <para>
     /// Scanning stops at the first entry that settles the question: an OWNER entry means they have
@@ -46,7 +56,7 @@ public static class OwnerOwesReply_Decider
     /// moved on, and the owner is answering the conversation, not an archive.
     /// </para>
     /// </summary>
-    public static int? Find_UnansweredQuestionIndex_OrNull(IReadOnlyList<IChannelEntry> ownerChannelEntries)
+    public static IChannelEntry? Find_UnansweredQuestion_OrNull(IReadOnlyList<IChannelEntry> ownerChannelEntries)
     {
         for (var i = ownerChannelEntries.Count - 1; i >= 0; i--)
         {
@@ -58,7 +68,7 @@ public static class OwnerOwesReply_Decider
             if (!ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author))
                 continue;
 
-            return Is_RealQuestion(entry.RawText) ? entry.Index : null;
+            return Is_RealQuestion(entry.RawText) ? entry : null;
         }
 
         return null;
@@ -79,6 +89,30 @@ public static class OwnerOwesReply_Decider
     /// mean anything."*
     /// </para>
     /// </summary>
+    /// <summary>
+    /// THE IDENTITY OF A QUESTION: who asked it and what it says, hashed — the key the ⚠️ alert
+    /// remembers so it fires once per question (owner, 2026-09-10: "never on the agent-written
+    /// `[n]`").
+    ///
+    /// <para>
+    /// AUTHOR, SUBJECT AND BODY — and deliberately NOT <c>RawText</c>, which is the obvious choice
+    /// and the wrong one: the raw text is the whole entry INCLUDING the `## [n]` header and the
+    /// stamp, so hashing it would key on the index again through the back door, and would also make
+    /// a re-stamped entry a different question. The author is in the key because the same words from
+    /// a supervisor and from a solo are two debts on two channels.
+    /// </para>
+    /// <para>
+    /// It hashes rather than storing the text because the map is per orchestration and the entry can
+    /// be long; <see cref="ChannelEntry_Digest"/> already exists for exactly this decision — its own
+    /// summary names decision 12 and the duplicate-index incident — and reusing it keeps one
+    /// normalisation (line endings, trailing space) instead of a second.
+    /// </para>
+    /// </summary>
+    public static string Identify_Question(IChannelEntry questionEntry)
+    {
+        return ChannelEntry_Digest.Compute($"{questionEntry.Author}\n{questionEntry.Subject}\n{questionEntry.Body}");
+    }
+
     public static bool Is_RealQuestion(string rawEntryText)
     {
         if (string.IsNullOrEmpty(rawEntryText))
