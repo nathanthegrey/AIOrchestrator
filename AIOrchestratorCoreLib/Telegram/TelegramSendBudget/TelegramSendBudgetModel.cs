@@ -42,45 +42,40 @@ internal sealed class TelegramSendBudgetModel : ITelegramSendBudget
         _sendRefilledUtc = sendRefilledUtc;
     }
 
-    public Task Wait_ForMessageEdit_Async(long messageId, CancellationToken cancellationToken)
+    public TimeSpan Reserve_MessageEdit(long messageId, DateTime nowUtc)
     {
-        return Wait_Async(
-            () =>
+        lock (_lock)
+        {
+            var gap = TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE;
+
+            Prune_StaleEdits(nowUtc, gap);
+
+            if (!_lastEditUtcByMessageId.TryGetValue(messageId, out var lastEdit))
             {
-                var now = DateTime.UtcNow;
-                var gap = TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE;
+                // FIRST EDIT OF THIS MESSAGE GOES STRAIGHT OUT. The gate is about a REPEATED edit
+                // of the same message; making the first one wait would delay every status line by
+                // half a minute after every restart for nothing.
+                _lastEditUtcByMessageId[messageId] = nowUtc;
 
-                Prune_StaleEdits(now, gap);
+                return TimeSpan.Zero;
+            }
 
-                if (!_lastEditUtcByMessageId.TryGetValue(messageId, out var lastEdit))
-                {
-                    // FIRST EDIT OF THIS MESSAGE GOES STRAIGHT OUT. The gate is about a REPEATED edit
-                    // of the same message; making the first one wait would delay every status line by
-                    // half a minute after every restart for nothing.
-                    _lastEditUtcByMessageId[messageId] = now;
+            var elapsed = nowUtc - lastEdit;
 
-                    return TimeSpan.Zero;
-                }
+            if (elapsed >= gap)
+            {
+                _lastEditUtcByMessageId[messageId] = nowUtc;
 
-                var elapsed = now - lastEdit;
+                return TimeSpan.Zero;
+            }
 
-                if (elapsed >= gap)
-                {
-                    _lastEditUtcByMessageId[messageId] = now;
-
-                    return TimeSpan.Zero;
-                }
-
-                // THE STAMP MOVES TO WHEN THIS EDIT WILL ACTUALLY GO OUT, not to now. Recording `now`
-                // would let a second caller that arrives during the wait compute its own gap from a
-                // moment already spent, and two waiters would both fire at the end of one gap.
-                var wait = gap - elapsed;
-
-                _lastEditUtcByMessageId[messageId] = lastEdit + gap;
-
-                return wait;
-            },
-            cancellationToken);
+            // THE STAMP IS LEFT ALONE. The previous version moved it to `lastEdit + gap` because it
+            // was about to SLEEP until then, and two sleepers had to be kept from waking on the same
+            // instant. Nobody sleeps here any more, so advancing it would push the door away by a
+            // further gap every time a surface asked and was turned back — a tick-rate caller would
+            // never be let through at all.
+            return gap - elapsed;
+        }
     }
 
     /// <summary>

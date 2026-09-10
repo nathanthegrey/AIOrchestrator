@@ -343,6 +343,43 @@ argomenti e quelli chiusi in lista sono rumore; la storia resta nei file su disc
 
 ---
 
+### Un campanello che ha già detto «aspetta» non si suona più
+
+**Com'era.** Quando Telegram rispondeva «troppe richieste, riprova fra trenta secondi», quella
+risposta la conosceva soltanto la superficie che l'aveva ricevuta. Tutte le altre continuavano a
+suonare lo stesso campanello, una volta ogni due secondi, per tutta la durata dell'attesa.
+
+**Cos'è adesso.** La risposta di Telegram viene scritta su una nota condivisa, appesa al bersaglio
+preciso che è stato rifiutato: chi arriva dopo la legge e non prova nemmeno. E il freno interno che
+distanzia due riscritture dello stesso messaggio non addormenta più il ciclo del ponte: dice quanto
+manca e lascia decidere a chi chiama — una riga di stato torna al giro dopo, il tocco del
+proprietario aspetta e riprova, perché è l'unica cosa che qualcuno sta guardando.
+
+**Perché.** Il principio è che il numero di Telegram batte il nostro: un limite che non possiamo
+vedere lo stimiamo, ma un rifiuto porta con sé la risposta esatta, e ignorarla per una stima locale
+è il modo in cui un programma continua a sbattere sullo stesso muro. La misura che l'ha reso
+evidente, presa sul server il 2026-09-10 nell'ora fino alle 22:38: **388 rifiuti per eccesso di
+richieste**, di cui **376 erano due sole righe di stato** ritentate al ritmo del ciclo contro
+un'attesa dichiarata di 20-34 secondi. Nel giornale si vede il conto alla rovescia — 34, 31, 29,
+27, 25 — che è **una sola finestra riraccontata**, non 388 violazioni: il programma non aspettava
+mai, chiedeva e basta, e ogni domanda era una riga di log.
+
+**Cosa cambia per chi lo usa.** Dentro una di quelle attese una riga di stato può restare ferma
+fino a mezzo minuto: è il prezzo, ed è voluto. Quello che non resta più indietro è il tocco: prima
+il bottone premuto restava con il testo vecchio e la tastiera viva su una domanda già risposta.
+
+**Il prezzo, e un limite dichiarato.** La nota vale solo per il bersaglio rifiutato, non per
+l'intera conversazione — che sarebbe difendibile, ed è ciò che fanno le librerie serie — perché
+senza le corsie di priorità (che arrivano dopo) una nota su tutta la conversazione rimetterebbe il
+tocco del proprietario dietro alla punizione di una riga di stato: esattamente il rovescio che
+questo lavoro esiste per togliere. E il ponte adesso dice nel giornale quanto è durato un giro
+quando supera i cinque secondi, una volta sola finché non torna sotto: senza quella riga un blocco
+del ciclo sarebbe invisibile e verrebbe raccontato come «l'app è muta».
+
+**Dove.** `stage/17-one-door-to-telegram`, che continua `stage/15` e `stage/16`.
+
+---
+
 ## 2. La vita di un turno
 
 ### Un membro occupato non è un membro morto
@@ -1311,6 +1348,16 @@ pacchetto è già scritto e spento. Il rischio, che è sul giudizio e non sul co
 quello di prima.
 
 **Cose aperte, dette perché non sembrino risolte.**
+- **Lo sportello unico verso Telegram — progettato, non costruito (2026-09-10, notte).** Oggi ogni
+  parte del programma parla con Telegram *dentro* il battito da due secondi, e siccome il battito non
+  può aspettare i trenta secondi che Telegram chiede, ogni punto di chiamata si è inventato la sua
+  regola: alcuni rallentano, alcuni si arrendono, tre non fanno né l'uno né l'altro. Il disegno
+  approvato toglie gli invii dal battito — il battito deposita intenzioni, un solo incaricato per
+  conversazione le spedisce, gli incarichi non si perdono e i ridisegni superati si buttano — ed è
+  **vincolato a una misura che non esiste ancora**: il server gira ancora il binario delle 20:56, che
+  precede tutte le correzioni, quindi i 388 dell'ora sono codice vecchio. Prima si mette in produzione
+  quello che c'è, si conta, e poi si decide se lo sportello serve com'è disegnato. La spec è in
+  `docs/superpowers/specs/`.
 - **Sette cose sono state proposte dalla revisione indipendente, tre fatte e quattro no. Le quattro
   stanno qui perché non sembrino sviste.** Fatte: la verifica che il promemoria di metà turno non
   rompe la cache (non la rompe — costa circa mille token per turno, venti volte in cinque giorni),

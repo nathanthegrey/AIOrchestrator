@@ -406,6 +406,69 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             _failSendsContaining = fragment;
     }
 
+    readonly Dictionary<string, RateLimitScript_Fake> _sendRateLimitsByFragment = [];
+    readonly Dictionary<long, RateLimitScript_Fake> _editRateLimitsByMessageId = [];
+
+    /// <summary>
+    /// A REAL 429, SCRIPTABLE BY TEXT FRAGMENT — the gap <see cref="Fail_Sends_Containing"/> cannot
+    /// close.
+    ///
+    /// <para>
+    /// WHY A PLAIN <see cref="Exception"/> WAS NOT ENOUGH. Every failure classifier in the engine —
+    /// <c>TelegramAttempt_Gate.Classify_Failure</c>, <c>TopicDelete_Decider.Classify</c>,
+    /// <c>RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull</c> — pattern-matches on
+    /// <see cref="TelegramApiException"/> and reads its status code; a bare <see cref="Exception"/>
+    /// carries no status, so every one of those classifiers reads it as a hard, permanent refusal.
+    /// <see cref="Fail_Sends_Containing"/> can therefore only ever produce "Telegram said no", never
+    /// "Telegram said slow down" — and before this method, no engine test could exercise a 429 path
+    /// at all. <c>TheBridgeNeverLiesAboutDeliveryTests</c> says so outright.
+    /// </para>
+    /// <para>
+    /// OPT-IN AND SEPARATE from <see cref="Fail_Sends_Containing"/>, which keeps its exact behaviour
+    /// — existing tests depend on the plain-Exception "hard failure" outcome, and nothing here
+    /// changes what fragment maps to what. This is the OTHER outcome: Telegram is still there,
+    /// answering, and asking to wait.
+    /// </para>
+    /// <para>
+    /// <paramref name="failFirstAttempts"/> null means "fails on every matching attempt, forever" —
+    /// for a test proving a ceiling is honoured (the failure must be handed back, never slept
+    /// through, however many times it is asked). A number N means "the first N attempts are
+    /// rate-limited, the (N+1)th succeeds" — for a test proving a retry actually lands.
+    /// <see cref="Count_SendAttempts_Containing"/> reports how many matching attempts were made,
+    /// which is the number every back-off test is actually about.
+    /// </para>
+    /// </summary>
+    public void Rate_Limit_Sends_Containing(string fragment, int retryAfterSeconds, int? failFirstAttempts = null)
+    {
+        lock (_lock)
+            _sendRateLimitsByFragment[fragment] = new RateLimitScript_Fake(retryAfterSeconds, failFirstAttempts);
+    }
+
+    /// <summary>
+    /// The edit twin of <see cref="Rate_Limit_Sends_Containing"/> — keyed by message id rather than
+    /// by text fragment, because an edit is identified by WHICH message it rewrites, not by what it
+    /// rewrites it to (two edits of the same status line carry the same text on purpose).
+    /// </summary>
+    public void Rate_Limit_Edits_Of(long messageId, int retryAfterSeconds, int? failFirstAttempts = null)
+    {
+        lock (_lock)
+            _editRateLimitsByMessageId[messageId] = new RateLimitScript_Fake(retryAfterSeconds, failFirstAttempts);
+    }
+
+    /// <summary>How many times a send matching <paramref name="fragment"/> was attempted — the count every back-off test asserts on.</summary>
+    public int Count_SendAttempts_Containing(string fragment)
+    {
+        lock (_lock)
+            return _sendRateLimitsByFragment.TryGetValue(fragment, out var script) ? script.Attempts : 0;
+    }
+
+    /// <summary>How many times an edit of <paramref name="messageId"/> was attempted.</summary>
+    public int Count_EditAttempts_Of(long messageId)
+    {
+        lock (_lock)
+            return _editRateLimitsByMessageId.TryGetValue(messageId, out var script) ? script.Attempts : 0;
+    }
+
     public int Count_Sent_Containing(string fragment)
     {
         lock (_lock)
@@ -493,6 +556,24 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             if (_timeoutSendsContaining != null && text.Contains(_timeoutSendsContaining, StringComparison.Ordinal))
                 throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 90 seconds elapsing.");
 
+            foreach (var (fragment, script) in _sendRateLimitsByFragment)
+            {
+                if (!text.Contains(fragment, StringComparison.Ordinal))
+                    continue;
+
+                script.Attempts++;
+
+                if (script.FailFirstAttempts == null || script.Attempts <= script.FailFirstAttempts)
+                {
+                    throw new TelegramApiException(
+                        429,
+                        $"Telegram 'sendMessage' failed with HTTP 429: {{\"description\":\"Too Many Requests: retry after {script.RetryAfterSeconds}\"}}",
+                        retryAfterSeconds: script.RetryAfterSeconds);
+                }
+
+                break;
+            }
+
             _sentTexts.Add(text);
             return _nextMessageId++;
         }
@@ -529,7 +610,22 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
     public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
     {
         lock (_lock)
+        {
+            if (_editRateLimitsByMessageId.TryGetValue(messageId, out var script))
+            {
+                script.Attempts++;
+
+                if (script.FailFirstAttempts == null || script.Attempts <= script.FailFirstAttempts)
+                {
+                    return Task.FromException(new TelegramApiException(
+                        429,
+                        $"Telegram 'editMessageText' failed with HTTP 429: {{\"description\":\"Too Many Requests: retry after {script.RetryAfterSeconds}\"}}",
+                        retryAfterSeconds: script.RetryAfterSeconds));
+                }
+            }
+
             _editedTexts.Add(text);
+        }
 
         return Task.CompletedTask;
     }
@@ -653,6 +749,19 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
     public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_MyCommands_Async(IReadOnlyList<(string Command, string Description)> commands, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Set_ChatMenuButton_ToCommands_Async(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+/// <summary>
+/// ONE SCRIPTED 429: Telegram's own <c>retry_after</c>, whether it ever stops, and how many times it
+/// has been asked for so far. Mutable by design — <see cref="ScriptedInbound_Fake.Record"/> and
+/// <see cref="ScriptedInbound_Fake.Edit_MessageText_Async"/> increment <see cref="Attempts"/> under
+/// the fake's own lock, which is the count every back-off test is actually about.
+/// </summary>
+internal sealed class RateLimitScript_Fake(int retryAfterSeconds, int? failFirstAttempts)
+{
+    public int RetryAfterSeconds { get; } = retryAfterSeconds;
+    public int? FailFirstAttempts { get; } = failFirstAttempts;
+    public int Attempts;
 }
 
 /// <summary>

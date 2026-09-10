@@ -69,4 +69,82 @@ public class RateLimitedRetryPolicyTests
 
         Assert.True(worstCase <= 60, $"worst case waits {worstCase} s");
     }
+
+    // --- TelegramHeldException — the clocked overload ------------------------------------------
+
+    static readonly DateTime Now = new(2026, 9, 10, 21, 11, 40, DateTimeKind.Utc);
+
+    /// <summary>A held window still open schedules the retry for EXACTLY the deadline Telegram gave.</summary>
+    [Fact]
+    public void AHeldWindow_IsScheduled_ForExactlyItsDeadline()
+    {
+        var held = new TelegramHeldException("msg:123", Now.AddSeconds(24));
+
+        Assert.Equal(
+            TimeSpan.FromSeconds(24),
+            RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(held, attemptsMade: 1, Now));
+    }
+
+    /// <summary>A deadline already in the past is a legitimate attempt now — zero wait, not "give up".</summary>
+    [Fact]
+    public void AHeldWindow_AlreadyPast_IsZeroWait_NotGivingUp()
+    {
+        var held = new TelegramHeldException("msg:123", Now.AddSeconds(-5));
+
+        Assert.Equal(
+            TimeSpan.Zero,
+            RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(held, attemptsMade: 1, Now));
+    }
+
+    /// <summary>Boundary: a deadline exactly equal to now is the door just having opened — zero wait.</summary>
+    [Fact]
+    public void AHeldWindow_DeadlineExactlyNow_IsZeroWait()
+    {
+        var held = new TelegramHeldException("msg:123", Now);
+
+        Assert.Equal(
+            TimeSpan.Zero,
+            RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(held, attemptsMade: 1, Now));
+    }
+
+    /// <summary>
+    /// A held window past the cap is clamped and attempted anyway — never given up on. Giving up is
+    /// the exact state measured 2026-09-10 21:11:40: old text and a live keyboard on an answered
+    /// question.
+    /// </summary>
+    [Fact]
+    public void AHeldWindow_PastTheCap_IsClampedThenAttempted()
+    {
+        var held = new TelegramHeldException("msg:123", Now.AddMinutes(5));
+
+        Assert.Equal(
+            TimeSpan.FromSeconds(RateLimitedRetry_Policy.MAX_WAIT_SECONDS),
+            RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(held, attemptsMade: 1, Now));
+    }
+
+    /// <summary>Still respects MAX_ATTEMPTS: a held window does not buy extra tries.</summary>
+    [Fact]
+    public void AHeldWindow_AfterTheLastAttempt_ItGivesUp()
+    {
+        var held = new TelegramHeldException("msg:123", Now.AddSeconds(5));
+
+        Assert.NotNull(RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(held, RateLimitedRetry_Policy.MAX_ATTEMPTS - 1, Now));
+        Assert.Null(RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(held, RateLimitedRetry_Policy.MAX_ATTEMPTS, Now));
+    }
+
+    /// <summary>The clocked overload still handles a 429 exactly like the pure one — the clock is unused there.</summary>
+    [Fact]
+    public void TheClockedOverload_StillHandlesA429_LikeTheOriginal()
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(24),
+            RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(RateLimited(24), attemptsMade: 1, Now));
+    }
+
+    /// <summary>Neither a held window nor a rate limit — the clocked overload still gives up too.</summary>
+    [Fact]
+    public void TheClockedOverload_StillGivesUp_ForAnythingElse()
+    {
+        Assert.Null(RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(new InvalidOperationException("no"), attemptsMade: 1, Now));
+    }
 }

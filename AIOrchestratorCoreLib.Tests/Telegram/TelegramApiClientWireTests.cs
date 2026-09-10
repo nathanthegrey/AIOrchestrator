@@ -223,6 +223,65 @@ public class TelegramApiClientWireTests
     }
 
     /// <summary>
+    /// A 429 ON A CONTROL CALL, WITHIN ITS OWN (FAR SHORTER) CEILING, IS RETRIED INLINE — the same
+    /// shape as <see cref="ASendThatIsRateLimited_IsRetried_AndTheSecondAttemptIsTheOneThatCounts"/>,
+    /// pinned separately because every <c>editMessageText</c> / <c>answerCallbackQuery</c> /
+    /// <c>editForumTopic</c> call shares the CONTROL bucket's much tighter
+    /// <see cref="TokenBucket_Gate.MAXIMUM_CONTROL_RETRY_WAIT"/> (2 s, against the message path's
+    /// 10 s) — a ceiling this file had never exercised for a Control call before this test, and the
+    /// one every <c>editMessageText</c> caller actually runs under.
+    /// </summary>
+    // SLOW BY CONSTRUCTION: the control bucket starts empty by design (TelegramSendBudgetModel), so
+    // the first control call of any test pays a real ~2 s for its first token before the scripted
+    // 429 is even reached, plus the ~1 s retry_after this test honours.
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AControlCallThatIsRateLimitedWithinItsCeiling_IsRetried_AndTheSecondAttemptIsTheOneThatCounts()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":1}}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":true}""");
+
+        // A DIFFERENT message id from every other test in this file (brief note in the task): the
+        // per-message edit gate holds a 30 s minimum gap between two edits of the SAME id, and only
+        // the FIRST edit of a fresh id is free of it.
+        await Build_Client(transport).Edit_MessageText_Async(9001, "status line", CancellationToken.None);
+
+        Assert.Equal(2, transport.Requests.Count);
+        Assert.All(transport.Requests, request => Assert.EndsWith("/editMessageText", request.Uri.AbsolutePath));
+    }
+
+    /// <summary>
+    /// PAST THE CONTROL CEILING THE FAILURE IS HANDED BACK, NOT SLEPT THROUGH — this is the
+    /// behaviour the 2026-09-10 incident turns on. Production measured <c>retry_after</c> 20, 22 and
+    /// 32 seconds on a once-a-minute PULSE edit while the control bucket sat nearly full (see
+    /// <see cref="TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE"/>); 24 sits inside that
+    /// observed range and, against a 2 s ceiling, is twelve times over it. Before this test the only
+    /// pin for "handed back past the ceiling" was on the MESSAGE path
+    /// (<see cref="ASendRateLimitedForTooLong_IsHandedBack_NotSleptThrough"/>, 600 s against a 10 s
+    /// ceiling) — the Control path's own, much tighter ceiling had never been pinned at all, and it
+    /// is the one every <c>editMessageText</c> / <c>answerCallbackQuery</c> / <c>editForumTopic</c>
+    /// call actually runs under.
+    /// </summary>
+    // SLOW BY CONSTRUCTION: the control bucket starts empty by design, so this still pays the real
+    // ~2 s for its first token even though the scripted 429 is never retried.
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AControlCallRateLimitedPastItsCeiling_IsHandedBack_NotSleptThrough()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":24}}""");
+
+        var failure = await Assert.ThrowsAsync<TelegramApiException>(
+            () => Build_Client(transport).Edit_MessageText_Async(9002, "status line", CancellationToken.None));
+
+        Assert.Equal(429, failure.StatusCode);
+        Assert.Equal(24, failure.RetryAfterSeconds);
+        Assert.Single(transport.Requests);
+        Assert.True(TokenBucket_Gate.MAXIMUM_CONTROL_RETRY_WAIT < TimeSpan.FromSeconds(24));
+    }
+
+    /// <summary>
     /// THE MULTIPART SHAPE. A document upload builds its own request and therefore does not pass
     /// through the JSON path at all — the caption's parse mode and the chat/thread fields are
     /// composed separately here, which is exactly how the two paths drift apart.

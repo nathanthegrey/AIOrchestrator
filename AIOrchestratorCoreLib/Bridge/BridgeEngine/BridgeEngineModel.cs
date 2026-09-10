@@ -189,6 +189,23 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     const int LOOP_HEALTHY_RUN_MILLISECONDS = 30000;
 
+    /// <summary>
+    /// A whole mirror tick running longer than this IS the finding, not just the trigger for one.
+    /// Execute_MirrorTick_Inside_Snapshot_Async's body is a sequential list of ~20 steps, several of
+    /// which call Telegram inline, and stage/15's per-message brake
+    /// (TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE, 30 s) is AWAITED inside that
+    /// sequence — so one message edited twice within 30 s can park the whole tick (the mirror, the
+    /// owner's deliveries, the deadline sweep) for up to half a minute. Nothing in the journal could
+    /// show that until now: there was no line recording how long a tick took, so the stall was
+    /// invisible and would reach the owner only as "the app went quiet", with nothing to attribute it
+    /// to. Five seconds, not two: two is the tick's own period, so a tick merely running its own
+    /// length proves nothing, while five already means something held it for more than one cycle.
+    /// Production evidence for the register this is logged at: build 481efc9, the hour to 22:38 on
+    /// 2026-09-10, 388 HTTP 429s, of which 376 were topic status lines re-attempted at the TICK's own
+    /// rate against a retry_after of 20–34 s — the downstream shape a parked tick produces.
+    /// </summary>
+    const int SLOW_TICK_THRESHOLD_MILLISECONDS = 5000;
+
     /// <summary>Below this age /cost prints no burn rate — dividing by minutes invents a number.</summary>
     const double MINIMUM_BURN_RATE_HOURS = 0.25;
 
@@ -413,6 +430,17 @@ internal sealed class BridgeEngineModel(
     /// file path, with no token to strand.
     /// </summary>
     readonly HashSet<string> _heldTrailingEntryFiles = [];
+
+    /// <summary>
+    /// ONCE PER SPELL, the same shape as _heldTrailingEntryFiles just above: a stall that parks
+    /// several ticks in a row (see SLOW_TICK_THRESHOLD_MILLISECONDS) is ONE event on the owner's
+    /// screen, not N warnings — a line every 2 s would just replace the 429 storm this exists to
+    /// explain with a log storm of its own. There is only one "thing" that can be slow — the tick
+    /// itself — so unlike the HashSet above a bool is the whole state: set (and logged) the first
+    /// time a tick crosses the threshold, cleared the moment a tick lands back under it, so the NEXT
+    /// crossing speaks again.
+    /// </summary>
+    bool _tickWasSlowLastTime;
 
     /// <summary>
     /// One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only). Both are
@@ -1424,6 +1452,12 @@ internal sealed class BridgeEngineModel(
         // behind for the next one.
         _sessionsThisTick = _store.Load_All();
 
+        // STARTED HERE rather than at the method's first line: Count_TickEntered and the allowance/
+        // roster setup above are µs-cheap bookkeeping, not the ~20-step sequence stage/15's 30 s
+        // per-message brake can park — starting the clock after them keeps the measurement pointed at
+        // the thing SLOW_TICK_THRESHOLD_MILLISECONDS exists to catch.
+        var tickStartedUtc = _clock.UtcNow;
+
         try
         {
             await Execute_MirrorTick_Inside_Snapshot_Async(cancellationToken);
@@ -1431,6 +1465,43 @@ internal sealed class BridgeEngineModel(
         finally
         {
             _sessionsThisTick = null;
+        }
+
+        // CANCELLATION CANNOT PRODUCE A SPURIOUS LINE HERE: a cancelled await throws
+        // OperationCanceledException out of the try above, past this call, to Run_MirrorLoop_Async's
+        // own catch — so a tick aborted by shutdown is never measured and never logged as slow. Only
+        // a tick that ran to completion (the DND-early-return path included) reaches this line.
+        Report_SlowTick_IfNeeded(_clock.UtcNow - tickStartedUtc);
+    }
+
+    /// <summary>
+    /// See SLOW_TICK_THRESHOLD_MILLISECONDS for the number and the evidence, and _tickWasSlowLastTime
+    /// for the once-per-spell rule this follows. The message states the measured duration; a
+    /// timestamped warning next to the "Telegram 'editMessageText' failed" lines stage/15's brake
+    /// produces is already enough to correlate the two. There is no slowest STEP to name: doing that
+    /// would mean instrumenting each of Execute_MirrorTick_Inside_Snapshot_Async's ~20 steps
+    /// individually, which is the restructuring this was written specifically not to do — the total
+    /// plus the log's own timestamp is the cheap version.
+    /// </summary>
+    void Report_SlowTick_IfNeeded(TimeSpan elapsed)
+    {
+        if (elapsed.TotalMilliseconds > SLOW_TICK_THRESHOLD_MILLISECONDS)
+        {
+            if (!_tickWasSlowLastTime)
+            {
+                _tickWasSlowLastTime = true;
+                _log.Log_Warning(GLOBAL_ORCH_ID,
+                    $"Mirror tick took {elapsed.TotalSeconds:F1} s (threshold "
+                        + $"{SLOW_TICK_THRESHOLD_MILLISECONDS / 1000.0:F0} s) — the tick's own period "
+                        + "is 2 s, so something inside it (stage/15's 30 s per-message edit brake is "
+                        + "the known cause) parked the mirror, the owner's deliveries and the deadline "
+                        + "sweep behind it. Logged once per spell: silent again until a tick lands "
+                        + "back under the threshold.");
+            }
+        }
+        else
+        {
+            _tickWasSlowLastTime = false;
         }
     }
 
@@ -12042,7 +12113,7 @@ internal sealed class BridgeEngineModel(
             firstFailure = ex;
         }
 
-        var wait = RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(firstFailure, attemptsMade: 1);
+        var wait = RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(firstFailure, attemptsMade: 1, DateTime.UtcNow);
 
         if (wait == null)
         {
@@ -12054,6 +12125,12 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // THE CLOCK IS PASSED because the failure may now be a shut door rather than a refusal:
+        // TelegramHeldException carries an ABSOLUTE deadline (the window some other surface was
+        // given on this same message), and turning that into a wait needs to know what time it is.
+        // Without it the policy would read a held door as "not a rate limit" and give up — the tap
+        // would go back to leaving a live keyboard on an answered question, which is the exact
+        // defect d22240f fixed.
         _log.Log_Info(GLOBAL_ORCH_ID, $"Answered-question edit of message {messageId} was rate-limited — retrying in {wait.Value.TotalSeconds:0} s, off the inbound loop");
 
         // DETACHED ON PURPOSE, and with the flow suppressed like every other detached task in this
@@ -12090,7 +12167,7 @@ internal sealed class BridgeEngineModel(
                 }
                 catch (Exception ex)
                 {
-                    var next = RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(ex, attemptsMade);
+                    var next = RateLimitedRetry_Policy.Wait_BeforeNextAttempt_OrNull(ex, attemptsMade, DateTime.UtcNow);
 
                     if (next == null)
                     {
