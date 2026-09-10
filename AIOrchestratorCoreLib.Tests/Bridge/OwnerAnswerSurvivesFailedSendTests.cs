@@ -164,16 +164,19 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
             + "re-evaluated as narration and was suppressed — the owner never got the answer to the "
             + "question they asked");
 
-        // 4 — AND THE WAIT IS NOW SPENT. Without this the suite cannot see the opposite regression:
-        // delete the clear entirely and everything above still passes, because a flag that is never
-        // cleared also delivers the answer. It just delivers EVERYTHING afterwards too, which is the
-        // waterfall the push policy exists to stop.
+        // 4 — AND THE PIPELINE KEEPS RUNNING AFTERWARDS. This step used to assert the OPPOSITE: that
+        // a later plain entry was NOT pushed, which is how the suite could see a wait-flag that was
+        // never cleared (it would deliver the answer and then everything else too). That oracle
+        // retired with the narration filter on 2026-09-09 — everything the supervisor writes reaches
+        // the phone now, by the owner's decision, so "narration was pushed" is no longer evidence of
+        // a stuck flag. What is still worth pinning here is that the re-emission did not leave the
+        // channel wedged: the entry after the answer gets through too.
         Append_SupervisorEntry(session.OrchId, 2, "progress", NARRATION_TEXT);
 
-        Assert.False(
-            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), BridgeTestTiming.Window_ForTicks(10)),
-            "the answer was delivered but the owner's wait was never consumed, so ordinary narration "
-            + "is still being pushed to their phone");
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Sent_Containing(NARRATION_TEXT), 20_000),
+            "the answer was delivered but the channel stayed wedged afterwards — the entry that "
+            + "followed it never reached the phone");
     }
 
     /// <summary>

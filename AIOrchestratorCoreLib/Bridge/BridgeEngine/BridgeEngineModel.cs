@@ -124,7 +124,13 @@ internal sealed class BridgeEngineModel(
     /// The communicator waited ~45 s before narrating, so an IDLE supervisor picks the message up
     /// itself and the owner gets the real answer instead of a status line. Same number, same reason.
     /// </summary>
-    const int NARRATION_FIRST_DELAY_SECONDS = 45;
+    /// <summary>
+    /// THREE MINUTES BEFORE THE APP SAYS "BUSY" — the owner's number, 2026-09-09. It was 45
+    /// seconds, which is inside the time a normal turn takes: the sentence therefore appeared under
+    /// almost every message they sent, saying what the typing bubble already said. Past three
+    /// minutes it is information ("this is taking a while"), and it arrives as an EDIT of the tick.
+    /// </summary>
+    const int NARRATION_FIRST_DELAY_SECONDS = 180;
 
     /// <summary>The communicator's "still at it" cadence while the supervisor stays busy.</summary>
     const int NARRATION_REPEAT_SECONDS = 180;
@@ -412,7 +418,76 @@ internal sealed class BridgeEngineModel(
     /// One alert per stall/budget EPISODE — cleared when traffic resumes (stalls only). Both are
     /// written ONLY after a confirmed send, so an alert nobody received never marks itself delivered.
     /// </summary>
-    readonly HashSet<string> _stallAlertedOrchIds = [];
+    /// <summary>
+    /// WHETHER THE SESSION THAT TALKS TO THE OWNER IS WAITING OUT A USAGE LIMIT rather than waiting
+    /// on them.
+    ///
+    /// <para>
+    /// The owner got *"⚠️ … has been waiting on your reply for 25 min"* at 18:38 on 2026-09-09 while
+    /// the supervisor was refused for a usage limit and had an APPOINTMENT to resume. Nothing on the
+    /// stall path could see it: the dispatcher records the instant in the member's state file
+    /// (<c>RetryNotBeforeUtc</c>, written only for a limit that NAMED its reset) and announces it as
+    /// an APP entry, which the quiet clock deliberately ignores — so the pause was invisible exactly
+    /// where it mattered.
+    /// </para>
+    /// <para>
+    /// SUPERVISOR OR SOLO, whichever this orchestration has: the alert speaks for whoever talks to
+    /// the owner, so that is whose pause silences it.
+    /// </para>
+    /// </summary>
+    bool Is_SupervisorPausedForUsageLimit(IOrchestrationSession session)
+    {
+        if (Is_PausedForUsageLimit(Running.SessionRoles.Supervisor, session.OrchId, Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID))
+            return true;
+
+        // A SOLO IS A MEMBER, so its id comes from the roster rather than from a constant — a basic
+        // orchestration has no supervisor at all, and the solo is the one that talks to the owner.
+        foreach (var member in session.Members)
+        {
+            if (member.ClosedUtc == null
+                && Sessions.MemberKind_Ids.Resolve_Kind(member.MemberId) == Sessions.MemberKinds.Solo
+                && Is_PausedForUsageLimit(Running.SessionRoles.Solo, session.OrchId, member.MemberId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool Is_PausedForUsageLimit(Running.SessionRoles role, string orchId, string memberId)
+    {
+        try
+        {
+            var stateFile = Running.PrintSessionState.PrintSessionState_Store.Get_StateFile(_paths, role, orchId, memberId);
+            var state = Running.PrintSessionState.PrintSessionState_Store.Read_OrNull(stateFile);
+
+            return state?.RetryNotBeforeUtc != null
+                && Limits.DispatchPause_Gate.Is_Paused(state.RetryNotBeforeUtc, _clock.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            // A STATE FILE THAT CANNOT BE READ IS NOT A PAUSE. Answering "paused" on an unreadable
+            // file would silence the alert for a session that genuinely is stuck, which is the one
+            // case it exists for — so the failure direction is to alert, and to say why here.
+            _log.Log_Warning(orchId, $"Could not read '{memberId}' state to check for a usage-limit pause ({ex.Message}) — treated as NOT paused");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// WHICH QUESTION each orchestration has already been alerted about — the entry index, not a
+    /// bool.
+    ///
+    /// <para>
+    /// The owner's ruling, 2026-09-09: the ⚠️ fires *"once per question (key: the question's entry
+    /// index)"*. A bool could only be re-armed by traffic resuming, which is how the old alert fired
+    /// three times in one evening about the same nothing: their own words, of an alert at 17:30
+    /// after the supervisor had said "Nothing more needed from you", and again at 18:38 and 20:25.
+    /// Keyed on the question, a second alert needs a second QUESTION rather than merely more silence.
+    /// </para>
+    /// </summary>
+    readonly Dictionary<string, int> _stallAlertedQuestionIndexByOrchId = [];
     readonly HashSet<string> _budgetAlertedOrchIds = [];
     /// <summary>When each member was nudged — the nudge doubles as the PROBE that proves a watcher exists.</summary>
     readonly Dictionary<string, DateTime> _nudgedMemberUtc = [];
@@ -1895,8 +1970,9 @@ internal sealed class BridgeEngineModel(
 
             if (quietFor.TotalMinutes < STALL_ALERT_MINUTES)
             {
-                // Traffic resumed — the next stall gets its own alert.
-                _stallAlertedOrchIds.Remove(session.OrchId);
+                // Traffic resumed. The remembered question index is deliberately KEPT: the alert is
+                // once per question now, and traffic that does not answer it — the supervisor's own
+                // follow-up, an app entry — must not buy a second ⚠️ about the same question.
                 continue;
             }
 
@@ -1910,9 +1986,6 @@ internal sealed class BridgeEngineModel(
             // alert nobody received. It is less severe only because it has a release above (traffic
             // resuming clears it), so the loss is confined to the current stall rather than the
             // process — the token is now taken after a confirmed send, like the other two.
-            if (_stallAlertedOrchIds.Contains(session.OrchId))
-                continue;
-
             if (Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
                 continue;
 
@@ -1924,14 +1997,32 @@ internal sealed class BridgeEngineModel(
             if (Is_AwayMode())
                 continue;
 
-            // ONLY WHEN THE OWNER OWES A REPLY (their ruling, 2026-08-15). Quiet alone was the old
-            // trigger and it fired on the owner's own silence: the session had nothing to do and was
-            // idle exactly as designed, and they were told to wake something that was not asleep.
-            // The other direction — the owner spoke and the SESSION went quiet — is already covered
-            // by the reply nudge, which wakes the session instead of asking them to.
-            if (!Status.OwnerOwesReply_Decider.Decide(
-                    ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId))))
+            // ONLY FOR A REAL QUESTION, AND ONCE PER QUESTION (owner's ruling, 2026-09-09). The old
+            // rule was "the session spoke last", which is not a debt: a supervisor reporting
+            // progress, or saying that nothing more is needed, has asked for nothing. It produced
+            // six false alerts across two topics in one evening — including one at 17:30, thirty
+            // minutes after the supervisor wrote "Nothing more needed from you".
+            var unansweredQuestionIndex = Status.OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+                ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId)));
+
+            if (unansweredQuestionIndex == null)
                 continue;
+
+            if (_stallAlertedQuestionIndexByOrchId.TryGetValue(session.OrchId, out var alreadyAlertedFor)
+                && alreadyAlertedFor == unansweredQuestionIndex.Value)
+                continue;
+
+            // NEVER WHILE THE SUPERVISOR IS PAUSED FOR A USAGE LIMIT (owner's ruling, same day, from
+            // the alert they got at 18:38). A paused turn has an appointment: the state file carries
+            // the instant it resumes, and until then "nothing is running" is true but "has been
+            // waiting on your reply" is not — the supervisor is not waiting on them, it is waiting
+            // on the clock. The deferral notice the dispatcher writes is an APP entry, which the
+            // quiet clock deliberately ignores, so nothing else on this path could see it.
+            if (Is_SupervisorPausedForUsageLimit(session))
+            {
+                _log.Log_Info(session.OrchId, "Stall alert withheld: the session is paused for a usage limit, not waiting on the owner");
+                continue;
+            }
 
             // THE SEVENTH SITE THAT NAMED A SUPERVISOR, and the one SpeakerLabel_Formatter's summary
             // predicted: prose rather than a prefix, so the coloured label could not be dropped in and
@@ -1948,8 +2039,9 @@ internal sealed class BridgeEngineModel(
             {
                 await _telegramClient.Send_Message_Async(session.TelegramTopicId, alertText, TelegramSendSounds.Rings, cancellationToken);
 
-                // After a CONFIRMED send, so a failed one retries next tick.
-                _stallAlertedOrchIds.Add(session.OrchId);
+                // After a CONFIRMED send, so a failed one retries next tick — and keyed on the
+                // question, so the next alert needs a new one.
+                _stallAlertedQuestionIndexByOrchId[session.OrchId] = unansweredQuestionIndex.Value;
                 _log.Log_Warning(session.OrchId, alertText);
             }
             // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
@@ -9459,8 +9551,8 @@ internal sealed class BridgeEngineModel(
 
         // Whose move it is, read once for this whole status block: the supervisor row and a solo's
         // member row are the same conversation, so they must not answer it differently.
-        var ownerOwesReply = Status.OwnerOwesReply_Decider.Decide(
-            ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId)));
+        var ownerOwesReply = Status.OwnerOwesReply_Decider.Find_UnansweredQuestionIndex_OrNull(
+            ChannelHistory_Cache.Read_Entries(_paths.Get_OwnerChannelFile(session.OrchId))) != null;
 
         var supervisorContextSuffix = Build_ContextSuffix_ForSupervisor(supervisorUsage);
         var supervisorLine = Is_Working(
@@ -12062,18 +12154,21 @@ internal sealed class BridgeEngineModel(
             // "thinking…" is what the typing bubble says, natively and silently, and
             // Resolve_PendingOwnerReplies_Async keeps it up for as long as the wait lasts (owner,
             // 2026-09-07: every exchange arrived as two status messages plus the answer).
-            var handoffLine = Build_BusyHandoffLine_OrNull(target.OrchId);
+            // ✓ → ✓✓ AND NOTHING ELSE (owner's decision, 2026-09-09). The busy handoff line used to
+            // ride the receipt: *"✓✓ · 🔴 Sup: mid-task. Your message is delivered; they pick it up
+            // when this turn ends"* — fifteen of them in a single export, the same sentence under
+            // every message they sent. It told them nothing they could not see from the typing
+            // bubble, and it told them at the one moment they were certainly looking.
+            //
+            // The busy sentence survives only where it says something NEW: the counting edit after
+            // three minutes of waiting, a held message, a handoff. Those are edits of this same
+            // tick, decided in Narrate_BusySupervisor_Async, not a second message here.
+            var receiptText = "✓✓";
 
-            var receiptText = handoffLine != null && Should_SendHandoffLine(target.OrchId, handoffLine)
-                ? $"✓✓  ·  {handoffLine}"
-                : "✓✓";
-
-            // A bare ✓✓ only ever EDITS the tick already sitting under the owner's message. With
-            // nothing to edit it is not sent — a second message saying "delivered" is the noise this
-            // replaces. A busy line is information and still earns a message of its own — keyed on
-            // the TEXT, not on the session being busy: a busy line suppressed as a repeat leaves a
-            // bare ✓✓ behind, and that one is not worth a message either.
-            var carriesInformation = receiptText != "✓✓";
+            // IT ONLY EVER EDITS. With no tick to edit, nothing is sent: a fresh message saying
+            // "delivered" is precisely the noise this replaces, and the owner watched their own
+            // message arrive.
+            var carriesInformation = false;
 
             var receiptMessageId = await Publish_DeliveryReceipt_Async(
                 _telegramClient, target.ThreadId, receiptText, sendWhenNothingToEdit: carriesInformation, cancellationToken);
@@ -12447,22 +12542,20 @@ internal sealed class BridgeEngineModel(
                 continue;
             }
 
-            // Nothing running: the supervisor's rule was to stop the cadence, not to report
-            // "no change" forever. The slot is spent above, so work starting mid-slot waits for
-            // the next boundary like everyone else rather than firing on its own schedule.
-            if (!Has_WorkInFlight(session))
-                continue;
-
-            var baseline = Last_PostedProgress_OrNull(session.OrchId);
-
-            // THE PICTURE RIDES THE ENTRY, as an IMAGE: line. The mirror already turns those into a
-            // real photo in the topic and strips the line from the text, so the half-hourly status
-            // needs no upload path of its own — and it inherits that path's behaviour on failure.
-            var statusText = Build_PeriodicStatusText(session, baseline)
-                + await Build_StatusScreenshotMarker_OrEmpty_Async(session, cancellationToken);
-
-            if (Post_StatusEntry(session.OrchId, statusText, session.OwnerPresence))
-                Remember_PostedProgress(session.OrchId);
+            // THE HALF-HOURLY STATUS IS GONE (owner's decision, 2026-09-09). It sent a fresh
+            // fifteen-line message every thirty minutes — ten of them in five and a half hours in
+            // one topic, three of them identical at 19:00, 19:30 and 20:00 with every member
+            // closed. Its own trigger was wrong (it read PLAN.md's in-progress lines, not whether
+            // any session had worked), and half its content was wrong or jargon: "5 running" with
+            // nine members closed, "now: FIN-D-293a step 6" repeated for five hours after 293 was
+            // merged, "idle — writing window left open".
+            //
+            // ONE STATUS SURFACE PER TOPIC, and it is PULSE: one message at the bottom, edited in
+            // place, silent. A cadence that posts is a waterfall by construction — the owner's own
+            // word for it — however good its content is. What survives here is the AWAY digest
+            // above, which is not a cadence: it fires only while the owner is away and only when
+            // its content has changed.
+            continue;
         }
     }
 
@@ -12818,29 +12911,6 @@ internal sealed class BridgeEngineModel(
             session,
             Planning.LedgerTransition_Wording.Describe_Recap(session.DisplayName ?? session.OrchId, ledger),
             cancellationToken);
-    }
-
-    /// <summary>The figures the owner was last told, or null when they have not been told yet.</summary>
-    Planning.PlanProgressSnapshot? Last_PostedProgress_OrNull(string orchId)
-    {
-        lock (_ownerStateLock)
-            return _lastPostedProgressByOrchId.TryGetValue(orchId, out var snapshot) ? snapshot : null;
-    }
-
-    /// <summary>
-    /// Re-READ rather than handed in: the baseline must be what the message that just went out
-    /// actually said, and the ledger is read inside the builder. Storing the caller's own earlier
-    /// read would record a number nobody was shown if the file changed in between.
-    /// </summary>
-    void Remember_PostedProgress(string orchId)
-    {
-        var progress = Planning.PlanLedger_Parser.Parse_OrNull(Read_FileText_Safe(_paths.Get_PlanFile(orchId)));
-
-        if (progress == null)
-            return;
-
-        lock (_ownerStateLock)
-            _lastPostedProgressByOrchId[orchId] = new Planning.PlanProgressSnapshot(progress.Done, progress.Total);
     }
 
     /// <summary>The away digest last sent for this orchestration, or null in a fresh away spell.</summary>
@@ -13235,6 +13305,14 @@ internal sealed class BridgeEngineModel(
         }
     }
 
+    /// <summary>
+    /// RENDERED, LIKE EVERY OTHER SUPERVISOR ENTRY (owner's decision, 2026-09-09). This send was a
+    /// plain <c>sendMessage</c>, and it is one of the two paths that RESEND SOMETHING THE SUPERVISOR
+    /// ALREADY WROTE — the silent-deadlock release and the ledger-movement notice. So the owner
+    /// received the supervisor's own Markdown with its markers showing: `**bold**`, `## heading`,
+    /// backticks, at 18:00 and 18:18 on 2026-09-09. Nothing was wrong with the renderer; these two
+    /// sites simply never reached it.
+    /// </summary>
     async Task Send_AwayNotice_Async(IOrchestrationSession session, string text, CancellationToken cancellationToken)
     {
         if (_telegramClient == null || Resolve_EffectiveMode(session.OrchId) != TelegramDeliveryModes.Normal)
@@ -13242,7 +13320,8 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            await _telegramClient.Send_Message_Async(session.TelegramTopicId, text, TelegramSendSounds.Rings, cancellationToken);
+            await TelegramProse_Sender.Send_Async(
+                _telegramClient, _log, session.OrchId, session.TelegramTopicId, text, TelegramSendSounds.Rings, cancellationToken);
         }
         // FILTERED — THE TOKEN DECIDES. An HttpClient timeout surfaces as a TaskCanceledException
         // with the token NOT cancelled, so the bare rethrow escalated a failed send into a shutdown.
@@ -13423,59 +13502,6 @@ internal sealed class BridgeEngineModel(
         return $"idle{task}{contextSuffix}";
     }
 
-    string Build_PeriodicStatusText(IOrchestrationSession session, Planning.PlanProgressSnapshot? previous)
-    {
-        var progress = Planning.PlanLedger_Parser.Parse_OrNull(
-            UsageTotals_Reader.Read_Text_Safe(_paths.Get_PlanFile(session.OrchId)));
-
-        // Just the word: the counts now lead the body (the same line /status shows), and printing
-        // them here as well put the same figures twice in one message.
-        const string header = "STATUS";
-
-        var current = progress?.CurrentTaskText;
-
-        var body = current == null
-            ? Build_MemberStatusText_ForSession(session, previous)
-            : $"{Build_MemberStatusText_ForSession(session, previous)}\n- now: {TextSummary_Formatter.Summarize_Task(current, TextSummary_Formatter.CARD_TASK_WORDS)}";
-
-        return $"{header}\n{body}";
-    }
-
-    /// <summary>
-    /// "Work in flight" without asking anyone: a member is mid-turn, or the ledger says a task is
-    /// in progress. Both are facts on disk; neither costs a turn to establish.
-    /// </summary>
-    /// <summary>
-    /// Whether this orchestration is ALIVE, for the periodic status's "do not report no-change
-    /// forever" rule.
-    ///
-    /// IT NO LONGER DEPENDS ON THE LEDGER BEING MAINTAINED, and that was a real silence. On
-    /// 2026-08-20 `Tear-off tabs` went five hours without a status while its solo worked the whole
-    /// time: its ledger read 8 done, 3 open and NOTHING `[>]`, so the first test below said no, and
-    /// the second — mid-turn AT THIS INSTANT — was asked once every thirty minutes, which a session
-    /// between turns fails almost every time. Two "no"s, and the owner's status feed simply stopped.
-    ///
-    /// The app already knew better: <see cref="Has_AnySessionWorkedWithin"/> answers "has anyone
-    /// worked LATELY", which is the question this was reaching for. A ledger nobody has updated is a
-    /// reason to nudge the session — <see cref="Report_StaleInProgress"/> does exactly that — never a
-    /// reason to stop telling the owner what is happening.
-    ///
-    /// The window is the status cadence itself: worked at any point since the last slot IS work in
-    /// flight for that slot.
-    /// </summary>
-    bool Has_WorkInFlight(IOrchestrationSession session)
-    {
-        var progress = Planning.PlanLedger_Parser.Parse_OrNull(
-            UsageTotals_Reader.Read_Text_Safe(_paths.Get_PlanFile(session.OrchId)));
-
-        if (progress != null && progress.InProgress > 0)
-            return true;
-
-        // RECENTLY, not right now. Kept below the ledger check because that one is a file read and
-        // this walks every member's usage artefact.
-        return Has_AnySessionWorkedWithin(session, PeriodicStatusSlot_Planner.SLOT_MINUTES);
-    }
-
     /// <summary>
     /// What the COMMUNICATOR session used to do, for free. It cost $74/day per orchestration and
     /// 196 turns to emit 37 identical STATUS entries; every input it used (the supervisor's
@@ -13531,7 +13557,15 @@ internal sealed class BridgeEngineModel(
             }
             else
             {
-                pending.NarrationMessageId = await _telegramClient.Send_Message_Async(pending.ThreadId, text, TelegramSendSounds.Silent, cancellationToken);
+                // NO CANVAS, NO MESSAGE (owner's decision, 2026-09-09: "never a second message for
+                // the same state"). This branch is how they got the edited receipt AND a separate
+                // "mid-task…" message at 17:03 — a failed earlier edit clears the id, and the
+                // fallback then SENDS. The busy sentence is not worth a message of its own; it is
+                // worth an edit of the tick, or nothing.
+                _log.Log_Info(orchId, "Busy narration had no receipt to edit — saying nothing rather than sending a second message about the same state");
+
+                pending.LastNarratedUtc = now;
+                return;
             }
 
             pending.LastNarratedUtc = now;
@@ -13734,7 +13768,13 @@ internal sealed class BridgeEngineModel(
             // Narrate_BusySupervisor_Async narrows how often that happens without closing it.
             try
             {
-                await Send_DirectReply_BestEffort_Async(_telegramClient, pending.ThreadId, turnEndedText, cancellationToken);
+                // RENDERED (owner's decision, 2026-09-09). This is the second of the two paths that
+                // RESEND WHAT THE SUPERVISOR ALREADY WROTE — a completion carries their last words
+                // above the tick — and it went out as plain text, so their Markdown arrived with the
+                // markers showing. It is also silent: the words themselves already rang when they
+                // were mirrored; this is the app saying the turn ended.
+                await TelegramProse_Sender.Send_Async(
+                    _telegramClient, _log, orchId, pending.ThreadId, turnEndedText, TelegramSendSounds.Silent, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

@@ -31,6 +31,11 @@ namespace AIOrchestratorCoreLib.Tests.Bridge;
 /// this test is only possible at all through `Create_WithTelegramClient`, the seam that does not exist
 /// on the branches based before it.
 /// </summary>
+// EVERY FIXTURE'S OWNER-CHANNEL ENTRY IS A REAL QUESTION, and that is not incidental to these
+// probes: since 2026-09-09 the stall alert fires only when the supervisor's last owner-channel
+// entry is a declared question (`QUESTION:` or `BLOCKED ON OWNER`), once per question. What THESE
+// tests are about is the QUIET CLOCK — which channels date an orchestration as alive — so each one
+// supplies the debt the alert now requires and then measures the clock, exactly as before.
 public class StallAlertClockProbeTests : IDisposable
 {
     const int OLDER_THAN_THE_STALL_THRESHOLD_MINUTES = 40;
@@ -157,7 +162,7 @@ public class StallAlertClockProbeTests : IDisposable
 
         Write_Channel(
             _paths.Get_OwnerChannelFile(session.OrchId),
-            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nBLOCKED ON OWNER — I need your go-ahead on the parser before anything else moves.\n",
             silentSince);
     }
 
@@ -193,7 +198,7 @@ public class StallAlertClockProbeTests : IDisposable
 
         Write_Channel(
             _paths.Get_OwnerChannelFile(session.OrchId),
-            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nBLOCKED ON OWNER — I need your go-ahead on the parser before anything else moves.\n",
             silentSince);
 
         var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing(STALL_ALERT_MARKER) > 0, NEGATIVE_WINDOW_MILLISECONDS);
@@ -279,7 +284,7 @@ public class StallAlertClockProbeTests : IDisposable
 
         Write_Channel(
             _paths.Get_OwnerChannelFile(session.OrchId),
-            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nBLOCKED ON OWNER — I need your go-ahead on the parser before anything else moves.\n",
             silentSince);
 
         // …and the filesystem says the supervisor was working five minutes ago.
@@ -335,7 +340,7 @@ public class StallAlertClockProbeTests : IDisposable
 
         Write_Channel(
             _paths.Get_OwnerChannelFile(session.OrchId),
-            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n",
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nBLOCKED ON OWNER — I need your go-ahead on the parser before anything else moves.\n",
             silentSince);
 
         var alerted = await Run_UntilAsync(() => _telegram.Count_Attempts_Containing(STALL_ALERT_MARKER) > 0);
@@ -385,7 +390,7 @@ public class StallAlertClockProbeTests : IDisposable
         // NOW — the supervisor nudge — with the file stamp it would leave behind.
         Write_Channel(
             _paths.Get_OwnerChannelFile(session.OrchId),
-            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nbriefing imp-1\n\n"
+            $"## [1] FROM supervisor — {silentSince:yyyy-MM-dd HH:mm} — starting\nBLOCKED ON OWNER — I need your go-ahead on the parser before anything else moves.\n\n"
             + $"## [2] FROM app — {DateTime.Now:yyyy-MM-dd HH:mm} — unread reports waiting on you — imp-1\nimp-1 filed entries you have not answered\n",
             DateTime.Now);
     }

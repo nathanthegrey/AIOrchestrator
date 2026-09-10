@@ -76,33 +76,41 @@ public static class OwnerPush_Policy
     }
 
     /// <summary>
-    /// ownerIsWaitingForAReply: the owner sent something the supervisor has not answered yet, so
-    /// THIS entry is that answer and must go through whatever else it contains.
+    /// WHETHER A SUPERVISOR ENTRY REACHES THE PHONE — and since 2026-09-09 the answer is YES, for
+    /// every entry the supervisor writes on the owner channel.
     ///
-    /// subject: the entry's subject line, used ONLY for the boot greeting above. Optional so the
-    /// callers that genuinely have no subject to offer keep working; the mirror path always passes
-    /// it.
+    /// <para>
+    /// WHAT THIS USED TO DO, AND WHY IT IS GONE. It let through a question, an answer the owner was
+    /// waiting for, a <c>BLOCKED ON OWNER</c>, a file, and the boot greeting — and suppressed
+    /// everything else as "progress narration", on the owner's earlier words about a waterfall of
+    /// messages. It worked exactly as designed and produced the opposite of what they wanted: their
+    /// own quoted example of a message they NEEDED — *"La regola ora è completa…"* — was suppressed
+    /// here and reached them five minutes late, through the silent-deadlock net, in raw Markdown.
+    /// Meanwhile the noise they were actually drowning in came from the APP: a fifteen-line STATUS
+    /// every half hour, a receipt sentence under every message, false stall alerts.
+    /// </para>
+    /// <para>
+    /// THE OWNER'S RULING, 2026-09-09: *"If the supervisor writes to me, I must know it — that
+    /// rings. Status, receipts and app bookkeeping do not ring."* So the brake on chatter is no
+    /// longer a filter that guesses which of the supervisor's words matter; it is the SKILL (write
+    /// to the owner only what they must know) plus the brevity nudge that already measures every
+    /// entry. A filter cannot tell a thought from a status line, and the one it suppressed by
+    /// mistake was the one that mattered.
+    /// </para>
+    /// <para>
+    /// ONE EXCEPTION SURVIVES, and it is not narration filtering: the owner's own words quoted back
+    /// at them (<see cref="Is_OwnerRestatement"/>). That says nothing they did not just type, and it
+    /// spent their wait — the real answer that followed then read as narration.
+    /// </para>
     /// </summary>
     public static bool Should_Push(string rawEntryText, bool ownerIsWaitingForAReply, string? subject = null)
     {
-        // Their own words, sent back to them with the session's label on, before anything the
-        // owner's wait could be waiting FOR — so this comes ahead of the wait, deliberately.
-        if (Is_OwnerRestatement(rawEntryText))
+        // An entry with no body is nothing to read. Not a filter — a guard against sending an empty
+        // message, which Telegram refuses anyway.
+        if (string.IsNullOrWhiteSpace(rawEntryText))
             return false;
 
-        if (ownerIsWaitingForAReply)
-            return true;
-
-        if (Is_OnlineGreeting(subject))
-            return true;
-
-        if (string.IsNullOrEmpty(rawEntryText))
-            return false;
-
-        return Carries_Question(rawEntryText)
-            || Asks_InProse(rawEntryText)
-            || Carries_FileForTheOwner(rawEntryText)
-            || rawEntryText.Contains(BLOCKED_MARKER, StringComparison.OrdinalIgnoreCase);
+        return !Is_OwnerRestatement(rawEntryText);
     }
 
     /// <summary>

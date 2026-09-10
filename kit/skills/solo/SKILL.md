@@ -201,6 +201,19 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   **Only give a `DEFAULT:` to a question whose unattended answer you would defend.** It spends the
   owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
   anything that costs money.
+- **Every turn that writes to this channel ends with a `STATE:` line, at the END of the entry.** The
+  app reads it for the topic's status line (PULSE), field 2: `solo · <what you declared> · declared
+  HH:MM`. One line, your own words — a STATE, not a summary of what the entry just reported:
+
+  ```
+  STATE: tests running, merge branch ready right after
+  ```
+
+  Write it in the OWNER'S language — it is addressed to them, like the rest of the entry. The label
+  the app wraps it in (`solo ·`, `declared HH:MM`) stays English, same as every app-written string.
+  **A turn that writes nothing to the owner needs no `STATE:` line.** The app leaves the field BLANK
+  rather than inventing a state for you — an omitted line is a blank row, never a crash and never a
+  stale one carried over from three entries ago.
 - **NEVER QUOTE A COST WITHOUT FIRST CHECKING THE THING DOES NOT ALREADY EXIST.** An estimate is a
   claim, and the owner is about to spend real money on it. The check is one search — grep for the
   type, the fixture, the helper; ask an agent to look — and it costs a minute against a number that

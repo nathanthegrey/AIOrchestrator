@@ -218,6 +218,60 @@ public class TelegramHtmlRendererTests
         }
     }
 
+    [Theory]
+    [InlineData("**`x`**")]
+    [InlineData("*`x`*")]
+    [InlineData("~~`x`~~")]
+    public void Render_ACodeSpanWrappedInEmphasisMarkers_NeverNestsCodeInsideTheEmphasisTag(string markdown)
+    {
+        // Bot API: bold/italic/underline/strikethrough/spoiler "can contain and can be part of any
+        // other entities, EXCEPT pre and code" — <b><code> (either direction) earns a 400, and
+        // TelegramProse_Sender then falls back to plain text for the whole message. The wrapping
+        // tag is dropped rather than nested; the code span itself still renders.
+        var html = TelegramHtml_Renderer.Render(markdown);
+
+        Assert.Equal("<code>x</code>", html);
+        Assert.DoesNotContain("<b><code", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<code><b", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<i><code", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<code><i", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<s><code", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<code><s", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// This renderer has no underline or spoiler markup at all — <c>__</c> maps to <c>&lt;b&gt;</c>
+    /// (a second bold spelling), not <c>&lt;u&gt;</c>, and no spoiler marker is recognised. So the
+    /// three cases above are the whole set; there is nothing further to guard here.
+    /// </summary>
+    [Fact]
+    public void Render_DoubleUnderscoreWrappingACodeSpan_AlsoDropsTheWrappingTag_BecauseItIsBoldNotUnderline()
+    {
+        Assert.Equal("<code>x</code>", TelegramHtml_Renderer.Render("__`x`__"));
+    }
+
+    [Fact]
+    public void Render_ACodeSpanBesideEmphasis_RendersBoth_BecauseTheCodeIsNotNestedInsideTheRun()
+    {
+        var html = TelegramHtml_Renderer.Render("**bold** `code` **more**");
+
+        Assert.Equal("<b>bold</b> <code>code</code> <b>more</b>", html);
+        Assert.DoesNotContain("<b><code", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<code><b", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_NestedBoldInsideItalic_IsUnchanged_WhenNoCodeIsInvolved()
+    {
+        Assert.Equal("<i>text <b>bold</b> text</i>", TelegramHtml_Renderer.Render("*text __bold__ text*"));
+    }
+
+    [Fact]
+    public void Render_AFencedBlockContainingWhatLooksLikeBoldMarkers_IsUntouched()
+    {
+        Assert.Equal("<pre>**not bold**</pre>", TelegramHtml_Renderer.Render("```\n**not bold**\n```"));
+    }
+
     static int Count_Occurrences(string text, string needle)
     {
         var count = 0;
