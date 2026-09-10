@@ -399,10 +399,29 @@ validates BEFORE writing (header index/timestamp computed by the tool, never by 
 entry in a form the bridge renders deterministically per type. **Dual parser during transition:** the
 bridge keeps reading today's marker prose; a session on the old skill is never mute. Skills change to
 "call the tool" and stop restating the grammar.
+
+**Requirements added 2026-09-10 (from the token-efficiency agent's review, accepted):**
+1. **Writer and recognizer read ONE constant, not "one place".** By construction there are two sides —
+   the tool that writes and the parsers that recognise (the bridge's entry parser, the digest that
+   must not hold a blocked member, the state pack). All of them take marker words, header shape and
+   ceilings from a single `ChannelGrammar` class; no string literal of a marker anywhere else (a test
+   greps for it). "The tool is the only place" would recreate today's drift (`QUESTION:` written on one
+   side, `QUESTION` recognised on the other) within a month. The legacy-marker path uses the same
+   constant.
+2. **Role-bound author.** Today `channel-append.sh --author <word>` accepts any word — a member can sign
+   as "supervisor" (this is how a model choice got erased from a brief). The launcher already exports
+   the session's role and member id to the process; the tool derives the author from them and REFUSES
+   a mismatching `--author` (one log line naming both). One line inside a job already planned; a
+   package on its own otherwise.
+3. **Declared type is persisted in the entry** (a typed field the parsers read), so the state pack and
+   the digest read `type` (`question`, `report`, `state`, `brief`, `review`, …) instead of guessing from
+   the subject's first word (`BRIEF —`, `REVIEW …`). The defect "a brief that is merely quoted becomes
+   the brief" disappears with no extra work.
+
 **Done when:** every entry kind has a typed path; a malformed call is refused before the write with the
-missing fields named; old-format entries still render; the marker grammar appears in ONE place (the
-tool), not in three skills; suite green; **[owner reads]** one evening with zero coaching entries about
-format.
+missing fields named; old-format entries still render; the marker grammar appears in ONE constant read by
+tool and parsers alike (grep test); a mismatching `--author` is refused; the state pack selects the brief
+by type; suite green; **[owner reads]** one evening with zero coaching entries about format.
 
 ---
 
