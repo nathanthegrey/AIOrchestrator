@@ -101,7 +101,9 @@ public static class TopicNameSync_Gate
     /// </summary>
     static bool Says_TopicNotModified(Exception failure)
     {
-        return failure.Message.Contains("TOPIC_NOT_MODIFIED", StringComparison.OrdinalIgnoreCase);
+        // The slug itself now lives in TelegramError_Table (brief F10). The reasoning above stays
+        // here, with the caller it is about; only the string moved.
+        return TelegramError_Table.Classify(400, failure.Message) == TelegramErrorCases.TopicNameAlreadyCurrent;
     }
 
     /// <summary>
