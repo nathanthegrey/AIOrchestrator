@@ -211,31 +211,31 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   button (keyboard gone, the message becomes "💬 Ok — tell me what you have in mind"), and you get a
   request to explain the decision in prose, briefly — then **ask it again** with fresh lines once
   the discussion has settled, or the decision silently never gets taken. Pictures: `IMAGE: <full path>`. Files: `ATTACH: <full path>` — `IMAGE:` is pictures only, an HTML file sent that way is refused. Both read from the repo, your channel folder or `~/mockups/`; 10 MB a picture, 50 MB a file; a refusal is written here with its fix, never texted.
-- **A question that can wait for ever usually does. Bound it: `DEADLINE:` and `DEFAULT:`.** Two
-  optional lines, written beside `QUESTION:`/`OPTION:` and read by the app the same way:
+- **A question that can wait for ever usually does. Bound it: `--deadline` and `--default`.** Two
+  more flags on the same call:
 
-  ```
-  QUESTION: Merge branch wf-perf into master now, or hold for your IDE review?
-  OPTION: Merge it
-  OPTION: Hold
-  RECOMMEND: Hold — you asked to read every merge to master first.
-  RISK: high
-  ROW: none
-  DEADLINE: 2h
-  DEFAULT: 2
+  ```bash
+  channel-append.sh --channel "…/owner-channel.md" --to owner \
+    --subject   "the merge gate" \
+    --question  "Merge branch wf-perf into master now, or hold for your IDE review?" \
+    --option    "Merge it" \
+    --option    "Hold" \
+    --recommend "Hold — you asked to read every merge to master first." \
+    --risk high \
+    --row none \
+    --deadline 2h \
+    --default  2
   ```
 
-  `DEADLINE:` is `2h`, `90m`, or a bare number meaning minutes; past 168h it is read as no deadline
-  at all. `DEFAULT:` is the OPTION NUMBER AS THE OWNER SEES IT — 1-based, matching the buttons. When
+  `--deadline` is `2h`, `90m`, or a bare number meaning minutes; past 168h the app reads it as NO
+  deadline at all, so the tool refuses that rather than letting it mean the opposite of what you
+  wrote. `--default` is the OPTION NUMBER AS THE OWNER SEES IT — 1-based, matching the buttons. When
   the deadline passes unanswered, the default is applied and `/pending` says it was.
 
-  **They are optional and they are NOT symmetrical.** A `DEADLINE:` alone is meaningful: the question
-  expires and says so. A `DEFAULT:` alone is dropped, because nothing would ever apply it. Writing
-  neither is the old behaviour exactly — the question waits indefinitely.
-
-  Written twice is not an error — the FIRST readable one wins, so a marker repeated at the bottom
-  cannot silently override the one a human reads at the top. An unreadable value is dropped on its
-  own and never takes the other marker with it.
+  **They are optional and they are NOT symmetrical.** A deadline alone is meaningful: the question
+  expires and says so. A default alone would never be applied, so the tool refuses it and tells you
+  why rather than dropping it silently. Passing neither is the old behaviour exactly — the question
+  waits indefinitely.
 
   **Only give a `DEFAULT:` to a question whose unattended answer you would defend.** It spends the
   owner's decision for them, so it belongs on the reversible ones and never on a merge, a push, or
@@ -244,8 +244,10 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   app reads it for the topic's status line (PULSE), field 2: `solo · <what you declared> · declared
   HH:MM`. One line, your own words — a STATE, not a summary of what the entry just reported:
 
-  ```
-  STATE: tests running, merge branch ready right after
+  ```bash
+  channel-append.sh --channel "…/owner-channel.md" --to owner \\
+    --subject "…" --report "…" \\
+    --state "tests running, merge branch ready right after"
   ```
 
   Write it in the OWNER'S language — it is addressed to them, like the rest of the entry. The label

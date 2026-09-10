@@ -63,6 +63,11 @@
     "option_label_width": 28
   },
 
+  "deadline": {
+    "_comment": "DEADLINE: takes 2h, 90m, or a bare number of minutes. Past this many hours the app reads it as no deadline at all — QuestionDirectives_Parser.MAXIMUM_DEADLINE_HOURS, asserted equal by ChannelGrammarTests.",
+    "maximum_hours": 168
+  },
+
   "risk_levels": {
     "_comment": "RISK: takes one of these and nothing else, so a question cannot declare a risk nobody can compare.",
     "values": ["low", "medium", "high"]

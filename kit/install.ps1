@@ -32,6 +32,23 @@ if ($null -eq $wtCmd) {
     Write-Host 'NOTE: Windows Terminal (wt) not found — sessions will open in plain PowerShell windows.' -ForegroundColor Yellow
 }
 
+# jq — CHECKED HERE TOO, since 2026-09-10. install.sh has required it from the start; this file did
+# not, and the asymmetry was invisible because nothing on Windows needed jq until the channel tool
+# started reading its grammar with it. A Windows session runs that tool in msys bash, so a machine
+# set up by THIS installer could pass every check and then refuse every typed entry.
+#
+# A WARNING, NOT AN EXIT, and the difference from install.sh is deliberate: there, jq merges
+# settings.json and the install cannot proceed without it. Here it is the TOOL that needs jq, and a
+# machine without it still gets a working app, working role commands, and untyped appends. Stopping
+# the whole setup over a degraded path would be the harsher failure.
+$jqCmd = Get-Command jq -ErrorAction SilentlyContinue
+if ($null -eq $jqCmd) {
+    Write-Host 'WARNING: jq was not found on PATH. Sessions can still append to channels, but the TYPED' -ForegroundColor Yellow
+    Write-Host '         entries (--question/--option/--state/...) read the channel grammar with jq and will' -ForegroundColor Yellow
+    Write-Host '         refuse until it is installed: winget install jqlang.jq   (or: choco install jq)' -ForegroundColor Yellow
+    Write-Host '         Note that channel-append.sh runs in msys bash, so jq must be on the PATH that bash sees.' -ForegroundColor Yellow
+}
+
 # --- 1. Folders + role commands + status line -------------------------------------------------
 New-Item -ItemType Directory -Force $commandsFolder | Out-Null
 New-Item -ItemType Directory -Force $supervisionFolder | Out-Null
