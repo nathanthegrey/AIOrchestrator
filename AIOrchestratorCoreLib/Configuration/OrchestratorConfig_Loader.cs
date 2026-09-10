@@ -223,13 +223,30 @@ public static class OrchestratorConfig_Loader
     /// <summary>
     /// The <c>planBackend</c> object, or null when the key is absent — which is every config.json
     /// written before this existed and every one whose owner never opted in.
+    ///
+    /// <para>
+    /// A KIND THAT IS PRESENT BUT NOT A STRING IS CARRIED THROUGH, NOT DROPPED, and that is the whole
+    /// reason this method reads the node itself instead of only <see cref="Get_String_OrNull"/>.
+    /// <c>PlanBackend_Loader</c> has a dated contract of its own — an unrecognised kind is a FAILED
+    /// load with a warning, because <c>"externa1"</c> once read as the default and produced no error
+    /// at all — and making the string reader tolerant on 2026-09-10 reopened exactly that hole through
+    /// a different door: <c>{"kind": 42}</c> became null, null became "the owner never configured a
+    /// backend", and the loader never got a settings object to complain about. So the raw JSON text
+    /// stands in for the word: the loader then says <c>planBackend.kind '42' is not recognised</c>,
+    /// which is the loud failure that component promises. Found by the re-review of this very fix.
+    /// </para>
     /// </summary>
     static PlanBackendSettings? Parse_PlanBackend_OrNull(JsonObject? configRoot)
     {
         if (configRoot?["planBackend"] is not JsonObject backendRoot)
             return null;
 
-        var kind = Get_String_OrNull(backendRoot, "kind");
+        var kindNode = backendRoot["kind"];
+
+        if (kindNode == null)
+            return null;
+
+        var kind = Get_String_OrNull(backendRoot, "kind") ?? kindNode.ToJsonString();
 
         if (string.IsNullOrWhiteSpace(kind))
             return null;
@@ -258,8 +275,10 @@ public static class OrchestratorConfig_Loader
     /// <c>generalSupervisorModel</c>, <c>communicatorModel</c>), <c>telegramBotToken</c>,
     /// <c>voiceTranscribeCommand</c>, a repo entry's <c>name</c> and <c>path</c> (a mistyped one is
     /// skipped by <see cref="Parse_Repos"/>'s own blank check, as it already was for a blank string),
-    /// and <c>planBackend</c>'s <c>kind</c>/<c>assembly</c>/<c>type</c> (a mistyped <c>kind</c> reads
-    /// as no planBackend at all, which is what an absent key already meant). Each of the thirteen
+    /// and <c>planBackend</c>'s <c>assembly</c>/<c>type</c>. Its <c>kind</c> is the ONE exception and
+    /// <see cref="Parse_PlanBackend_OrNull"/> makes it: a mistyped kind must stay LOUD, because that
+    /// component's own contract says an unrecognised kind is a failed load rather than a silent
+    /// downgrade to PLAN.md. Each of the other twelve
     /// moves from "takes the whole load down" to "takes its own default", and nothing else changes:
     /// a correctly typed value reads exactly as before.
     /// </para>
