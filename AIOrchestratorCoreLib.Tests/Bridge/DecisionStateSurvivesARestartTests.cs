@@ -382,6 +382,45 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
     readonly List<(string Data, string Label)> _buttons = [];
     string? _queuedUpdatesJson;
     long _nextMessageId = 9000;
+    readonly List<(long MessageId, string Text)> _sentWithIds = [];
+    readonly Dictionary<long, int> _editAttemptsByMessageId = [];
+    int _editsToRefuse;
+    int _refusalRetryAfterSeconds;
+    long? _refuseOnlyMessageId;
+
+    /// <summary>
+    /// FAULT INJECTION: the next <paramref name="count"/> text edits of <paramref name="messageId"/>
+    /// (or of any message when null) answer Telegram's rate limit with the given <c>retry_after</c>;
+    /// <c>int.MaxValue</c> refuses them all. A refused text is NOT recorded as edited — only an edit
+    /// Telegram accepted is. Scoped to one message on purpose: the status line edits too, and a
+    /// budget it could spend would let a probe about the tap's rewrite pass without the retry.
+    /// </summary>
+    public void Refuse_Edits_WithRateLimit(int count, int retryAfterSeconds, long? messageId = null)
+    {
+        lock (_lock)
+        {
+            _editsToRefuse = count;
+            _refusalRetryAfterSeconds = retryAfterSeconds;
+            _refuseOnlyMessageId = messageId;
+        }
+    }
+
+    /// <summary>Every text edit attempted on this message, accepted or refused.</summary>
+    public int Count_EditAttempts(long messageId)
+    {
+        lock (_lock)
+            return _editAttemptsByMessageId.TryGetValue(messageId, out var attempts) ? attempts : 0;
+    }
+
+    /// <summary>The id Telegram (this fake) gave the LAST sent message containing the fragment.</summary>
+    public long? Find_MessageIdOfSentContaining(string fragment)
+    {
+        lock (_lock)
+        {
+            var found = _sentWithIds.LastOrDefault(sent => sent.Text.Contains(fragment, StringComparison.Ordinal));
+            return found.Text == null ? null : found.MessageId;
+        }
+    }
 
     /// <summary>
     /// The id of the last message sent carrying DECISION buttons — the one a tap refers back to.
@@ -439,6 +478,12 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
             return _sentTexts.LastOrDefault(text => text.Contains(fragment, StringComparison.Ordinal));
     }
 
+    public int Count_Edited_Containing(string fragment)
+    {
+        lock (_lock)
+            return _editedTexts.Count(text => text.Contains(fragment, StringComparison.Ordinal));
+    }
+
     public string? Find_EditedContaining(string fragment)
     {
         lock (_lock)
@@ -482,6 +527,7 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
             _sentTexts.Add(text);
 
             var messageId = _nextMessageId++;
+            _sentWithIds.Add((messageId, text));
 
             if (buttons.Any(button => button.Data.StartsWith(CallbackToken.PREFIX, StringComparison.Ordinal)))
                 LastButtonMessageId = messageId;
@@ -519,8 +565,15 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
         lock (_lock)
         {
             _sentTexts.Add(text);
-            return _nextMessageId++;
+            var messageId = _nextMessageId++;
+            _sentWithIds.Add((messageId, text));
+            return messageId;
         }
+    }
+
+    int Count_EditAttempts_Unlocked(long messageId)
+    {
+        return _editAttemptsByMessageId.TryGetValue(messageId, out var attempts) ? attempts : 0;
     }
 
     public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => Task.FromResult(1L);
@@ -530,14 +583,46 @@ internal sealed class CapturingTelegram_Fake : ITelegramApiClient
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Edit_MessageText_Async(long messageId, string text, CancellationToken cancellationToken)
     {
+        return Attempt_Edit(messageId, text, recordText: true);
+    }
+
+    /// <param name="recordText">
+    /// Whether an ACCEPTED edit lands in the edited-texts the probes search. The status line's
+    /// edits carry the command bar and are NOT recorded — a probe asking "was the second question
+    /// stamped" must not find that question's words inside PULSE's "waiting on you" field.
+    /// </param>
+    Task Attempt_Edit(long messageId, string text, bool recordText)
+    {
         lock (_lock)
-            _editedTexts.Add(text);
+        {
+            _editAttemptsByMessageId[messageId] = Count_EditAttempts_Unlocked(messageId) + 1;
+
+            if (_editsToRefuse > 0 && (_refuseOnlyMessageId == null || _refuseOnlyMessageId == messageId))
+            {
+                if (_editsToRefuse != int.MaxValue)
+                    _editsToRefuse--;
+
+                // Telegram's own shape, which the client would have thrown after its short inline retry.
+                throw new TelegramApiException(
+                    429,
+                    $"Telegram 'editMessageText' failed with HTTP 429: {{\"ok\":false,\"error_code\":429,\"description\":\"Too Many Requests: retry after {_refusalRetryAfterSeconds}\",\"parameters\":{{\"retry_after\":{_refusalRetryAfterSeconds}}}}}",
+                    _refusalRetryAfterSeconds);
+            }
+
+            if (recordText)
+                _editedTexts.Add(text);
+        }
 
         return Task.CompletedTask;
     }
 
-    public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken) => Task.CompletedTask;
+    // THE SAME HANDS AS THE PLAIN EDIT: the status line is edited WITH its command bar, so a probe
+    // about how often that line is retried has to see (and be able to refuse) this call too.
+    public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+        => Attempt_Edit(messageId, text, recordText: false);
+
+    public Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+        => Attempt_Edit(messageId, text, recordText: false);
     public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;

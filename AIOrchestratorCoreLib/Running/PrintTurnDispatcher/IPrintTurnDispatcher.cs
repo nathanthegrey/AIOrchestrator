@@ -31,6 +31,15 @@ public interface IPrintTurnDispatcher
     bool Is_TurnInFlight(string orchId, string memberId);
 
     /// <summary>
+    /// Whether THIS session's admitted turn is still WAITING FOR A SLOT — in the in-flight table,
+    /// nothing executing. <see cref="Is_TurnInFlight"/> is true for both a queued and a running turn,
+    /// and reading it as "working" is how the owner was narrated "still at it" for 29 minutes on
+    /// 2026-09-10 about a supervisor that had not started. False when the turn is running, and false
+    /// when there is no turn at all.
+    /// </summary>
+    bool Is_TurnQueued(string orchId, string memberId);
+
+    /// <summary>
     /// THE /resume OVERRIDE. Drops <see cref="PrintSessionState.IPrintSessionState.RetryNotBeforeUtc"/>
     /// on every registered session that has one, so the very next tick tries the turn again instead of
     /// waiting out the appointment.

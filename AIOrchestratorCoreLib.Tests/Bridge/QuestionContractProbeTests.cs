@@ -3,6 +3,7 @@ using AIOrchestratorCoreLib.Bridge.BridgeEngine;
 using AIOrchestratorCoreLib.Bridge.Decisions;
 using AIOrchestratorCoreLib.Bridge.EngineState;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -370,6 +371,183 @@ public class QuestionContractProbeTests : IDisposable
         var dump = _log.Dump();
         Assert.Contains("already closed", dump, StringComparison.Ordinal);
         Assert.DoesNotContain("nothing was taken, and the question is still open", dump, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE TAP'S REWRITE OUTLIVES A RATE LIMIT. Measured 2026-09-10 21:11:40 on the VPS: the owner
+    /// tapped, Telegram answered the rewrite with <c>429 retry after 24</c>, the keyboard-removal
+    /// fallback got the same, and neither was tried again — old text, live keyboard, on a question
+    /// already answered. Here Telegram refuses the first TWO edits of the question message with a
+    /// one-second wait; the third lands, off the inbound loop. With the retry reverted the message
+    /// is never edited.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ATapWhoseRewriteIsRateLimited_IsRewrittenAnyway_AfterTelegramsWait()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        var startIt = _telegram.Find_ButtonFor("Start it")!;
+        var questionMessageId = _telegram.LastButtonMessageId
+            ?? throw new Exception("the question was sent with no message id");
+
+        _telegram.Refuse_Edits_WithRateLimit(count: 2, retryAfterSeconds: 1, messageId: questionMessageId);
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, questionMessageId, updateId: 3070));
+
+        // ONE engine run for both outcomes: the retries live on the engine's own cancellation, and a
+        // probe that stopped the engine to look would cancel the very wait it is probing. In
+        // production the engine does not stop between a tap and its rewrite.
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Edited_Containing("✅ Start it"), 20_000),
+            $"the rewrite never landed after the rate limit.{Environment.NewLine}{_log.Dump()}");
+
+        // The answer was routed regardless of the rewrite — that was true before and stays true.
+        Assert.Contains("Start it", Channel(orchId), StringComparison.Ordinal);
+
+        // Rewritten on the THIRD attempt, after two one-second waits.
+        Assert.Equal(3, _telegram.Count_EditAttempts(questionMessageId));
+        Assert.Contains("landed on attempt 3", _log.Dump(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// THE STATUS LINE HONOURS ITS OWN BACK-OFF. Measured 2026-09-10 20:56–21:52 on the VPS: 357 of
+    /// 382 rate-limit refusals were PULSE, retried every 2 s (the tick) with Telegram's
+    /// <c>retry_after</c> counting down 34, 31, 29 … The planner's 30-second back-off was in place and
+    /// tested — and overruled one line later by the button-only promotion, which compared the
+    /// rendering against the last text SENT, stale by design after a failure. Here every edit of the
+    /// PULSE message is refused; across forty ticks it must be attempted once, not forty times.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task APulseEditThatIsRateLimited_IsNotRetriedEveryTick()
+    {
+        var orchId = await Start_Async();
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_MessageIdOfSentContaining("PULSE") != null, 20_000),
+            $"no status line was ever posted.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
+
+        var pulseId = _telegram.Find_MessageIdOfSentContaining("PULSE")!.Value;
+        _telegram.Refuse_Edits_WithRateLimit(count: int.MaxValue, retryAfterSeconds: 20, messageId: pulseId);
+
+        // Edits accepted BEFORE the refusal are not the subject; only what happens from here on is.
+        var acceptedBefore = _telegram.Count_EditAttempts(pulseId);
+
+        // An open question changes the line ("waiting on you"), so an edit is due — and refused.
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Count_EditAttempts(pulseId) > acceptedBefore, 20_000),
+            $"the status line was never edited after the question.{Environment.NewLine}{_log.Dump()}");
+
+        await Run_For_Async(BridgeTestTiming.Window_ForTicks(40));
+
+        var refusedAttempts = _telegram.Count_EditAttempts(pulseId) - acceptedBefore;
+
+        Assert.True(
+            refusedAttempts <= 1,
+            $"the refused status-line edit was attempted {refusedAttempts} times inside the {BridgeTestTiming.RETRY_BACKOFF_SECONDS} s back-off — production saw one every tick.");
+    }
+
+    const string THIRD_QUESTION =
+        "Both branches are in.\n"
+        + "QUESTION: Ship the release tonight?\n"
+        + "OPTION: Ship it\n"
+        + "OPTION: Hold off\n"
+        + "RECOMMEND: Hold off — the pricing pass is still yours.\n"
+        + "RISK: low\n"
+        + "ROW: FIN-D-279a";
+
+    /// <summary>
+    /// A NEWER QUESTION CLOSES THE OLDER ONES THE OWNER HAD ALREADY REPLIED TO IN WORDS. Measured
+    /// 2026-09-10: three questions from 15:58, 16:46 and 16:56 still listed as "waiting on you" at
+    /// 21:50 — the owner had answered each in prose, but with several open a typed reply binds to
+    /// none, so nothing ever closed them. Two open here, a typed reply that binds neither, then a
+    /// third question: the two are superseded (registry, keyboard, message), the third alone is
+    /// open, and the asker is told. With no reply between two questions both stay open — that case
+    /// is pinned by ATapOnOneQuestion_LeavesTheOtherOpen_TappableAndUnstamped and is unchanged.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ANewQuestion_AfterTheOwnerRepliedInWords_SupersedesTheOlderOnes()
+    {
+        var orchId = await Start_Async();
+
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
+
+        Assert.True(
+            await Run_Until_Async(
+                () => _telegram.Find_ButtonFor("Start it") != null && _telegram.Find_ButtonFor("Merge it") != null,
+                25_000),
+            $"both questions never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
+
+        // The owner answers in words — and with two open, that binds neither (by design). The
+        // harness clock is frozen, so it is stepped first: "replied AFTER the question was asked" is
+        // a comparison of two stamps from that clock, and in production the clock moves by itself.
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("start the build and hold the merge", updateId: 3080, messageId: 78));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("the reply names none of them"), 20_000),
+            $"the typed reply was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
+
+        // Then the asker moves on. (Numbered past the app's own entries, which took [5] and [6].)
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, THIRD_QUESTION, entryNumber: 9);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Ship it") != null && _engineState.Load_OrEmpty().OpenQuestions.Count == 1, 25_000),
+            $"the third question did not supersede the two older ones.{Environment.NewLine}{_log.Dump()}");
+
+        var open = Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Contains("Ship the release tonight?", open.Text, StringComparison.Ordinal);
+
+        // BOTH OLDER MESSAGES SAY SO — and the edit is what drops their keyboards.
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX) == 2, 20_000),
+            $"the superseded questions were not rewritten.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        // The asker was told, once, in its own channel.
+        Assert.Contains("superseded by this one", Channel(orchId), StringComparison.Ordinal);
+
+        // A late tap on a superseded question is refused, never routed as a stale answer.
+        var startIt = _telegram.Find_ButtonFor("Start it") ?? throw new Exception("the option payload is gone from the fake");
+        var firstMessageId = _telegram.Find_MessageIdOfSentContaining("Start the FIN-D-277a build now?") ?? throw new Exception("no id for the first question");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, firstMessageId, updateId: 3090));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Dump().Contains("Callback REFUSED", StringComparison.Ordinal), 20_000),
+            $"a superseded question's option was still live.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+    }
+
+    async Task Run_For_Async(int milliseconds)
+    {
+        using var cancellation = new CancellationTokenSource();
+
+        var loop = _engine.Run_Async(cancellation.Token);
+        await Task.Delay(milliseconds);
+        cancellation.Cancel();
+
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     string Channel(string orchId) => File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));
