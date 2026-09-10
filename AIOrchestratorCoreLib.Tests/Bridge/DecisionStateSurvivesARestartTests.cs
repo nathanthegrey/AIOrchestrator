@@ -188,11 +188,13 @@ public class DecisionStateSurvivesARestartTests : IDisposable
         // (a nudge already sent, a crash-loop count already reached), and — asserted above, in the
         // only window where it is outstanding — the owner's own wait.
         //
-        // COUNTED, not spot-checked, so a partial save cannot pass. Eight buttons for two questions:
-        // two options each, plus the two the app adds to every question — "ask back", which spends
-        // the group, and "let's talk", which deliberately does not.
+        // COUNTED, not spot-checked, so a partial save cannot pass. Six buttons for two questions:
+        // two options each, plus the ONE the app adds to every question — "💬 Let's talk". It was
+        // eight until the app's two buttons collapsed into one: "❔ Explain the options" and
+        // "💬 Let's talk" became the same gesture the moment a talk tap started closing its
+        // question, which is what the owner asked for on 2026-09-09.
         Assert.Equal(2, snapshotBeforeTheCrash.OpenQuestions.Count);
-        Assert.Equal(8, snapshotBeforeTheCrash.PendingButtons.Count);
+        Assert.Equal(6, snapshotBeforeTheCrash.PendingButtons.Count);
         Assert.Equal(NUDGED_ABOUT, Assert.Contains(NUDGED_MEMBER_KEY, snapshotBeforeTheCrash.NudgedAboutEntry));
         Assert.Equal(2, Assert.Contains(RESPAWN_SLOT_KEY, snapshotBeforeTheCrash.ConsecutiveRespawns));
 

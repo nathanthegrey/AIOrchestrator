@@ -703,6 +703,31 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<long, OpenQuestionRecord> _openQuestions =
         restoredState.OpenQuestions.ToDictionary(question => question.MessageId);
 
+    /// <summary>How many closures are remembered for the diagnostic below before the oldest is dropped.</summary>
+    const int CLOSED_QUESTION_MEMORY = 64;
+
+    /// <summary>
+    /// WHY EACH RECENTLY CLOSED QUESTION IS NO LONGER OPEN — a diagnostic, and nothing reads it to
+    /// decide anything. Written under <c>_ownerStateLock</c> beside every removal from
+    /// <see cref="_openQuestions"/>, so the answer can never be inferred from a registry that has
+    /// already forgotten the question.
+    ///
+    /// <para>
+    /// IT EXISTS BECAUSE A LOG LINE ASSERTED THE OPPOSITE OF THE TRUTH. A lapsed high-risk read-back
+    /// said "the question is still open" without ever reading the registry; on 2026-09-09 at ~16:03Z
+    /// it said that about a question that had been stamped closed minutes before. See
+    /// <see cref="QuestionClosure_Wording"/>.
+    /// </para>
+    /// <para>
+    /// IN MEMORY ONLY, AND BOUNDED. It is not in the snapshot because nothing depends on it: a
+    /// closure from before a restart is reported as unrecorded, which is true and is still better
+    /// than the confident wrong sentence it replaces.
+    /// </para>
+    /// </summary>
+    readonly Dictionary<long, string> _closedQuestionReasons = [];
+
+    readonly Queue<long> _closedQuestionOrder = new();
+
     sealed class AwayTracker
     {
         public int UnansweredCount;
@@ -3765,35 +3790,15 @@ internal sealed class BridgeEngineModel(
                 buttons.Add((data, buttonLabels[index]));
             }
 
-            // Every question also offers a way to ASK BACK. The button's label is short; the text
-            // the supervisor receives is the full instruction, which is why the two differ here.
-            // Tapping it consumes the group like any other choice, so the supervisor answers and
-            // then re-asks with fresh buttons.
-            var detailData = CallbackToken.Build(nonce, optionTexts.Count);
-
-            _buttonOptions[detailData] = new PendingButtonRecord
-            {
-                Data = detailData,
-                ThreadId = threadId,
-                OptionText = OwnerPush_Policy.MORE_DETAIL_REQUEST,
-                QuestionText = questionText,
-                GroupId = _buttonGroupSequence,
-                ExpiresUtc = expiresUtc,
-
-                // ASKING FOR DETAIL IS NEVER HIGH RISK, whatever the question is about. It takes no
-                // decision — it asks the supervisor to explain — so putting a code in front of it
-                // would make the safe way out of a dangerous question the hardest button to press.
-                IsHighRisk = false,
-            };
-
-            _buttonOrder.Enqueue(detailData);
-            buttons.Add((detailData, OwnerPush_Policy.MORE_DETAIL_LABEL));
-
-            // AND A WAY TO TALK WITHOUT CHOOSING. "Explain the options" is a re-ask — it spends the
-            // buttons and the supervisor asks again, which is right when the wording was unclear and
-            // wrong when the owner simply wants to discuss the decision. This one keeps the question
-            // and its keyboard exactly where they are; only a real option closes it.
-            var talkData = CallbackToken.Build(nonce, optionTexts.Count + 1);
+            // Every question also offers ONE way to ask back — and it used to offer two. "❔ Explain
+            // the options" spent the buttons and asked the supervisor to explain and re-ask; this
+            // one left the question and its keyboard untouched. Now that a tap here closes the
+            // question like any other, the two are the same gesture under two labels, and the owner
+            // had to pick between synonyms before they could ask their real question.
+            //
+            // The button's label is short; the text the supervisor receives is the full instruction,
+            // which is why the two differ here.
+            var talkData = CallbackToken.Build(nonce, optionTexts.Count);
 
             _buttonOptions[talkData] = new PendingButtonRecord
             {
@@ -3804,11 +3809,14 @@ internal sealed class BridgeEngineModel(
                 GroupId = _buttonGroupSequence,
                 ExpiresUtc = expiresUtc,
 
-                // ASKING TO TALK TAKES NO DECISION, so it is never behind a code — for the same
-                // reason "explain the options" is not: the safe way out of a dangerous question must
-                // not be the hardest button to press.
+                // ASKING TO TALK IS NEVER HIGH RISK, whatever the question is about. It takes no
+                // decision — it asks the supervisor to explain — so putting a code in front of it
+                // would make the safe way out of a dangerous question the hardest button to press.
                 IsHighRisk = false,
-                KeepsGroupOpen = true,
+
+                // It consumes the group and closes the question exactly like an option; what it does
+                // not do is record a choice.
+                AnswersNothing = true,
             };
 
             _buttonOrder.Enqueue(talkData);
@@ -9019,11 +9027,12 @@ internal sealed class BridgeEngineModel(
             // A LAPSED group is consumed too: leaving it registered means every later tap pays
             // another expiry check on a decision that can never be taken again.
             //
-            // EXCEPT THE ONE BUTTON THAT ANSWERS NOTHING. "Let's talk" asks the supervisor to
-            // explain and leaves the decision untaken, so consuming the group would take the
-            // question off the phone in order to discuss it — and the owner would then be answering
-            // a question they can no longer see.
-            if (registered != null && !registered.KeepsGroupOpen && outcome != TapOutcomes.Unknown && outcome != TapOutcomes.NotOurs)
+            // NO BUTTON IS EXEMPT ANY MORE. "Let's talk" used to keep its group live, on the
+            // reasoning that discussing a decision must not take the question off the phone. What
+            // the owner actually got was a button whose tap changed nothing on screen — they tapped
+            // it twelve times in one afternoon — while the app went on holding a live question they
+            // had visibly stopped answering. The discussion ends in a fresh question instead.
+            if (registered != null && outcome != TapOutcomes.Unknown && outcome != TapOutcomes.NotOurs)
             {
                 List<string> groupKeys = [.. _buttonOptions.Where(pair => pair.Value.GroupId == registered.GroupId).Select(pair => pair.Key)];
 
@@ -9085,37 +9094,29 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        // A TAP THAT ANSWERS NOTHING LEAVES THE MESSAGE ALONE. Editing it would drop the keyboard —
-        // the very thing this button exists to preserve — and stamping "✅ <the whole request>" over
-        // the question would record a choice nobody made. The question is only MARKED as under
-        // discussion, which is what stops a typed reply from binding to it while they talk.
-        if (registered.KeepsGroupOpen)
-        {
-            if (tap.MessageId != null)
-            {
-                lock (_ownerStateLock)
-                {
-                    if (_openQuestions.TryGetValue(tap.MessageId.Value, out var open))
-                        _openQuestions[tap.MessageId.Value] = open with { InDiscussion = true };
-                }
-
-                Persist_EngineState();
-            }
-
-            await Route_TapAsOwnerMessage_Async(tap, registered, cancellationToken);
-            return;
-        }
-
-        // Rewrite the question message to RECORD the choice ("❓ … / ✅ deep"). Telegram's tap
-        // acknowledgement is a transient toast and the keyboard vanishes, so without this the chat
-        // keeps no trace of what was picked — the owner scrolls back and cannot tell what they
-        // answered. Editing the text also drops the keyboard, so it replaces the strip step.
+        // Rewrite the question message to RECORD what the tap did — "❓ … / ✅ deep" for a choice,
+        // and the acknowledgement for "💬 Let's talk", which records no choice because none was
+        // made. Telegram's tap acknowledgement is a transient toast and the keyboard vanishes, so
+        // without this the chat keeps no trace of what was picked — the owner scrolls back and
+        // cannot tell what they answered. Editing the text also drops the keyboard, so it replaces
+        // the strip step.
+        //
+        // EVERY TAP EDITS ITS OWN MESSAGE, and the one that did not is the owner's request here:
+        // *"Let's talk does nothing when I tap it — it stays there, all the other options stay too.
+        // Make it behave like the other buttons."*
         if (tap.MessageId != null)
         {
             // Answered — it must never be marked "parked" by a later away-mode sweep.
             lock (_ownerStateLock)
             {
-                _openQuestions.Remove(tap.MessageId.Value);
+                if (_openQuestions.Remove(tap.MessageId.Value))
+                {
+                    Note_QuestionClosed(
+                        tap.MessageId.Value,
+                        registered.AnswersNothing
+                            ? QuestionClosure_Wording.TALK_REQUEST
+                            : QuestionClosure_Wording.TAPPED_OPTION);
+                }
             }
 
             try
@@ -9124,7 +9125,9 @@ internal sealed class BridgeEngineModel(
                 // it again — an HTML send followed by a plain edit would put the markers back.
                 await TelegramProse_Sender.Edit_Async(
                     client, _log, GLOBAL_ORCH_ID, tap.MessageId.Value,
-                    QuestionPrompt_Builder.Build_AnsweredText(registered.QuestionText, registered.OptionText),
+                    registered.AnswersNothing
+                        ? QuestionPrompt_Builder.Build_TalkText(registered.QuestionText)
+                        : QuestionPrompt_Builder.Build_AnsweredText(registered.QuestionText, registered.OptionText),
                     cancellationToken);
             }
             catch (OperationCanceledException)
@@ -9174,8 +9177,13 @@ internal sealed class BridgeEngineModel(
         PendingButtonRecord registered,
         CancellationToken cancellationToken)
     {
+        // MARKED AS APP-COMPOSED, which is the root fix for every button rather than for one of
+        // them: the text is the option's, not the owner's keyboard, so it must never be bound as a
+        // typed answer to whatever OTHER question happens to be open. See
+        // ITelegramOwnerMessage.IsAppComposed for the 2026-09-09 pair of taps this comes from.
         var syntheticMessage = TelegramOwnerMessage_Factory.Create(
-            tap.UpdateId, tap.MessageId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null);
+            tap.UpdateId, tap.MessageId, 0, 0, registered.ThreadId ?? tap.MessageThreadId, registered.OptionText, null, null,
+            isAppComposed: true);
 
         await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
     }
@@ -9366,8 +9374,8 @@ internal sealed class BridgeEngineModel(
 
                 // The decision is taken, so the question it belongs to is answered. It was left OPEN
                 // while the read-back ran, on purpose — see Begin_HighRiskConfirmation_Async.
-                if (confirmation.MessageId != null)
-                    _openQuestions.Remove(confirmation.MessageId.Value);
+                if (confirmation.MessageId != null && _openQuestions.Remove(confirmation.MessageId.Value))
+                    Note_QuestionClosed(confirmation.MessageId.Value, QuestionClosure_Wording.CONFIRMED_HIGH_RISK);
             }
         }
 
@@ -9412,8 +9420,10 @@ internal sealed class BridgeEngineModel(
             }
         }
 
+        // The TAP's text, released by the code — app-composed for the same reason the tap itself is.
         var syntheticMessage = TelegramOwnerMessage_Factory.Create(
-            message.UpdateId, message.MessageId, 0, 0, confirmation.ThreadId ?? message.MessageThreadId, confirmation.OptionText, null, null);
+            message.UpdateId, message.MessageId, 0, 0, confirmation.ThreadId ?? message.MessageThreadId, confirmation.OptionText, null, null,
+            isAppComposed: true);
 
         await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
         return true;
@@ -9483,7 +9493,16 @@ internal sealed class BridgeEngineModel(
         }
 
         foreach (var confirmation in lapsed)
-            _log.Log_Warning(confirmation.OrchId, "A high-risk read-back window closed with no code typed — nothing was taken, and the question is still open");
+        {
+            // READ, NOT ASSUMED. This line used to say "the question is still open" without ever
+            // looking, and on 2026-09-09 at ~16:03Z it said it about a question that had been
+            // stamped closed minutes earlier.
+            var closure = Read_QuestionClosure(confirmation.MessageId);
+
+            _log.Log_Warning(
+                confirmation.OrchId,
+                QuestionClosure_Wording.Describe_LapsedReadBack(closure.StillOpen, closure.Reason));
+        }
 
         List<OpenQuestionRecord> due;
 
@@ -9565,6 +9584,8 @@ internal sealed class BridgeEngineModel(
         {
             if (!_openQuestions.Remove(question.MessageId))
                 return;
+
+            Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.DEADLINE);
 
             // A READ-BACK BELONGS TO ITS QUESTION AND DIES WITH IT. Left behind, it would keep a live
             // code for a decision that has just been denied on timeout — the owner types the code
@@ -9654,12 +9675,16 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
+        // The owner said nothing at all here, so this is the clearest app-composed message of the
+        // three: binding it to another open question would file a sentence the owner never wrote as
+        // their answer to a decision they never saw.
         var syntheticMessage = TelegramOwnerMessage_Factory.Create(
             0, null, 0, 0, session.TelegramTopicId,
             appliedDefault
                 ? chosenOptionText ?? ""
                 : "No — the deadline passed with no answer from me. Treat this as a refusal and say what you need instead.",
-            null, null);
+            null, null,
+            isAppComposed: true);
 
         await Route_OwnerMessage_Async(syntheticMessage, cancellationToken);
     }
@@ -10435,6 +10460,40 @@ internal sealed class BridgeEngineModel(
             return _openQuestions.Values.Any(question => question.OrchId == orchId);
     }
 
+    /// <summary>
+    /// Remembers WHAT closed a question. Callers hold <c>_ownerStateLock</c> — it is written at the
+    /// same instant as the removal it explains, because a reason recorded a few lines later is a
+    /// reason that can be missed by an early return.
+    /// </summary>
+    void Note_QuestionClosed(long messageId, string reason)
+    {
+        if (!_closedQuestionReasons.ContainsKey(messageId))
+            _closedQuestionOrder.Enqueue(messageId);
+
+        _closedQuestionReasons[messageId] = reason;
+
+        while (_closedQuestionOrder.Count > CLOSED_QUESTION_MEMORY)
+            _closedQuestionReasons.Remove(_closedQuestionOrder.Dequeue());
+    }
+
+    /// <summary>
+    /// Whether that question is still open, and if it is not, what closed it — read as one pair
+    /// under one lock, so the two halves cannot describe two different instants.
+    /// </summary>
+    (bool StillOpen, string? Reason) Read_QuestionClosure(long? messageId)
+    {
+        if (messageId == null)
+            return (false, null);
+
+        lock (_ownerStateLock)
+        {
+            if (_openQuestions.ContainsKey(messageId.Value))
+                return (true, null);
+
+            return (false, _closedQuestionReasons.TryGetValue(messageId.Value, out var reason) ? reason : null);
+        }
+    }
+
     List<(long MessageId, long ButtonGroupId, string QuestionText)> Clear_OpenQuestions(string orchId)
     {
         List<(long MessageId, long ButtonGroupId, string QuestionText)> answered = [];
@@ -10443,17 +10502,15 @@ internal sealed class BridgeEngineModel(
         {
             foreach (var pair in _openQuestions)
             {
-                // A question under discussion is NOT closed by a typed reply — the same rule the
-                // count above reads, applied where the removal actually happens. Stated twice
-                // deliberately: the count decides IF anything binds, this decides WHAT is taken, and
-                // a decider that agrees with a remover only by coincidence is the defect this
-                // whole path already carries a scar from.
-                if (pair.Value.OrchId == orchId && !pair.Value.InDiscussion)
+                if (pair.Value.OrchId == orchId)
                     answered.Add((pair.Key, pair.Value.ButtonGroupId, pair.Value.Text));
             }
 
             foreach (var question in answered)
+            {
                 _openQuestions.Remove(question.MessageId);
+                Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.TYPED_ANSWER);
+            }
         }
 
         return answered;
@@ -10504,12 +10561,12 @@ internal sealed class BridgeEngineModel(
     {
         int openCount;
 
-        // BINDABLE, not merely open. A question the owner asked to TALK about is still on their
-        // phone with its buttons live, and while they are discussing it their words are
-        // conversation, not a vote — so it neither absorbs a reply nor makes a second question
-        // "ambiguous". It closes when they tap, and only then.
+        // OPEN IS BINDABLE AGAIN, and there is no longer a third state between them. A question the
+        // owner asked to talk about used to stay open-but-not-bindable; that tap now closes it, so
+        // the count and the removal below read the same registry with the same rule — which is what
+        // stops a decider and a remover from agreeing only by coincidence.
         lock (_ownerStateLock)
-            openCount = _openQuestions.Values.Count(question => question.OrchId == orchId && !question.InDiscussion);
+            openCount = _openQuestions.Values.Count(question => question.OrchId == orchId);
 
         var binding = AnswerBinding_Decider.Decide(openCount, answerText);
 
@@ -10950,7 +11007,14 @@ internal sealed class BridgeEngineModel(
         // unfreezes and everything the supervisor queued behind the question flows now — and the
         // keyboard comes down with it, so a question answered IN WRITING is as closed on the phone as
         // one answered by tapping.
-        await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
+        //
+        // EXCEPT WHEN THE APP WROTE THE TEXT. A tap, a released read-back and an applied default all
+        // arrive here as owner messages, and the binding below reads "exactly one question open" as
+        // "this answers it". The tapped question is removed before routing, so one OTHER question
+        // still open is the ordinary case, not a rare one — and on 2026-09-09 that is precisely what
+        // stamped a talk request onto an orphaned-processes question nobody ever decided.
+        if (!message.IsAppComposed)
+            await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
         Clear_AwaitingAnswerFlag(orchId);
 
         // The owner is engaged, so nothing is deadlocked — a suppressed entry from before must not
@@ -12344,7 +12408,10 @@ internal sealed class BridgeEngineModel(
             }
 
             foreach (var entry in parked)
+            {
                 _openQuestions.Remove(entry.MessageId);
+                Note_QuestionClosed(entry.MessageId, QuestionClosure_Wording.AWAY_PARKED);
+            }
         }
 
         if (parked.Count > 0)
