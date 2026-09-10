@@ -114,9 +114,6 @@ internal sealed class BridgeEngineModel(
     /// <summary>Channel silence that counts as a stall once nobody is mid-turn.</summary>
     const int STALL_ALERT_MINUTES = 25;
 
-    /// <summary>How long an implementer may leave a brief unanswered before the app nudges it.</summary>
-    const int IMPLEMENTER_NUDGE_MINUTES = 8;
-
     /// <summary>How long the owner may wait for their supervisor's acknowledgement before the app steps in.</summary>
     const int OWNER_REPLY_GRACE_SECONDS = 150;
 
@@ -2245,7 +2242,7 @@ internal sealed class BridgeEngineModel(
                 // this member is working, and the expensive mistake is the one that stays quiet: the
                 // gate below still holds it to one nudge per unanswered thing, so the cost of being
                 // wrong here is a single wake.
-                if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+                if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES)
                     continue;
 
                 // WORKING MEANS DO NOT DISTURB — and the app now answers that from its OWN dispatcher
@@ -2709,7 +2706,7 @@ internal sealed class BridgeEngineModel(
             // rather than left to assume silence means nothing is waiting.
             var memberQuietFor = Nudge_Decider.Measure_QuietFor(entries, DateTime.Now);
 
-            if (memberQuietFor != null && memberQuietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+            if (memberQuietFor != null && memberQuietFor.Value.TotalMinutes < Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES)
                 continue;
 
             waitingMembers.Add(member.MemberId);
