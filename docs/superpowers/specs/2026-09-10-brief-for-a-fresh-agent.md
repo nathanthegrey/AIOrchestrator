@@ -125,8 +125,18 @@ still read as pending. `41531e0` fixes it: the dispatcher records what each in-f
 with, and the reporter splits "nothing is carrying this" (warning) from "a turn is carrying this"
 (info naming the condition — because a turn that FAILS leaves them pending, so suppressing the line
 would trade a false alarm for a silent drop).
-**Status: under adversarial review at the time of writing. Check that review's outcome before
-believing the fix.** [CLAIMED that the fix is complete]
+**Reviewed adversarially, 2026-09-10, nothing CRITICAL.** The two ways it could have been an inert
+no-op were both REFUTED by a probe driving the real dispatcher: `SUPERVISOR_MEMBER_ID` is `"sup"` and
+matches the registration path, and the two sides compute the digest through the same
+`ChannelHistory_Cache.Read_Entries` → `Select_Pending` pair, so the identity sets do intersect. That
+probe is now a kept test (`InFlightDeliveryIdentitiesTests`) and it carries its own control: with an
+empty set the false alarm of 14:12:43 reproduces on demand.
+The review's other findings were fixed in the same pass — an `orchId` differing only in case or
+whitespace used to miss every lookup here while the close itself succeeded (the session store
+resolves through a file path, case-insensitive on Windows), which handed the reporter an empty set and
+resurrected the false alarm; the three session-keyed dictionaries are now case-insensitive and the key
+is trimmed. And `Log_BeforeClosing` — the method that picks WARNING vs INFO — had no test at all: the
+level could be inverted with all seven cases green.
 **And it settled an owner question with a measurement:** whether closing a member with unread traffic
 should be *prevented* rather than logged. It should not — prevention would have refused exactly that
 close, of the member that had just filed its final report.
@@ -156,7 +166,20 @@ PowerShell script), and a plan-backend config that fails loudly instead of silen
    ledger-close event in `orchestrator.log.jsonl`, and the orchestrations' `PLAN.md` is not under git,
    so there is no history to difference. Either the app should emit such an event, or the question
    should be reframed. [OPEN — and worth deciding before anyone promises that number again]
-7. **Parked, with a destination:** the `QUESTION:` literal appears in several spellings and the
+7. **[OPEN, and named by the review] Nothing ever resolves the in-flight conditional.** The reporter's
+   INFO line says "if that turn fails these reach nobody" — and if the turn does fail, that line is
+   the only record that will ever exist. After `Close_Member`, `TurnSources_Resolver` skips the member
+   for good: the entries can never be pending again, the archived-undelivered warning iterates only
+   RESOLVED sources, and no later close re-examines them. Better than a WARNING with a false claim,
+   but not the same as catching the drop. **The fix the reviewer proposed:** one warning on the turn's
+   FAILURE path, which already holds the pending set and can ask the store which members are closed.
+   Left undone deliberately — a new warning on the failure route, untested against real failure modes,
+   at the end of a long session, is how the previous batch earned five review findings.
+8. **[OPEN, LOW] The reporter is not archive-aware.** It reads the live channel file only, so if
+   `Channel_Compactor` moves an undelivered entry to the archive between the two reads the line goes
+   SILENT rather than wrong. Pre-dates this work; `ChannelHistory_Counter` exists for exactly this
+   (decision 13) and is not used here.
+9. **Parked, with a destination:** the `QUESTION:` literal appears in several spellings and the
    entry author is not role-bound. Delivered to another line (E3, commit `ff24382`), which starts
    after its brief C reaches production. Do not re-solve it.
 
