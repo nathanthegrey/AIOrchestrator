@@ -241,6 +241,23 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<string, DateTime> _mirrorRetryLastAttemptUtc = [];
 
     /// <summary>
+    /// ENTRIES THE MIRROR GAVE UP ON, held until a send to that channel's topic works again.
+    ///
+    /// <para>
+    /// The give-up used to CONFIRM the append it could not deliver — which moves the persisted
+    /// cursor past those entries for ever — and write one Error line into a log on a machine the
+    /// owner never reads. From the phone that is indistinguishable from nothing having happened.
+    /// </para>
+    /// <para>
+    /// IN MEMORY, AND BOUNDED (<see cref="Mirroring.UndeliveredDigest_Builder.MAX_PARKED_ENTRIES"/>).
+    /// The channel FILE remains the record of record — this is the copy that gets carried to the
+    /// phone late, not a second source of truth, so losing it in a restart costs the digest and
+    /// nothing else.
+    /// </para>
+    /// </summary>
+    readonly Dictionary<string, List<(DateTime WhenUtc, string Author, string Subject, string Body)>> _parkedUndelivered = [];
+
+    /// <summary>
     /// Every channel whose CONTENTS have been read — by the baseline pass or by either sweep, whichever
     /// reached it first. ONE set on purpose: it was three, and every pair of them left a window where
     /// one consumer had taken first sight and another had not, in which an arriving offence was
@@ -1441,7 +1458,7 @@ internal sealed class BridgeEngineModel(
 
             var delivered = await Mirror_Append_Async(append, cancellationToken);
             Raise_OrchestrationActivity(append.Channel.OrchId);
-            Settle_MirrorAttempt(append, delivered);
+            await Settle_MirrorAttempt_Async(append, delivered, cancellationToken);
         }
 
         await Check_UsageLimits_Async(cancellationToken);
@@ -1488,7 +1505,103 @@ internal sealed class BridgeEngineModel(
     /// Before this, the cursor advanced during the read and a failed send dropped the owner's
     /// messages permanently — the outage of 2026-08-11 lost every entry that met a 502.
     /// </summary>
-    void Settle_MirrorAttempt(ICompletedChannelAppend append, bool delivered)
+    int Count_Parked(string channelFilePath)
+    {
+        return _parkedUndelivered.TryGetValue(channelFilePath, out var parked) ? parked.Count : 0;
+    }
+
+    /// <summary>
+    /// Keeps the entries the mirror could not deliver, in the order the channel recorded them.
+    ///
+    /// <para>
+    /// ONLY WHAT WOULD HAVE BEEN SENT — <c>Select_MirrorableEntries</c>, the mirror's own predicate.
+    /// An entry the mirror deliberately does not push was never owed to the phone.
+    /// </para>
+    /// <para>
+    /// PAST THE CAP IT STOPS AND SAYS SO, once. An outage long enough to fill it is one the channel
+    /// file is the record of; what must not happen is a bridge holding a backlog until it dies.
+    /// </para>
+    /// </summary>
+    void Park_Undelivered(ICompletedChannelAppend append)
+    {
+        if (!_parkedUndelivered.TryGetValue(append.Channel.FilePath, out var parked))
+        {
+            parked = [];
+            _parkedUndelivered[append.Channel.FilePath] = parked;
+        }
+
+        // THE SAME PREDICATE THE MIRROR ITSELF USES, so the digest carries what would have been
+        // sent and nothing else. Parking every entry of the append would pad it with the ones the
+        // phone was never owed — narration the filter suppresses, app entries in a spoke — and
+        // invent deliveries that were never going to happen.
+        foreach (var entry in Select_MirrorableEntries(append))
+        {
+            if (parked.Count >= Mirroring.UndeliveredDigest_Builder.MAX_PARKED_ENTRIES)
+            {
+                _log.Log_Warning(
+                    append.Channel.OrchId,
+                    $"The undelivered backlog for '{Path.GetFileName(append.Channel.FilePath)}' is full at {Mirroring.UndeliveredDigest_Builder.MAX_PARKED_ENTRIES} entries — further entries are in the channel file only");
+
+                return;
+            }
+
+            parked.Add((_clock.UtcNow, entry.Author.ToString(), entry.Subject, entry.Body));
+        }
+    }
+
+    /// <summary>
+    /// ONE DOCUMENT, ON THE FIRST SEND THAT WORKS — never a burst of replayed messages. A catch-up
+    /// that scrolls the owner's phone for a minute is a second failure, not a recovery.
+    ///
+    /// <para>
+    /// CLEARED BEFORE THE SEND, deliberately, and the trade is stated rather than hidden: a digest
+    /// whose own upload fails is lost, while clearing it afterwards would re-send the same document
+    /// on every subsequent successful append until it happened to work — a loop the owner cannot
+    /// stop. The entries are in the channel file either way, and the Error line naming the outage
+    /// is already in the log.
+    /// </para>
+    /// </summary>
+    async Task Deliver_UndeliveredDigest_IfAny_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
+    {
+        if (!_parkedUndelivered.TryGetValue(append.Channel.FilePath, out var parked) || parked.Count == 0)
+            return;
+
+        _parkedUndelivered.Remove(append.Channel.FilePath);
+
+        var client = _telegramClient;
+
+        if (client == null)
+            return;
+
+        try
+        {
+            var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
+
+            await client.Send_Document_Async(
+                threadId,
+                Mirroring.UndeliveredDigest_Builder.FILE_NAME,
+                Mirroring.UndeliveredDigest_Builder.Build_Content(parked),
+                Mirroring.UndeliveredDigest_Builder.Build_CaptionHtml(parked.Count, parked[0].WhenUtc, parked[^1].WhenUtc),
+                cancellationToken);
+
+            _log.Log_Info(
+                append.Channel.OrchId,
+                $"Delivered the undelivered-entries digest ({parked.Count}) for '{Path.GetFileName(append.Channel.FilePath)}' now that Telegram is answering again");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(
+                append.Channel.OrchId,
+                $"The undelivered-entries digest ({parked.Count}) for '{Path.GetFileName(append.Channel.FilePath)}' could not be uploaded — the entries remain in the channel file",
+                ex);
+        }
+    }
+
+    async Task Settle_MirrorAttempt_Async(ICompletedChannelAppend append, bool delivered, CancellationToken cancellationToken)
     {
         var channelFilePath = append.Channel.FilePath;
 
@@ -1497,26 +1610,39 @@ internal sealed class BridgeEngineModel(
             _mirrorRetryFirstFailureUtc.Remove(channelFilePath);
             _mirrorRetryLastAttemptUtc.Remove(channelFilePath);
             _tailer.Confirm_Append(channelFilePath);
+
+            // THE PHONE IS ANSWERING AGAIN, so what it missed goes out now — once, as a document.
+            await Deliver_UndeliveredDigest_IfAny_Async(append, cancellationToken);
             return;
         }
 
-        _mirrorRetryLastAttemptUtc[channelFilePath] = DateTime.UtcNow;
+        // READ THROUGH THE INJECTED CLOCK, not DateTime.UtcNow. This is a DEADLINE read rather than
+        // a sleep — the distinction IBridgeEngineTiming's own summary draws — so the clock is what
+        // a test steps to reach the give-up, and the window stays the shipped 30 minutes in
+        // production instead of becoming a knob nobody sets.
+        var nowUtc = _clock.UtcNow;
+
+        _mirrorRetryLastAttemptUtc[channelFilePath] = nowUtc;
 
         if (!_mirrorRetryFirstFailureUtc.TryGetValue(channelFilePath, out var firstFailureUtc))
         {
-            firstFailureUtc = DateTime.UtcNow;
+            firstFailureUtc = nowUtc;
             _mirrorRetryFirstFailureUtc[channelFilePath] = firstFailureUtc;
         }
 
-        if (DateTime.UtcNow - firstFailureUtc < TimeSpan.FromMinutes(MIRROR_RETRY_WINDOW_MINUTES))
+        if (nowUtc - firstFailureUtc < TimeSpan.FromMinutes(MIRROR_RETRY_WINDOW_MINUTES))
             return;
 
-        // The window is spent, so this confirm DROPS the entries. Said at Error and naming the
-        // channel, because the alternative — a channel that quietly never mirrors again — is the
-        // exact failure the owner reported: cut off, with no way to know.
+        Park_Undelivered(append);
+
+        // The window is spent, so this confirm lets the cursor move past the entries — but they are
+        // PARKED above, not dropped, and the next send that works carries them as one document.
+        // Said at Error and naming the channel, because the alternative — a channel that quietly
+        // never mirrors again — is the exact failure the owner reported: cut off, with no way to
+        // know.
         _log.Log_Error(
             append.Channel.OrchId,
-            $"Telegram mirror gave up after {MIRROR_RETRY_WINDOW_MINUTES} minutes of retries — entries from '{Path.GetFileName(channelFilePath)}' never reached the phone",
+            $"Telegram mirror gave up after {MIRROR_RETRY_WINDOW_MINUTES} minutes of retries — {Count_Parked(channelFilePath)} entr{(Count_Parked(channelFilePath) == 1 ? "y" : "ies")} from '{Path.GetFileName(channelFilePath)}' are PARKED and will be delivered as a digest when Telegram answers again",
             null);
 
         _mirrorRetryFirstFailureUtc.Remove(channelFilePath);

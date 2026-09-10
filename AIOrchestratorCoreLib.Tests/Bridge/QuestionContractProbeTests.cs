@@ -258,10 +258,12 @@ public class QuestionContractProbeTests : IDisposable
     {
         var orchId = await Start_Async();
 
-        // BOTH APPENDED BEFORE THE ENGINE RUNS, deliberately. Appending the second question after a
-        // pass has already written an App entry of its own leaves it unread by the tailer — see the
-        // PARKED note in docs/superpowers/plans/2026-09-09-stage-8a-a-tap-closes-its-message.md;
-        // that is a mirror-cursor question, and this probe is about taps.
+        // BOTH APPENDED BEFORE THE ENGINE RUNS, and the reason is the tailer's TRAILING-ENTRY rule
+        // rather than anything about taps: the last entry in a file is held until the file goes
+        // quiet, measured against the injected clock — which this harness freezes. Appended this
+        // way, each question is terminated by the next append's header, so neither is trailing.
+        // (Stage 8a parked this as a suspected mirror-cursor defect; stage 8b found the real cause,
+        // and AnEntryWrittenAfterAnAppEntryStillReachesThePhoneTests pins it.)
         Append_Supervisor(orchId, COMPLETE_QUESTION);
         Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
 
