@@ -37,12 +37,30 @@ RETRY_MAX_MS=400
 DEFAULT_BUDGET_SECONDS=10
 
 usage() {
-  echo "usage: channel-append.sh --channel <file> --author <word> --subject <text> --body-file <file> [--budget-seconds N]" >&2
-  echo "       (--body - reads the body from stdin)" >&2
+  echo "usage: channel-append.sh --channel <file> --subject <text> (--body-file <file> | --body -)" >&2
+  echo "                         [--author <word>] [--type <kind>] [--budget-seconds N]" >&2
+  echo "" >&2
+  echo "  typed entry (composed and VALIDATED here, so a malformed one is refused before the write):" >&2
+  echo "    --question <text>     one question for the owner; needs 2-4 --option" >&2
+  echo "    --option <label>      repeatable; ${MAX_OPTIONS:-4} at most, ${OPTION_WIDTH:-28} characters each" >&2
+  echo "    --recommend <text>    which option you would take, and why in one clause" >&2
+  echo "    --risk low|medium|high" >&2
+  echo "    --row <id>            the ledger row this decides" >&2
+  echo "    --state <text>        your one-line state for PULSE, at turn end" >&2
+  echo "    --report <text>       a plain report body" >&2
+  echo "    --attach <path>       repeatable; a file the owner should receive" >&2
+  echo "    --to owner|member     which channel kind this is for (checked against --channel)" >&2
+  echo "" >&2
+  echo "  The index and the timestamp are computed HERE, never by the caller (CLAUDE.md decision 12)." >&2
+  echo "  The author is derived from AIORCH_ROLE/AIORCH_MEMBER; a mismatching --author is refused." >&2
   exit 2
 }
 
 CHANNEL=""; AUTHOR=""; SUBJECT=""; BODY_FILE=""; BUDGET_SECONDS="$DEFAULT_BUDGET_SECONDS"
+
+# ---- the typed entry (E3) -----------------------------------------------------------------------
+ENTRY_TYPE=""; QUESTION=""; RECOMMEND=""; RISK=""; ROW=""; STATE_LINE=""; REPORT=""; TO_KIND=""
+OPTIONS=(); ATTACHMENTS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,12 +69,105 @@ while [ $# -gt 0 ]; do
     --subject)        SUBJECT="${2:-}"; shift 2 ;;
     --body-file)      BODY_FILE="${2:-}"; shift 2 ;;
     --budget-seconds) BUDGET_SECONDS="${2:-}"; shift 2 ;;
+    --type)           ENTRY_TYPE="${2:-}"; shift 2 ;;
+    --question)       QUESTION="${2:-}"; shift 2 ;;
+    --option)         OPTIONS+=("${2:-}"); shift 2 ;;
+    --recommend)      RECOMMEND="${2:-}"; shift 2 ;;
+    --risk)           RISK="${2:-}"; shift 2 ;;
+    --row)            ROW="${2:-}"; shift 2 ;;
+    --state)          STATE_LINE="${2:-}"; shift 2 ;;
+    --report)         REPORT="${2:-}"; shift 2 ;;
+    --attach)         ATTACHMENTS+=("${2:-}"); shift 2 ;;
+    --to)             TO_KIND="${2:-}"; shift 2 ;;
     -h|--help)        usage ;;
     *) echo "channel-append.sh: unknown argument '$1'" >&2; usage ;;
   esac
 done
 
-[ -n "$CHANNEL" ] && [ -n "$AUTHOR" ] && [ -n "$SUBJECT" ] && [ -n "$BODY_FILE" ] || usage
+# ---- the grammar, read from the ONE file the app also reads (E3 requirement 1) -----------------
+#
+# It sits beside this script in the kit, so a tool without its grammar is not a shape that can ship:
+# AIOrchestrator.csproj copies kit/grammar/ next to kit/bin/. The app reads the SAME file, embedded
+# as a resource, and ChannelGrammarTests fails if the two copies differ by a byte.
+#
+# WHY jq AND NOT grep: the markers carry colons and spaces ("BLOCKED ON OWNER"), and a grep-based
+# reader of JSON is a parser nobody wrote on purpose. jq is already required by the installer.
+GRAMMAR_FILE="${AIORCH_CHANNEL_GRAMMAR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../grammar" 2>/dev/null && pwd)/channel-grammar.json}"
+
+grammar() {
+  # A missing key is fatal, never empty: an empty marker writes an entry the app cannot recognise,
+  # which is the silent half of the drift E3 exists to end.
+  local value
+  value="$(jq -er "$1" "$GRAMMAR_FILE" 2>/dev/null)" || {
+    echo "channel-append.sh: the channel grammar has no '$1' (looked in '$GRAMMAR_FILE'). Every marker" >&2
+    echo "                   this tool writes comes from there, so there is nothing to fall back to." >&2
+    exit 4
+  }
+  printf '%s' "$value"
+}
+
+TYPED_CALL=0
+if [ -n "$ENTRY_TYPE" ] || [ -n "$QUESTION" ] || [ -n "$STATE_LINE" ] || [ -n "$REPORT" ] \
+   || [ ${#OPTIONS[@]} -gt 0 ] || [ ${#ATTACHMENTS[@]} -gt 0 ] || [ -n "$RECOMMEND" ] \
+   || [ -n "$RISK" ] || [ -n "$ROW" ]; then
+  TYPED_CALL=1
+fi
+
+if [ "$TYPED_CALL" = "1" ]; then
+  command -v jq >/dev/null 2>&1 || {
+    echo "channel-append.sh: a typed entry needs jq to read the channel grammar, and jq is not on PATH." >&2
+    echo "                   Nothing was written. Install jq, or write the entry with --body-file." >&2
+    exit 4
+  }
+
+  [ -f "$GRAMMAR_FILE" ] || {
+    echo "channel-append.sh: cannot find the channel grammar at '$GRAMMAR_FILE'." >&2
+    echo "                   It ships beside this script in the kit; set AIORCH_CHANNEL_GRAMMAR to point at it." >&2
+    exit 4
+  }
+
+  MAX_LINES="$(grammar '.ceilings.max_lines')"
+  MAX_CHARACTERS="$(grammar '.ceilings.max_characters')"
+  MIN_OPTIONS="$(grammar '.ceilings.min_options')"
+  MAX_OPTIONS="$(grammar '.ceilings.max_options')"
+  OPTION_WIDTH="$(grammar '.ceilings.option_label_width')"
+fi
+
+# ---- the author is the SESSION's, not the caller's word (E3 requirement 2) ----------------------
+#
+# `--author <word>` accepted anything, and a member signing as "supervisor" is how a model choice got
+# erased from a brief: the entry was believed because of the name on it. The launcher already exports
+# the role and the member id to every session, so the truth is in the process and the flag is at best
+# a restatement of it.
+#
+# OUTSIDE A SESSION IT STILL WORKS. The app itself appends through the same lock from .NET, and a
+# human debugging by hand has no AIORCH_ROLE — so with nothing exported, `--author` is taken as given.
+# What is refused is the case that actually lied: a session that HAS a role claiming another one.
+derive_author() {
+  if [ -n "${AIORCH_MEMBER:-}" ]; then
+    printf '%s' "$AIORCH_MEMBER"
+  elif [ -n "${AIORCH_ROLE:-}" ]; then
+    printf '%s' "$AIORCH_ROLE"
+  else
+    printf ''
+  fi
+}
+
+SESSION_AUTHOR="$(derive_author)"
+
+if [ -n "$SESSION_AUTHOR" ]; then
+  if [ -n "$AUTHOR" ] && [ "$AUTHOR" != "$SESSION_AUTHOR" ]; then
+    echo "channel-append.sh: REFUSED — --author '$AUTHOR' is not this session's identity ('$SESSION_AUTHOR', from AIORCH_MEMBER/AIORCH_ROLE)." >&2
+    echo "                   Nothing was written. An entry signed with another role's name is believed because of the name on it;" >&2
+    echo "                   that is how a member's brief was once attributed to the supervisor. Drop --author, or fix it." >&2
+    exit 2
+  fi
+
+  AUTHOR="$SESSION_AUTHOR"
+fi
+
+[ -n "$CHANNEL" ] && [ -n "$AUTHOR" ] && [ -n "$SUBJECT" ] || usage
+[ -n "$BODY_FILE" ] || [ "$TYPED_CALL" = "1" ] || usage
 
 # THE BUDGET IS VALIDATED HERE, BEFORE ANY ARITHMETIC SEES IT, and this is a lock-safety rule rather
 # than input hygiene. `$(( 2.5 * 1000 ))` is a bash SYNTAX ERROR, and a syntax error inside
@@ -79,6 +190,166 @@ BUDGET_FRACTION="$(printf '%s000' "$BUDGET_FRACTION" | cut -c1-3)"
 BUDGET_MS=$(( ${BUDGET_WHOLE:-0} * 1000 + ${BUDGET_FRACTION:-0} ))
 
 [ "$BUDGET_MS" -gt 0 ] || { echo "channel-append.sh: --budget-seconds must be greater than zero, got '$BUDGET_SECONDS'" >&2; exit 2; }
+
+# ---- a typed entry is VALIDATED AND COMPOSED HERE, before anything is written -------------------
+#
+# The point of the tool is that a malformed entry never reaches the channel. The app already coaches
+# after the fact (OwnerMessage_Contract), and coaching after the fact is a message the owner's phone
+# has already carried — so the same rules run one moment earlier, and every fault is NAMED.
+#
+# FAULTS ARE COLLECTED, NOT THROWN ONE AT A TIME. A caller told "missing --option" fixes that and is
+# then told "too long", which is two round trips for one entry. Everything wrong is reported together.
+if [ "$TYPED_CALL" = "1" ]; then
+  FAULTS=()
+
+  if [ -n "$BODY_FILE" ]; then
+    FAULTS+=("--body-file cannot be combined with the typed flags: the body is composed from them, so passing both means two bodies and no way to choose.")
+  fi
+
+  # --to is checked against the channel it was given, because the two disagreeing is a real defect
+  # and not a formality: an owner question appended to a member spoke is a question nobody answers.
+  case "$TO_KIND" in
+    ''|owner|member) : ;;
+    *) FAULTS+=("--to must be 'owner' or 'member', got '$TO_KIND'.") ;;
+  esac
+
+  if [ "$TO_KIND" = "owner" ] && [ -n "$CHANNEL" ]; then
+    case "$CHANNEL" in
+      *owner-channel.md) : ;;
+      *) FAULTS+=("--to owner but --channel is '$(basename "$CHANNEL")', which is not an owner channel — an owner question on a member spoke is a question nobody answers.") ;;
+    esac
+  fi
+
+  # The declared type: either given, or inferred from the flags that can only mean one thing. It is
+  # PERSISTED (E3 requirement 3), so the state pack and the digest read it instead of guessing from
+  # the subject's first word.
+  if [ -z "$ENTRY_TYPE" ]; then
+    if [ -n "$QUESTION" ]; then ENTRY_TYPE="question"
+    elif [ -n "$STATE_LINE" ]; then ENTRY_TYPE="state"
+    elif [ -n "$REPORT" ]; then ENTRY_TYPE="report"
+    elif [ ${#ATTACHMENTS[@]} -gt 0 ]; then ENTRY_TYPE="attachment"
+    fi
+  fi
+
+  if [ -z "$ENTRY_TYPE" ]; then
+    FAULTS+=("--type is missing and cannot be inferred: pass one of $(grammar '.types.values | join(\", \")').")
+  elif ! jq -e --arg t "$ENTRY_TYPE" '.types.values | index($t)' "$GRAMMAR_FILE" >/dev/null 2>&1; then
+    FAULTS+=("--type '$ENTRY_TYPE' is not a type this app knows: $(grammar '.types.values | join(\", \")').")
+  fi
+
+  # A QUESTION owes the owner a choice. Two to four (brief E2) — fewer is not a choice, more is a
+  # list. Both bounds are the grammar's, so the tool and the app cannot disagree about them.
+  if [ -n "$QUESTION" ] || [ ${#OPTIONS[@]} -gt 0 ]; then
+    if [ -z "$QUESTION" ]; then
+      FAULTS+=("--option was given without --question: options with nothing to decide are buttons that answer nothing.")
+    fi
+
+    if [ ${#OPTIONS[@]} -lt "$MIN_OPTIONS" ]; then
+      FAULTS+=("--question needs at least $MIN_OPTIONS --option (got ${#OPTIONS[@]}): a question with one option is not a choice.")
+    fi
+
+    if [ ${#OPTIONS[@]} -gt "$MAX_OPTIONS" ]; then
+      FAULTS+=("--question takes at most $MAX_OPTIONS --option (got ${#OPTIONS[@]}): past that the owner is reading a list, not making a choice.")
+    fi
+
+    for option in ${OPTIONS+"${OPTIONS[@]}"}; do
+      if [ -z "${option// }" ]; then
+        FAULTS+=("an --option is empty: a blank button is one the owner cannot read.")
+      elif [ "${#option}" -gt "$OPTION_WIDTH" ]; then
+        FAULTS+=("--option '$option' is ${#option} characters; $OPTION_WIDTH is what fits one line of a phone button, so longer labels get replaced by numbers.")
+      fi
+    done
+  fi
+
+  if [ -n "$RISK" ]; then
+    if ! jq -e --arg r "$RISK" '.risk_levels.values | index($r)' "$GRAMMAR_FILE" >/dev/null 2>&1; then
+      FAULTS+=("--risk must be one of $(grammar '.risk_levels.values | join(\", \")'), got '$RISK': a risk nobody can compare is not a risk.")
+    fi
+  fi
+
+  for attachment in ${ATTACHMENTS+"${ATTACHMENTS[@]}"}; do
+    [ -f "$attachment" ] || FAULTS+=("--attach '$attachment' does not exist: the entry would name a file the owner never receives.")
+  done
+
+  if [ ${#FAULTS[@]} -gt 0 ]; then
+    echo "channel-append.sh: REFUSED — NOTHING WAS WRITTEN. $(printf '%s' "${#FAULTS[@]}") thing(s) to fix:" >&2
+    for fault in "${FAULTS[@]}"; do
+      echo "  - $fault" >&2
+    done
+    exit 2
+  fi
+
+  # ---- composed from the grammar's own marker words ---------------------------------------------
+  BODY_FILE="$(mktemp)" || { echo "channel-append.sh: cannot create a temp file" >&2; exit 4; }
+  trap 'rm -f "$BODY_FILE"' EXIT
+
+  # EVERY OPTIONAL LINE IS AN `if`, NOT AN `&&`, and that is a bug this cost once: a group whose LAST
+  # command is `[ -n "$X" ] && printf …` exits non-zero when X is empty, so composing a question with
+  # no --state reported "could not compose the entry" and wrote nothing. An `if` with a false
+  # condition and no else exits 0, which is what a skipped optional line means.
+  {
+    if [ -n "$REPORT" ]; then printf '%s\n' "$REPORT"; fi
+
+    if [ -n "$QUESTION" ]; then
+      # The question LAST among the prose, and the option block under it: a question is the last
+      # thing in an entry or it is a moving target (OwnerMessage_Contract's ProseAfterTheQuestion).
+      if [ -n "$ROW" ]; then printf '%s %s\n' "$(grammar '.markers.row')" "$ROW"; fi
+      if [ -n "$RISK" ]; then printf '%s %s\n' "$(grammar '.markers.risk')" "$RISK"; fi
+      printf '%s %s\n' "$(grammar '.markers.question')" "$QUESTION"
+      for option in ${OPTIONS+"${OPTIONS[@]}"}; do
+        printf '%s %s\n' "$(grammar '.markers.option')" "$option"
+      done
+      if [ -n "$RECOMMEND" ]; then printf '%s %s\n' "$(grammar '.markers.recommend')" "$RECOMMEND"; fi
+    fi
+
+    for attachment in ${ATTACHMENTS+"${ATTACHMENTS[@]}"}; do
+      printf '%s %s\n' "$(grammar '.markers.attach')" "$attachment"
+    done
+
+    # The declared state goes last so it is the entry's final line, which is where the bridge strips
+    # it from the body after reading it into PULSE.
+    if [ -n "$STATE_LINE" ]; then printf '%s %s\n' "$(grammar '.markers.state')" "$STATE_LINE"; fi
+  } > "$BODY_FILE" || { echo "channel-append.sh: could not compose the entry" >&2; exit 4; }
+
+  # THE CEILINGS, MEASURED ON WHAT WAS ACTUALLY COMPOSED — not on the flags. The owner reads the
+  # entry, so the entry is what has to fit (brief E2: 5 lines, 600 characters).
+  #
+  # THE LINE COUNT IS PROSE ONLY, AND THAT IS A RULING THIS TOOL HAD TO MAKE. A well-formed question
+  # is SIX marker lines by construction — ROW:, RISK:, QUESTION:, two OPTION:, RECOMMEND: — so a
+  # ceiling that counted them refused every valid question, which is what the first version of this
+  # check did. The app's own OwnerMessage_Contract.Is_TooLong counts every non-blank line and so
+  # coaches every question as too long: one of the "pairs that cannot both be obeyed" the E3 audit
+  # measured, still standing. The reading that makes both rules obeyable is that the ceiling is about
+  # PROSE — the sentences the owner reads — while a marker line is structure the app turns into a
+  # button or a field. Raised with the owner; the tool cannot wait for the answer, because refusing
+  # every question is not a usable default. The CHARACTER ceiling still counts everything: a wall of
+  # text is a wall whatever the marker at its left edge.
+  MARKER_PREFIXES="$(jq -r '.markers | to_entries[] | select(.key != "_comment") | .value' "$GRAMMAR_FILE")"
+
+  BODY_PROSE_LINES=0
+  while IFS= read -r line; do
+    [ -z "${line// }" ] && continue
+
+    is_marker=0
+    while IFS= read -r marker; do
+      [ -z "$marker" ] && continue
+      case "$line" in
+        "$marker"*) is_marker=1; break ;;
+      esac
+    done <<< "$MARKER_PREFIXES"
+
+    [ "$is_marker" = "1" ] || BODY_PROSE_LINES=$((BODY_PROSE_LINES + 1))
+  done < "$BODY_FILE"
+
+  BODY_CHARACTERS="$(wc -c < "$BODY_FILE" | tr -d ' ')"
+
+  if [ "$BODY_PROSE_LINES" -gt "$MAX_LINES" ] || [ "$BODY_CHARACTERS" -gt "$MAX_CHARACTERS" ]; then
+    echo "channel-append.sh: REFUSED — NOTHING WAS WRITTEN. The composed entry is $BODY_PROSE_LINES lines of prose and $BODY_CHARACTERS characters;" >&2
+    echo "                   the ceiling is $MAX_LINES lines and $MAX_CHARACTERS characters. Say less, or move the detail to a spoke." >&2
+    echo "                   (Marker lines — the question, its options, the recommendation — are not counted as prose.)" >&2
+    exit 2
+  fi
+fi
 
 if [ "$BODY_FILE" = "-" ]; then
   BODY_FILE="$(mktemp)" || { echo "channel-append.sh: cannot create a temp file" >&2; exit 4; }
@@ -331,7 +602,15 @@ STAGED_ENTRY="$(mktemp)" || { echo "channel-append.sh: cannot create a temp file
 # newline guarantees that whether or not the channel ended in one. There is no blank-line rule — that
 # was believed briefly on 2026-08-13 and disproved by reading the parser.
 {
-  printf '\n## [%s] FROM %s — %s — %s\n\n' "$NEXT_INDEX" "$AUTHOR" "$STAMP" "$SUBJECT"
+  printf '\n## [%s] FROM %s — %s — %s\n' "$NEXT_INDEX" "$AUTHOR" "$STAMP" "$SUBJECT"
+
+  # THE DECLARED TYPE, PERSISTED (E3 requirement 3) — directly under the header, so the parser finds
+  # it without scanning the body. Entries written before this landed carry no such line, and the
+  # parser reads that as "untyped" rather than as an error: the dual-parser transition is the whole
+  # reason a session on the old skill is never mute.
+  if [ -n "$ENTRY_TYPE" ]; then printf '%s%s\n' "$(grammar '.type_field.line_prefix')" "$ENTRY_TYPE"; fi
+
+  printf '\n'
   cat "$BODY_FILE"
   printf '\n'
 } > "$STAGED_ENTRY" || { rm -f "$STAGED_ENTRY"; echo "channel-append.sh: could not stage the entry" >&2; exit 4; }

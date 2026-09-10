@@ -28,11 +28,45 @@ public static class Brief_Finder
     public static readonly IReadOnlyList<string> TASK_MARKERS =
         ["BRIEF", "REVIEW", "FINAL REVIEW", "RE-REVIEW", "FINDINGS", "TASK", "GO AHEAD"];
 
+    /// <summary>
+    /// The types a typed entry may declare that make it the work in hand. Read BEFORE the subject
+    /// markers, which is the whole of E3 requirement 3: a declared type is what the writer meant,
+    /// while a subject beginning `BRIEF —` is a guess about what they meant.
+    /// </summary>
+    public static readonly IReadOnlyList<string> BRIEF_TYPES = ["brief", "review"];
+
     public static IChannelEntry? Find_OrNull(IReadOnlyList<IChannelEntry> history)
     {
+        // RULE ZERO, AHEAD OF THE SUBJECT GUESS: a DECLARED type (E3 requirement 3, owner
+        // 2026-09-10). The defect it removes is named in the brief — "a brief that is merely QUOTED
+        // becomes the brief". A reviewer quoting a brief back writes a subject beginning `BRIEF —`,
+        // because that is what they are quoting, and the marker rule below cannot tell the quotation
+        // from the thing. A type is written by the tool from a flag the writer passed, so a quotation
+        // carries the type of what it IS — a review, a report — not of what it mentions.
+        //
+        // IT DOES NOT REPLACE THE RULES BELOW, it precedes them. Every entry written before this
+        // landed is untyped, and a session on the old skill goes on writing untyped entries; the
+        // transition is the brief's own requirement. So an untyped history falls through to exactly
+        // the behaviour it had.
         for (var i = history.Count - 1; i >= 0; i--)
         {
             var entry = history[i];
+
+            if (entry.Author == ChannelAuthors.Supervisor
+                && entry.Type != null
+                && BRIEF_TYPES.Contains(entry.Type, StringComparer.OrdinalIgnoreCase))
+                return entry;
+        }
+
+        for (var i = history.Count - 1; i >= 0; i--)
+        {
+            var entry = history[i];
+
+            // AN ENTRY THAT DECLARED A DIFFERENT TYPE IS NOT A BRIEF, whatever its subject says.
+            // This is the half that actually kills the quoted-brief defect: without it, a review
+            // typed `review` but subjected `BRIEF — the parser fix` would still win here.
+            if (entry.Type != null && !BRIEF_TYPES.Contains(entry.Type, StringComparer.OrdinalIgnoreCase))
+                continue;
 
             if (entry.Author == ChannelAuthors.Supervisor && Has_TaskMarker(entry.Subject))
                 return entry;

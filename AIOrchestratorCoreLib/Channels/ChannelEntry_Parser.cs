@@ -170,10 +170,36 @@ public static partial class ChannelEntry_Parser
 
         var (dateText, subject) = Split_DateAndSubject(afterAuthor);
 
-        var body = string.Join('\n', entryLines.Skip(1)).Trim('\n');
+        var bodyLines = entryLines.Skip(1).ToList();
+
+        // THE DECLARED TYPE COMES OUT OF THE BODY (E3 requirement 3). The tool writes it directly
+        // under the header, and it is METADATA — so it must not travel on as body text: the mirror
+        // would put "type: question" on the owner's phone, which is the app's bookkeeping read aloud.
+        // Same reasoning as the STATE: line, which brief C strips for the same reason.
+        //
+        // ONLY THE FIRST NON-BLANK LINE IS CONSIDERED. A prose line beginning "type: " further down
+        // is prose — the owner writes about types — and the tool always emits this one first.
+        string? declaredType = null;
+        var firstContentIndex = bodyLines.FindIndex(line => !string.IsNullOrWhiteSpace(line));
+
+        if (firstContentIndex >= 0
+            && bodyLines[firstContentIndex].StartsWith(ChannelGrammar.TypeLine_Prefix, StringComparison.Ordinal))
+        {
+            declaredType = bodyLines[firstContentIndex][ChannelGrammar.TypeLine_Prefix.Length..].Trim();
+            bodyLines.RemoveAt(firstContentIndex);
+
+            if (declaredType.Length == 0)
+                declaredType = null;
+        }
+
+        var body = string.Join('\n', bodyLines).Trim('\n');
+
+        // RawText KEEPS THE TYPE LINE, deliberately: it is the entry as written, and the audit trail
+        // is the one place the app's own bookkeeping belongs. Every recogniser that reads RawText
+        // matches a marker at a line start, and `type: ` is not one.
         var rawText = string.Join('\n', entryLines).Trim('\n');
 
-        return ChannelEntry_Factory.Create(index, author, dateText, subject, body, rawText);
+        return ChannelEntry_Factory.Create(index, author, dateText, subject, body, rawText, declaredType);
     }
 
     /// <summary>

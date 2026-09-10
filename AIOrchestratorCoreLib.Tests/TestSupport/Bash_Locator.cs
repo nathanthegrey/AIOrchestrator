@@ -22,6 +22,16 @@ public static class Bash_Locator
         "/opt/homebrew/bin/bash",
     ];
 
+    /// <summary>
+    /// Whether bash is here at all — for a test that must SKIP rather than fail on a machine without
+    /// it. <see cref="Find_OrFail"/> stays the right call for a test that cannot be meaningful
+    /// without bash; this is for one that would otherwise report a green it never earned.
+    /// </summary>
+    public static bool Is_Available()
+    {
+        return CANDIDATES.Any(File.Exists);
+    }
+
     public static string Find_OrFail()
     {
         foreach (var candidate in CANDIDATES)
