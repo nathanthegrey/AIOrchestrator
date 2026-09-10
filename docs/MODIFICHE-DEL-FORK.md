@@ -898,9 +898,13 @@ macchine non possono: prima l'app da sola, così un errore la nomina, poi tutto 
 **Ha già trovato qualcosa, il secondo giorno.** Il 2026-09-10 un metodo di CoreLib è stato sostituito
 e tutti i suoi chiamanti aggiornati — tranne i due dentro l'app Windows, invisibili a chi lavora su
 macOS. Il ramo è rimasto rosso per tre push senza che nessuno se ne accorgesse leggendo il codice:
-l'unica cosa che l'ha detto è stata questa macchina. Correzione in `stage/12-wpf-build-fix`. Vale la
-pena dirlo perché è la dimostrazione del punto: non è che l'app *si compila* su Windows, è che
-adesso **qualcuno se ne accorge quando smette**.
+l'unica cosa che l'ha detto è stata questa macchina. Corretto in `stage/12-wpf-build-fix` e
+integrato: i due punti chiedono adesso la stessa cosa che CoreLib chiede a poche righe dallo stesso
+commento, così la riga del supervisore, quella del solo e il blocco di stato non possono rispondere
+in modo diverso a «di chi è la mossa». **Verde sul runner Windows** sia sul ramo (`aeb2295`) sia sul
+merge (`cb8f9c9`) — l'unica macchina che poteva dirlo. Vale la pena raccontarlo perché è la
+dimostrazione del punto: non è che l'app *si compila* su Windows, è che adesso **qualcuno se ne
+accorge quando smette**, e nel frattempo il ramo principale era rosso da tre push.
 
 **Perché.** «Manca ancora una verifica» dentro un messaggio di commit non è una verifica: è un debito
 che qualcuno deve ricordarsi di pagare. Se una macchina può pagarlo da sola, lo paga la macchina.
