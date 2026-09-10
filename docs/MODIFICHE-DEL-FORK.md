@@ -894,6 +894,13 @@ alla cieca, con scritto nel commit «manca ancora una compilazione Windows».
 **Cos'è adesso.** L'integrazione continua la fa a ogni push, e compila **solo** ciò che le altre
 macchine non possono: prima l'app da sola, così un errore la nomina, poi tutto il resto.
 
+**Ha già trovato qualcosa, il secondo giorno.** Il 2026-09-10 un metodo di CoreLib è stato sostituito
+e tutti i suoi chiamanti aggiornati — tranne i due dentro l'app Windows, invisibili a chi lavora su
+macOS. Il ramo è rimasto rosso per tre push senza che nessuno se ne accorgesse leggendo il codice:
+l'unica cosa che l'ha detto è stata questa macchina. Correzione in `stage/12-wpf-build-fix`. Vale la
+pena dirlo perché è la dimostrazione del punto: non è che l'app *si compila* su Windows, è che
+adesso **qualcuno se ne accorge quando smette**.
+
 **Perché.** «Manca ancora una verifica» dentro un messaggio di commit non è una verifica: è un debito
 che qualcuno deve ricordarsi di pagare. Se una macchina può pagarlo da sola, lo paga la macchina.
 
@@ -1051,10 +1058,21 @@ lettura di entrambe le forme.
   da solo. Ogni «fatto quando» futuro dipende da questo: la proposta è iniettare l'orologio in tutte le
   sonde a tempo reale e bonificare le 113 fixture che cancellano la cartella temporanea senza guardia.
   In attesa della decisione del proprietario.
-- I guadagni misurati sono **misurati prima della messa in produzione**: sul server, dopo, non sono
-  ancora stati rifatti. Sono attesi, non verificati.
-- La grazia di spegnimento del servizio (36 minuti) non è onorata dall'unità di sistema (90 secondi):
-  un riavvio uccide ancora i turni in corso. Configurazione del server, non codice.
+- ~~I guadagni sono misurati prima della messa in produzione~~ — **rifatti sul server il
+  2026-09-10**, diciannove ore dopo la messa in produzione delle correzioni del 9: **zero** righe
+  «said nothing for» (il difetto dell'orologio del silenzio, che prima ne produceva ventisei),
+  sessantanove turni di chiusura eseguiti, cinque riarmi del sorvegliante su Linux — il percorso che
+  su macOS si poteva solo dedurre — e nove errori in tutto, tutti chiamate a Telegram che va e
+  viene. Quel che resta non misurato in produzione è il costo per turno: i numeri sulle aperture di
+  file vengono ancora dal banco di prova.
+- ~~La grazia di spegnimento non è onorata dall'unità di sistema~~ — **chiusa, e la diagnosi era
+  sbagliata.** Chi l'ha scritta (io, il 2026-09-09) aveva dato la colpa alla configurazione del
+  server dopo aver misurato novanta secondi. Il taglio vero era dentro l'host .NET, che nessuno
+  aveva impostato e che si fermava a trenta: sessanta volte più corto, e in un posto dove nessuno
+  guardava. Corretto in `stage/4e-host-shutdown-timeout`; misurato il 2026-09-10 sul server,
+  l'attesa effettiva è di quaranta minuti. La lezione è la solita di questo file: un numero
+  osservato in un punto non nomina la causa, e la spiegazione comoda — «sarà la configurazione» —
+  è quella che nessuno ricontrolla.
 - Il file di istruzioni del progetto principale è stato modificato benché sia territorio di chi ha
   scritto l'originale: andrà risolto al prossimo allineamento. Stesso destino per due voci di quel file
   che il codice non rispecchia più (la vista unificata «taggata» dei canali, che non esiste; il guardiano

@@ -60,8 +60,10 @@ difetti che sarebbero arrivati al proprietario come «l'app ha mangiato il mio m
   consegni subito il primo e coalizzi il secondo: la grazia deve essere almeno la distanza.
 - **`--max-budget-usd` non limita la spesa** — misurato: cap 0,0001 $, speso 0,11 $. Il tetto è
   controllato dopo il passo.
-- **La grazia di spegnimento (36 min) non è onorata sul VPS**: `TimeoutStopSec` effettivo è 90 s, quindi
-  systemd uccide prima che il turno di chiusura finisca. Va allineata l'unità systemd — **aperto**.
+- ~~**La grazia di spegnimento (36 min) non è onorata sul VPS**~~ — **chiuso, e la diagnosi qui sotto
+  era sbagliata.** Avevo misurato 90 s effettivi e dato la colpa all'unità systemd; il taglio vero era
+  l'host .NET fermo a 30 s, che nessuno aveva impostato (`stage/4e-host-shutdown-timeout`). Misurato
+  il 2026-09-10: attesa effettiva 40 minuti. Un numero letto in un punto non nomina la causa.
 
 ## 5. Stato verificato
 
@@ -102,8 +104,11 @@ Host `orch@159.195.254.120`. Clone in `~/AIOrchestrator` su `ours/integration`; 
    famiglia del difetto corretto in `7m`, oggi irraggiungibili. Segnalati, non toccati.
 3. **`CLAUDE.md` è stato modificato** (decisione 11) su istruzione esplicita del proprietario, benché
    sia territorio upstream: andrà risolto al prossimo merge da `upstream`.
-4. **Nessuna misura è stata rifatta sul VPS dopo il deploy.** I numeri dell'analisi sono del binario
-   di ieri; i guadagni in produzione sono attesi, non ancora misurati lì.
+4. ~~**Nessuna misura è stata rifatta sul VPS dopo il deploy.**~~ — **fatte il 2026-09-10**, dopo
+   diciannove ore di produzione: **zero** righe «said nothing for» (erano 26 — il difetto P0
+   confermato sul campo), 69 turni di chiusura, 5 riarmi del watcher su Linux, 9 errori in tutto e
+   tutti di rete. Resta non misurato in produzione il costo per turno: le aperture di file vengono
+   ancora dal banco di prova.
 
 ## 8. Come si verifica il lavoro qui
 
