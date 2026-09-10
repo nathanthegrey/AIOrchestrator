@@ -499,3 +499,11 @@ wall-clock probes, the 29 engine probes first through the existing timing seam.
   B adds a probe for it; (2) `Build_GeneralCommandMessage` turns a typed `/summary`-style command into
   a canned English request not marked `IsAppComposed`, so with one question open in General it can bind
   as that question's answer — same family as A's root fix: fold into B (routing).
+- Post-deploy observations, VPS 2026-09-10 20:56 (tip 481efc9, kit reinstalled, "kit check OK"):
+  (1) `editForumTopic` → `400 TOPIC_ID_INVALID` ×6 at start for four CLOSED orchestrations (sandbox-1,
+  fincanva-1/3/4) whose topics were deleted before E1 but whose `session.json` still holds a topic id —
+  the name sync should forget the id on TOPIC_ID_INVALID (F10's table knows the code) and never retry;
+  noise at every restart, no loss. (2) `editMessageText` on the PULSE of the two live topics → `429`
+  with retry_after 20–22 s, twice in two minutes after the restart; handled by the retry, but it says
+  Telegram throttles same-message edits tighter than F5's "larger" control bucket assumes — watch it;
+  if it recurs outside restarts, size the control bucket from these retry_after values.
