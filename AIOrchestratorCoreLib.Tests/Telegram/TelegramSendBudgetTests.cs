@@ -25,6 +25,8 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// </summary>
 public class TelegramSendBudgetTests : IDisposable
 {
+    static readonly DateTime NOW = new(2026, 9, 10, 21, 11, 31, DateTimeKind.Utc);
+
     readonly string _tempRoot;
     readonly ISupervisionPaths _paths;
 
@@ -301,17 +303,11 @@ public class TelegramSendBudgetTests : IDisposable
     /// restart, for a throttle nothing has hit yet.
     /// </summary>
     [Fact]
-    public async Task TheFirstEditOfAMessageIsNotHeldBack()
+    public void TheFirstEditOfAMessageIsNotHeldBack()
     {
         var budget = TelegramSendBudget_Factory.Create_Fresh();
 
-        var started = DateTime.UtcNow;
-
-        await budget.Wait_ForMessageEdit_Async(4242, CancellationToken.None);
-
-        Assert.True(
-            DateTime.UtcNow - started < TimeSpan.FromSeconds(1),
-            "the first edit of a message waited — every topic's line would be half a minute late after a restart.");
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(4242, NOW));
     }
 
     /// <summary>
@@ -321,19 +317,13 @@ public class TelegramSendBudgetTests : IDisposable
     /// the wrong shape at any size.
     /// </summary>
     [Fact]
-    public async Task TwoDifferentMessagesDoNotWaitForEachOther()
+    public void TwoDifferentMessagesDoNotWaitForEachOther()
     {
         var budget = TelegramSendBudget_Factory.Create_Fresh();
 
-        var started = DateTime.UtcNow;
-
-        await budget.Wait_ForMessageEdit_Async(1, CancellationToken.None);
-        await budget.Wait_ForMessageEdit_Async(2, CancellationToken.None);
-        await budget.Wait_ForMessageEdit_Async(3, CancellationToken.None);
-
-        Assert.True(
-            DateTime.UtcNow - started < TimeSpan.FromSeconds(1),
-            "editing three different messages serialised them — the gate is per message, not global.");
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(1, NOW));
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(2, NOW));
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(3, NOW));
     }
 
     /// <summary>
@@ -341,50 +331,64 @@ public class TelegramSendBudgetTests : IDisposable
     /// in production on 2026-09-10: a once-a-minute PULSE edit drew `retry_after` 20, 22 then 32
     /// seconds, per topic, while the group bucket sat nearly full.
     ///
-    /// ASSERTED ON THE COMPUTED WAIT, not by sleeping through it: a test that waited thirty real
-    /// seconds would be thirty seconds of every suite run, and the thing worth pinning is the
-    /// decision, not the Task.Delay. The wait is read from the gate's own arithmetic through a
-    /// cancelled token — the call reports the delay it wanted rather than serving it.
+    /// <para>
+    /// IT REPORTS THE WAIT, IT DOES NOT SERVE IT. The version this replaces awaited the gap inside
+    /// the caller — and the caller is the 2 s mirror tick, so a held message parked the whole bridge
+    /// for up to half a minute. The old test had to prove "it wanted to wait" through a cancelled
+    /// token; now the wait is simply the return value, which is both a better test and the point of
+    /// the change.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task ASecondEditOfTheSameMessageIsHeldForTheGap()
+    public void ASecondEditOfTheSameMessageIsHeldForTheGap()
     {
         var budget = TelegramSendBudget_Factory.Create_Fresh();
 
-        await budget.Wait_ForMessageEdit_Async(4242, CancellationToken.None);
+        budget.Reserve_MessageEdit(4242, NOW);
 
-        using var alreadyCancelled = new CancellationTokenSource();
-        await alreadyCancelled.CancelAsync();
+        var owed = budget.Reserve_MessageEdit(4242, NOW.AddSeconds(2));
 
-        // The second edit must WANT to wait. With the token already cancelled it cannot serve the
-        // delay, so it throws — which is the observable difference between "held" and "let through",
-        // and it costs no wall-clock time.
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => budget.Wait_ForMessageEdit_Async(4242, alreadyCancelled.Token));
+        Assert.Equal(TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE - TimeSpan.FromSeconds(2), owed);
     }
 
     /// <summary>
-    /// AND THE SAME MESSAGE IS FREE AGAIN ONCE THE GAP HAS PASSED. Without this the test above would
-    /// also pass against a gate that blocked a message for ever after its first edit — one route to
-    /// "held", two very different behaviours.
-    ///
-    /// The elapsed gap is simulated by editing a message whose last edit is in the past, which the
-    /// factory's persisted seam cannot express — so it is asserted through the ONE thing that can: a
-    /// fresh budget, where the map is empty, is the same state as a message whose gap has expired and
-    /// been pruned. Stated plainly rather than dressed up: this pins the pruning, not the clock.
+    /// AND THE SAME MESSAGE IS FREE AGAIN ONCE THE GAP HAS PASSED — asserted on the CLOCK now, which
+    /// the previous version could not do. Its own comment admitted the compromise: it stood in a
+    /// different message for an expired one, so it pinned the pruning rather than the gap, and it
+    /// would have passed against a gate that held a message for ever after its first edit.
     /// </summary>
     [Fact]
-    public async Task AMessageWhoseGapHasExpiredIsFreeAgain()
+    public void AMessageWhoseGapHasExpiredIsFreeAgain()
     {
         var budget = TelegramSendBudget_Factory.Create_Fresh();
 
-        await budget.Wait_ForMessageEdit_Async(4242, CancellationToken.None);
+        budget.Reserve_MessageEdit(4242, NOW);
 
-        using var alreadyCancelled = new CancellationTokenSource();
-        await alreadyCancelled.CancelAsync();
+        Assert.Equal(
+            TimeSpan.Zero,
+            budget.Reserve_MessageEdit(4242, NOW + TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE));
+    }
 
-        // A DIFFERENT message is the expired case's twin: nothing remembered, nothing to wait for.
-        // It must NOT throw, or the test above would be satisfied by a gate that holds everything.
-        await budget.Wait_ForMessageEdit_Async(9999, alreadyCancelled.Token);
+    /// <summary>
+    /// A REFUSAL DOES NOT MOVE THE STAMP, and this is the defect the sleep-to-skip change could have
+    /// introduced. The old code advanced the stamp to `lastEdit + gap` because it was about to sleep
+    /// until then and two sleepers had to be kept off the same instant. Nobody sleeps now, so an
+    /// advance would push the door a further gap away every time a tick-rate caller asked and was
+    /// turned back — and a status line asking every 2 s would never be let through at all.
+    /// </summary>
+    [Fact]
+    public void ATurnedBackEditDoesNotPushTheDoorFurtherAway()
+    {
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+        var gap = TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE;
+
+        budget.Reserve_MessageEdit(4242, NOW);
+
+        // Asked and turned back once a second for ten seconds, as the mirror tick would.
+        for (var second = 1; second <= 10; second++)
+            budget.Reserve_MessageEdit(4242, NOW.AddSeconds(second));
+
+        // The door still opens exactly one gap after the edit that actually went out.
+        Assert.Equal(TimeSpan.Zero, budget.Reserve_MessageEdit(4242, NOW + gap));
     }
 }

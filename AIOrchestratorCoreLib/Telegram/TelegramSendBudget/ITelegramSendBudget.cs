@@ -39,7 +39,27 @@ public interface ITelegramSendBudget
     /// message this process has recently edited, and the first edit of each is the one that matters.
     /// </para>
     /// </summary>
-    Task Wait_ForMessageEdit_Async(long messageId, CancellationToken cancellationToken);
+    /// <summary>
+    /// SKIPS, IT DOES NOT SLEEP — and that is the whole change. Returns
+    /// <see cref="TimeSpan.Zero"/> when this message may be edited now (the slot is taken), or how
+    /// long is still owed when it may not.
+    ///
+    /// <para>
+    /// The version this replaces awaited the gap INSIDE the caller's turn, and the caller is the
+    /// 2 s mirror tick: one message edited twice inside thirty seconds parked the mirror, the
+    /// owner's deliveries and the deadline sweep for up to half a minute. That trades a 429 storm
+    /// for a stalled bridge, which is the worse of the two — nothing in the journal would even have
+    /// said why the app went quiet. The decision to wait belongs to the caller, who alone knows
+    /// whether what it is sending is worth a wait: a status line comes back next tick, the owner's
+    /// tap waits (<see cref="RateLimitedRetry_Policy"/>).
+    /// </para>
+    /// <para>
+    /// THE SLOT IS NOT RESERVED ON A REFUSAL. When this returns a positive wait it leaves the stamp
+    /// alone: nobody is going to edit at that moment, so moving it would push the door further away
+    /// each time a surface asked and was turned back.
+    /// </para>
+    /// </summary>
+    TimeSpan Reserve_MessageEdit(long messageId, DateTime nowUtc);
 
     /// <summary>
     /// The send bucket as it stands, for persistence. The CONTROL bucket is deliberately not here:

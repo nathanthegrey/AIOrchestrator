@@ -26,6 +26,15 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     /// </summary>
     readonly TelegramSendBudget.ITelegramSendBudget _budget;
 
+    /// <summary>
+    /// WHAT TELEGRAM HAS ALREADY TOLD US, shared by every call that passes through this class. The
+    /// buckets above are an ESTIMATE of a limit nobody publishes; a 429 carries the limit's own
+    /// answer, and until now that answer was known only to the call site that received it while
+    /// every other surface kept ringing the same bell. See <see cref="OutboundCooldowns"/> for the
+    /// measurement (388 in one hour, 376 of them one bell).
+    /// </summary>
+    readonly OutboundCooldowns _cooldowns = new();
+
     public TelegramApiClientModel(string botToken, long supergroupChatId, TelegramSendBudget.ITelegramSendBudget budget)
         : this(botToken, supergroupChatId, budget, transport: null)
     {
@@ -287,13 +296,10 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["text"] = text,
         };
 
-        // THE PER-MESSAGE GATE, ahead of the control bucket. Telegram throttles edits of ONE message
-        // far harder than calls to the group — measured 2026-09-10, `retry_after` 20-32s on a
-        // once-a-minute PULSE edit while the group bucket sat nearly full — so this is a dimension no
-        // group-level allowance can express. See TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE.
-        await _budget.Wait_ForMessageEdit_Async(messageId, cancellationToken);
+        Hold_UnlessThisMessageMayBeEdited(messageId);
 
-        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
+        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control,
+            OutboundCooldown_Keys.For_Message(messageId));
     }
 
     public async Task Edit_HtmlMessageText_Async(long messageId, string html, CancellationToken cancellationToken)
@@ -306,13 +312,10 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["parse_mode"] = "HTML",
         };
 
-        // THE PER-MESSAGE GATE, ahead of the control bucket. Telegram throttles edits of ONE message
-        // far harder than calls to the group — measured 2026-09-10, `retry_after` 20-32s on a
-        // once-a-minute PULSE edit while the group bucket sat nearly full — so this is a dimension no
-        // group-level allowance can express. See TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE.
-        await _budget.Wait_ForMessageEdit_Async(messageId, cancellationToken);
+        Hold_UnlessThisMessageMayBeEdited(messageId);
 
-        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
+        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control,
+            OutboundCooldown_Keys.For_Message(messageId));
     }
 
     /// <summary>
@@ -339,13 +342,10 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(buttonRows) },
         };
 
-        // THE PER-MESSAGE GATE, ahead of the control bucket. Telegram throttles edits of ONE message
-        // far harder than calls to the group — measured 2026-09-10, `retry_after` 20-32s on a
-        // once-a-minute PULSE edit while the group bucket sat nearly full — so this is a dimension no
-        // group-level allowance can express. See TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE.
-        await _budget.Wait_ForMessageEdit_Async(messageId, cancellationToken);
+        Hold_UnlessThisMessageMayBeEdited(messageId);
 
-        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
+        await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control,
+            OutboundCooldown_Keys.For_Message(messageId));
     }
 
     /// <summary>
@@ -444,13 +444,10 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["message_id"] = messageId,
         };
 
-        // THE PER-MESSAGE GATE, ahead of the control bucket. Telegram throttles edits of ONE message
-        // far harder than calls to the group — measured 2026-09-10, `retry_after` 20-32s on a
-        // once-a-minute PULSE edit while the group bucket sat nearly full — so this is a dimension no
-        // group-level allowance can express. See TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE.
-        await _budget.Wait_ForMessageEdit_Async(messageId, cancellationToken);
+        Hold_UnlessThisMessageMayBeEdited(messageId);
 
-        await Post_Async("editMessageReplyMarkup", payload, cancellationToken, TelegramCallClasses.Control);
+        await Post_Async("editMessageReplyMarkup", payload, cancellationToken, TelegramCallClasses.Control,
+            OutboundCooldown_Keys.For_Message(messageId));
     }
 
     public async Task Delete_Message_Async(long messageId, CancellationToken cancellationToken)
@@ -811,7 +808,7 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     /// before, so every caller's existing classification of the failure is unchanged.
     /// </para>
     /// </summary>
-    async Task<string> Post_Async(string method, JsonObject payload, CancellationToken cancellationToken, TelegramCallClasses callClass = TelegramCallClasses.Unmetered)
+    async Task<string> Post_Async(string method, JsonObject payload, CancellationToken cancellationToken, TelegramCallClasses callClass = TelegramCallClasses.Unmetered, string? cooldownKey = null)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -865,8 +862,49 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
                 }
             }
 
+            // THE WINDOW IS WRITTEN DOWN HERE, at the one place a rate limit is finally admitted
+            // rather than retried — so the next caller for this same target reads the note instead
+            // of ringing the bell. Only for a call that named a door: an unkeyed call has no target
+            // to hold, and inventing one would hold traffic Telegram never refused.
+            if (statusCode == 429 && cooldownKey != null)
+                _cooldowns.Note_RateLimited(cooldownKey, retryAfterSeconds, DateTime.UtcNow);
+
             throw new TelegramApiException(statusCode, $"Telegram '{method}' failed with HTTP {statusCode}: {body}", retryAfterSeconds);
         }
+    }
+
+
+    /// <summary>
+    /// THE DOOR, CHECKED BEFORE THE BELL IS RUNG — and it throws
+    /// <see cref="TelegramHeldException"/> rather than waiting.
+    ///
+    /// <para>
+    /// Two reasons a message may not be edited right now, and they are different things. The
+    /// COOLDOWN is Telegram's own answer to somebody else's attempt on this same message: measured
+    /// on the VPS 2026-09-10, 376 of 388 HTTP 429 in one hour were two status lines re-attempted at
+    /// the 2 s tick rate against a `retry_after` of 20-34 s, so every one of those attempts was a
+    /// bell already known to be dead. The per-message SLOT is our own brake, sized from the same
+    /// journal (<see cref="TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE"/>).
+    /// </para>
+    /// <para>
+    /// NEITHER SLEEPS. This runs inside the 2 s mirror tick, and a wait here parks the mirror, the
+    /// owner's deliveries and the deadline sweep along with it. The caller decides whether its
+    /// message is worth waiting for: a status line comes back next tick, the owner's tap waits out
+    /// the window it is handed (<see cref="RateLimitedRetry_Policy"/>).
+    /// </para>
+    /// </summary>
+    void Hold_UnlessThisMessageMayBeEdited(long messageId)
+    {
+        var nowUtc = DateTime.UtcNow;
+        var target = OutboundCooldown_Keys.For_Message(messageId);
+
+        if (_cooldowns.Is_Held(target, nowUtc, out var notBeforeUtc))
+            throw new TelegramHeldException(target, notBeforeUtc);
+
+        var owed = _budget.Reserve_MessageEdit(messageId, nowUtc);
+
+        if (owed > TimeSpan.Zero)
+            throw new TelegramHeldException(target, nowUtc + owed);
     }
 
     /// <summary>Blocks until the class of call named by <paramref name="callClass"/> may go out.</summary>
