@@ -188,6 +188,7 @@ sys.stdout.buffer.write("\x1f".join([
     str(d.get("prompt_id") or ""),
     str(d.get("session_id") or ""),
     str(d.get("agent_type") or ""),
+    str(d.get("agent_id") or ""),
     str(d.get("tool_use_id") or ""),
 ]).encode("utf-8"))' 2>/dev/null)
 
@@ -196,7 +197,7 @@ if [ -z "$RAW" ]; then
   exit 0
 fi
 
-IFS=$'\x1f' read -r PROMPT SESSION AGENT CALL_ID <<< "$RAW"
+IFS=$'\x1f' read -r PROMPT SESSION AGENT AGENT_ID CALL_ID <<< "$RAW"
 
 # prompt_id IS THE TURN; session_id is the fallback for a CLI that does not send one. See the header
 # for the capture that settles all three questions about the field.
@@ -276,6 +277,19 @@ fi
 # question cannot be answered, and there the advisory is DELIVERED and the inability recorded:
 # advising the main agent one turn too eagerly costs nothing, and silently never advising anyone is
 # the failure this whole hook exists to remove.
+# A SUB-AGENT IS IDENTIFIED BY ITS IDENTITY FIRST, ITS NAME SECOND. `agent_id` is present on every
+# sub-agent payload captured (2026-09-10, CLI 2.1.267) and absent on a main-agent one, and the CLI's
+# own schema says why that is the reliable half: agent_type "is present when the hook fires from
+# within a subagent (alongside agent_id), or on the main thread of a session started with --agent
+# (WITHOUT agent_id)". So the name alone is ambiguous — the re-review of this fix proved it, with a
+# main agent whose agent_type was a plugin's default agent and a sub-agent of that same spawnable
+# type: the advisory went to the sub-agent and burnt the turn's latch, which is the one failure this
+# gate exists to prevent. The name check stays underneath as belt and braces for a CLI that ever
+# omits the id.
+if [ -n "${AGENT_ID:-}" ]; then
+  exit 0
+fi
+
 if [ -f "$AGENT_FILE" ]; then
   FIRST_AGENT=$(cat "$AGENT_FILE" 2>/dev/null || printf '')
 
@@ -303,7 +317,7 @@ fi
 # "near" is gone); or promise that stopping "loses nothing", which is false in transcript mode, where
 # there is no pack, and false whenever the work being dropped is what would have closed the line.
 cat <<JSON
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"SOFT BOUNDARY — you are $COUNT tool calls into this turn (the advisory point is $SOFT_BOUNDARY_CALLS). This is ADVICE: nothing is blocked, it is said once per turn, and it is never repeated.\\nWHAT THIS LINE KNOWS: the call count, and nothing else. IT HAS READ NO CLOCK — it is not telling you that time is nearly up, and it may have arrived two minutes into your turn or twenty-five. Why the count matters anyway: a turn's context grows with every call (measured 2026-09-09: around 200 k inside the long turns), so each further call in it costs more than the last. And if the bridge is running you one turn per message, a turn has a hard deadline after which it is killed and asked for a closing report — 41 % of that night's member tokens sat in turns that ran to it. Whether that deadline is yours is something YOU know and this line does not: it is the runner your boot command printed. A turn that ends where you chose is cheaper than one that is cut.\\nWHAT TO DO — both halves, and the second matters more:\\n  • If you are AT a stable point — a change that is complete and verifiable NOW — save your work the way your role does (an implementer commits, a reviewer only reports) and write your report in your channel. AT, not near: do not go looking for the nearest thing that could be called finished, and do not shrink the change to make it fit. Weigh what ending here costs, because it is not always nothing: if the bridge starts your next turn FRESH it writes you a pack of what you left and little is lost, but if it resumes you in the same session there is no pack, and if the work you would drop is what closes your ledger line, ending here buys a whole extra round trip.\\n  • If you are MID-CHANGE: FINISH THAT CHANGE FIRST. Do not abandon work, do not leave the tree half-edited, and never stop before something is verifiable. Carrying on is always allowed and nobody penalises a turn that ran long — the cost of continuing is the growing context this line just described, never a judgement on you.\\nDO NOT TAKE A SMALLER DECISION BECAUSE OF THIS LINE. Do not narrow what you were asked to do, do not skip a check, do not drop a verification, and never report work you have not run. Stopping short of the task is a worse outcome than a turn that ran long — all that is being asked is that IF you are stopping, you pick the point rather than letting the deadline pick it."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"SOFT BOUNDARY — this turn has made $COUNT tool calls (the advisory point is $SOFT_BOUNDARY_CALLS). That total is the TURN's, not only yours: a sub-agent you fanned out to spends its calls on your turn, so the number can be far above what your own history shows. This is ADVICE: nothing is blocked, it is said once per turn, and it is never repeated.\\nWHAT THIS LINE KNOWS: the call count, and nothing else. IT HAS READ NO CLOCK — it is not telling you that time is nearly up, and it may have arrived two minutes into your turn or twenty-five. Why the count matters anyway: a turn's context grows with every call (measured 2026-09-09: around 200 k inside the long turns), so each further call in it costs more than the last. And if the bridge is running you one turn per message, a turn has a hard deadline after which it is killed and asked for a closing report — 41 % of that night's member tokens sat in turns that ran to it. Whether that deadline is yours is something YOU know and this line does not: it is the runner your boot command printed. A turn that ends where you chose is cheaper than one that is cut.\\nWHAT TO DO — both halves, and the second matters more:\\n  • If you are AT a stable point — a change that is complete and verifiable NOW — save your work the way your role does (an implementer commits, a reviewer only reports) and write your report in your channel. AT, not near: do not go looking for the nearest thing that could be called finished, and do not shrink the change to make it fit. Weigh what ending here costs, because it is not always nothing: if the bridge starts your next turn FRESH it writes you a pack of what you left and little is lost, but if it resumes you in the same session there is no pack, and if the work you would drop is what closes your ledger line, ending here buys a whole extra round trip.\\n  • If you are MID-CHANGE: FINISH THAT CHANGE FIRST. Do not abandon work, do not leave the tree half-edited, and never stop before something is verifiable. Carrying on is always allowed and nobody penalises a turn that ran long — the cost of continuing is the growing context this line just described, never a judgement on you.\\nDO NOT TAKE A SMALLER DECISION BECAUSE OF THIS LINE. Do not narrow what you were asked to do, do not skip a check, do not drop a verification, and never report work you have not run. Stopping short of the task is a worse outcome than a turn that ran long — all that is being asked is that IF this turn is going to end, you pick where — and ending a turn is not stopping: the next turn carries on from what you left."}}
 JSON
 
 # EVERY PATH ENDS AT 0, THIS ONE INCLUDED. `cat` above returns 1 when stdout is closed by the caller,

@@ -612,7 +612,7 @@ touch, state the assumption you would make, and keep going. **"I have reached a 
 not a reason at all** — it is the exact feeling this rule exists to override.
 
 **A TURN ENDING IS NOT STOPPING, and the SOFT BOUNDARY decides only WHERE a turn ends.** A long
-turn may bring a `<system-reminder>` reading `SOFT BOUNDARY — you are N tool calls into this turn`.
+turn may bring a `<system-reminder>` reading `SOFT BOUNDARY — this turn has made N tool calls`.
 It is advice, it arrives once, and it adds NO fourth reason to the three above: "the line arrived" is
 no more a reason to stop the endeavour than "I have reached a natural boundary" is. What it carries
 is a COUNT, and no clock — it has read none, and it may have arrived two minutes into your turn or

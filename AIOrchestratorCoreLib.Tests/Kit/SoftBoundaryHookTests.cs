@@ -105,7 +105,11 @@ public class SoftBoundaryHookTests : IDisposable
         Assert.Contains("\"hookEventName\":\"PreToolUse\"", advisory);
         Assert.Contains("additionalContext", advisory);
         Assert.Contains("SOFT BOUNDARY", advisory);
-        Assert.Contains($"you are {bar} tool calls into this turn", advisory);
+        // THE TURN'S COUNT, and the text says whose: a sub-agent's calls are spent on this turn, so
+        // "you are N calls in" was a claim about the recipient the hook cannot make (re-review,
+        // 2026-09-10: 37 counted, 7 of them the main agent's).
+        Assert.Contains($"this turn has made {bar} tool calls", advisory);
+        Assert.Contains("That total is the TURN's, not only yours", advisory);
     }
 
     /// <summary>
@@ -352,7 +356,7 @@ public class SoftBoundaryHookTests : IDisposable
         var advisory = Run_Raw("implementer", Payload(turn, bar + 1), threshold: bar.ToString()).Output;
 
         Assert.Contains("SOFT BOUNDARY", advisory);
-        Assert.Contains($"you are {bar + 1} tool calls into this turn", advisory);
+        Assert.Contains($"this turn has made {bar + 1} tool calls", advisory);
     }
 
     /// <summary>
@@ -451,7 +455,7 @@ public class SoftBoundaryHookTests : IDisposable
 
             var text = File.ReadAllText(path);
 
-            Assert.Contains("SOFT BOUNDARY — you are N tool calls into this turn", text);
+            Assert.Contains("SOFT BOUNDARY — this turn has made N tool calls", text);
 
             Assert.DoesNotContain("The one exception is announced", text);
             Assert.DoesNotContain("deadline is close", text);
@@ -459,8 +463,13 @@ public class SoftBoundaryHookTests : IDisposable
 
             if (role == "reviewer")
             {
-                // A partial review filed as a verdict is the failure this half exists to stop.
-                Assert.Contains("filed as PARTIAL, never as a verdict", text);
+                // A partial review filed as a verdict is the failure this half exists to stop — said
+                // in the fields this protocol ALREADY has. "PARTIAL" was a fourth word for a property
+                // the schema carries (depth, coverage:, UNPROVEN), with no field to put it in and no
+                // rule in the supervisor's protocol that reads it (re-review, 2026-09-10).
+                Assert.Contains("never filed as a verdict", text);
+                Assert.Contains("leaves a finding unproven rather than rounding it", text);
+                Assert.DoesNotContain("PARTIAL", text);
                 Assert.Contains("carries a count and no clock", text);
             }
             else

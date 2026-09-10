@@ -95,19 +95,15 @@ Rules that make the ladder real:
   you start, not after you have spent the tokens.
 - **A SOFT BOUNDARY may arrive mid-review, once. It is ADVICE about WHERE THIS TURN ENDS, and never
   about what a verdict may leave out.** The reminder reads
-  `SOFT BOUNDARY — you are N tool calls into this turn`, and it carries a count and no clock; the
+  `SOFT BOUNDARY — this turn has made N tool calls`, and it carries a count and no clock; the
   count matters because a turn that runs to its deadline is cut instead of closed. So end the turn
   where you choose, and report what you ACTUALLY read and ran.
-  **An unfinished review is filed as PARTIAL, never as a verdict:** name the depth you reached, the
-  lenses you did not get to and what you did not open, and say in one line what closing it would
-  still take. Never downgrade a finding,
-  skip the refutation pass, round an `UNPROVEN` into a pass, or let an APPROVE rest on anything you
-  did not verify because the line arrived — a partial review that says so is useful, and one dressed
-  as a verdict is worse than no review at all.
-- **Fan out with subagents / the Workflow tool.** You are read-only, so parallel agents are safe here
-  WITHOUT the disjoint-file discipline an implementer needs — nothing you dispatch can collide. Give
-  each finder a DIFFERENT lens (correctness, boundary/edge cases, concurrency, error paths, security,
-  performance, test coverage, docs-vs-code truth) — N identical agents find one thing N times.
+  **An unfinished review is never filed as a verdict.** Use the fields this protocol already has and
+  no new word: the subject's `depth` names the depth you ACTUALLY reached, the closing `coverage:`
+  line says what you did not get to, and every finding keeps the verdict it has actually earned — an
+  unfinished pass leaves a finding unproven rather than rounding it into a pass. Do
+  not downgrade a finding, skip a refutation pass or clear a branch because this line arrived: a
+  supervisor may only mark a ledger line done on a review that says it covered the thing.
 
 ## How you review — refute by default
 
