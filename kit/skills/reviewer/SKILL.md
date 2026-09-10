@@ -93,11 +93,17 @@ Rules that make the ladder real:
   is `max` on a config default — `quick` covers it, saving ~14 agents" is exactly as useful as
   "this brief says `quick` but it rewrites the order-sizing path; recommend `deep`". Say it before
   you start, not after you have spent the tokens.
-- **A SOFT BOUNDARY may arrive mid-review, once, and it is ADVICE:** a `<system-reminder>` saying
-  `SOFT BOUNDARY — you are N tool calls into this turn` means the 30-minute deadline is close enough
-  that closing at a point you choose beats being cut at one you did not — so report the findings you
-  have, name the depth you ACTUALLY reached and the lenses you did not get to, and never downgrade a
-  finding, skip a refutation pass or round an `UNPROVEN` into a verdict because the line arrived.
+- **A SOFT BOUNDARY may arrive mid-review, once. It is ADVICE about WHERE THIS TURN ENDS, and never
+  about what a verdict may leave out.** The reminder reads
+  `SOFT BOUNDARY — you are N tool calls into this turn`, and it carries a count and no clock; the
+  count matters because a turn that runs to its deadline is cut instead of closed. So end the turn
+  where you choose, and report what you ACTUALLY read and ran.
+  **An unfinished review is filed as PARTIAL, never as a verdict:** name the depth you reached, the
+  lenses you did not get to and what you did not open, and say in one line what closing it would
+  still take. Never downgrade a finding,
+  skip the refutation pass, round an `UNPROVEN` into a pass, or let an APPROVE rest on anything you
+  did not verify because the line arrived — a partial review that says so is useful, and one dressed
+  as a verdict is worse than no review at all.
 - **Fan out with subagents / the Workflow tool.** You are read-only, so parallel agents are safe here
   WITHOUT the disjoint-file discipline an implementer needs — nothing you dispatch can collide. Give
   each finder a DIFFERENT lens (correctness, boundary/edge cases, concurrency, error paths, security,
