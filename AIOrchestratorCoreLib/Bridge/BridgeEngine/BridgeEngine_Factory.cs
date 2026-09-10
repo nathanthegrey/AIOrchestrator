@@ -125,7 +125,14 @@ public static class BridgeEngine_Factory
         ITelegramApiClient? telegramClient,
         IEngineStateStore engineStateStore,
         IClock clock,
-        IBridgeEngineTiming timing)
+        IBridgeEngineTiming timing,
+
+        // OPTIONAL, AND RESOLVED PER HOST WHEN ABSENT: every production caller wants "whatever this
+        // machine can do", which is what the null means. A test passes
+        // HostWindowing_Factory.Create_Unsupported() to assert the refusal REGARDLESS of the OS the
+        // suite happens to run on — a probe that depends on its own host being Linux is a probe that
+        // silently stops testing anything on Windows.
+        Hosting.HostWindowing.IHostWindowing? hostWindowing = null)
     {
         // Passing the log so a quarantined (corrupt) cursor file is visible rather than a silent reset.
         var (fileOffsets, lastUpdateId) = BridgeState_Store.Load_OrEmpty(paths, log);
@@ -153,6 +160,7 @@ public static class BridgeEngine_Factory
 
         return new BridgeEngineModel(
             paths, configProvider, store, launcher, log, tailer, telegramClient, watchdog, transcriber,
-            printTurns, lastUpdateId, engineStateStore, restoredState, clock, timing);
+            printTurns, lastUpdateId, engineStateStore, restoredState, clock, timing,
+            hostWindowing ?? Hosting.HostWindowing.HostWindowing_Factory.Create_ForThisHost());
     }
 }

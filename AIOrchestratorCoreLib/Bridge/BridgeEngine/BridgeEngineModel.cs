@@ -58,8 +58,50 @@ internal sealed class BridgeEngineModel(
     IEngineStateStore engineStateStore,
     EngineStateSnapshot restoredState,
     IClock clock,
-    IBridgeEngineTiming timing) : IBridgeEngine
+    IBridgeEngineTiming timing,
+    Hosting.HostWindowing.IHostWindowing hostWindowing) : IBridgeEngine
 {
+    /// <summary>
+    /// WHAT THIS HOST CAN DO WITH WINDOWS, asked rather than assumed. The engine used to call
+    /// `WindowFocus.*` — three static classes of unguarded user32/dwmapi/gdi32 P/Invoke — by name,
+    /// so `/show` on the Linux daemon threw DllNotFoundException out of the command dispatch and out
+    /// of the inbound batch with it, and Telegram re-served every update in that batch four times
+    /// (2026-09-08 01:24-01:26Z). See <see cref="Hosting.HostWindowing.IHostWindowing"/>.
+    /// </summary>
+    readonly Hosting.HostWindowing.IHostWindowing _hostWindowing = hostWindowing;
+
+    /// <summary>
+    /// The one line the owner gets for a command this host cannot carry out, and the one log line
+    /// that records it.
+    ///
+    /// <para>
+    /// SAID EVERY TIME TO THE OWNER, LOGGED ONCE PER COMMAND. They typed it, so they are owed an
+    /// answer each time — silence would read as an app that ignored them. The log is the opposite
+    /// case: it is read to find out what this host cannot do, and learns nothing from the tenth copy.
+    /// </para>
+    /// </summary>
+    async Task<bool> Refuse_IfNoWindowing_Async(ITelegramApiClient client, string command, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        if (_hostWindowing.Is_Supported)
+            return false;
+
+        if (_windowingRefusalsLogged.Add(command))
+        {
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"/{command} needs a desktop this host does not have ({Environment.OSVersion.Platform} on {Environment.MachineName}) — refused with one line to the owner. Not logged again for /{command}.");
+        }
+
+        await Send_DirectReply_BestEffort_Async(
+            client, messageThreadId,
+            $"🖥 /{command} is not available on this host yet — it needs the machine whose screen the terminals are on.",
+            cancellationToken);
+
+        return true;
+    }
+
+    readonly HashSet<string> _windowingRefusalsLogged = [];
+
     /// <summary>In-memory inline-button registry cap — taps on evicted buttons get an "expired" toast.</summary>
     const int BUTTON_REGISTRY_CAP = 300;
 
@@ -6698,6 +6740,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Show_SessionWindow_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
+        if (await Refuse_IfNoWindowing_Async(client, "show", messageThreadId, cancellationToken))
+            return;
+
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         if (session == null || session.ClosedUtc != null)
@@ -6706,7 +6751,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+        var window = _hostWindowing.Find_OwnerFacingWindow_OrNull(session);
 
         if (window == null)
         {
@@ -6716,7 +6761,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        if (WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(window))
+        if (_hostWindowing.Try_Focus(window))
         {
             _log.Log_Info(session.OrchId, $"/show — brought '{window}' to the front");
             return;
@@ -6753,6 +6798,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_SessionScreenshot_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
+        if (await Refuse_IfNoWindowing_Async(client, "screen", messageThreadId, cancellationToken))
+            return;
+
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         if (session == null || session.ClosedUtc != null)
@@ -6761,7 +6809,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+        var window = _hostWindowing.Find_OwnerFacingWindow_OrNull(session);
 
         if (window == null)
         {
@@ -6777,7 +6825,7 @@ internal sealed class BridgeEngineModel(
         // the file itself says when it was taken when the owner goes looking later.
         var imagePath = Path.Combine(mediaFolder, $"screen-{DateTime.Now:yyyyMMdd-HHmmss}.png");
 
-        var failureReason = await WindowFocus.TerminalWindow_Capturer.Try_CaptureSessionWindow_Async(window, imagePath, cancellationToken);
+        var failureReason = await _hostWindowing.Try_Capture_Async(window, imagePath, cancellationToken);
 
         if (failureReason != null)
         {
@@ -6813,6 +6861,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Organize_SessionWindows_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
+        if (await Refuse_IfNoWindowing_Async(client, "organize", messageThreadId, cancellationToken))
+            return;
+
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         if (session == null || session.ClosedUtc != null)
@@ -6821,7 +6872,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        var placed = WindowFocus.SessionWindows_Organizer.Organize(session);
+        var placed = _hostWindowing.Organize(session);
 
         _log.Log_Info(session.OrchId, $"/organize — tiled {placed} terminal(s)");
 
@@ -6851,6 +6902,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Organize_MainWindows_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
+        if (await Refuse_IfNoWindowing_Async(client, "organize_mains", messageThreadId, cancellationToken))
+            return;
+
         List<Sessions.OrchestrationSession.IOrchestrationSession> open = [];
 
         foreach (var session in _store.Load_All())
@@ -6859,7 +6913,7 @@ internal sealed class BridgeEngineModel(
                 open.Add(session);
         }
 
-        var placed = WindowFocus.SessionWindows_Organizer.Organize_MainWindows(open);
+        var placed = _hostWindowing.Organize_MainWindows(open);
 
         _log.Log_Info(GLOBAL_ORCH_ID, $"/organize_mains — tiled {placed} main terminal(s) across {open.Count} open orchestration(s)");
 
@@ -11626,7 +11680,7 @@ internal sealed class BridgeEngineModel(
         if (Is_OwnerAtThePc())
             return string.Empty;
 
-        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+        var window = _hostWindowing.Find_OwnerFacingWindow_OrNull(session);
 
         if (window == null)
             return string.Empty;
@@ -11639,7 +11693,7 @@ internal sealed class BridgeEngineModel(
 
         var imagePath = Path.Combine(directory, "media", $"status-{DateTime.Now:yyyyMMdd-HHmm}.png");
 
-        var failureReason = await WindowFocus.TerminalWindow_Capturer.Try_CaptureSessionWindow_Async(window, imagePath, cancellationToken);
+        var failureReason = await _hostWindowing.Try_Capture_Async(window, imagePath, cancellationToken);
 
         if (failureReason == null)
             return $"\nIMAGE: {imagePath}";
