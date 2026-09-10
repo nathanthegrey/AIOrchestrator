@@ -4,13 +4,14 @@ Questo file racconta a chi non ha seguito giorno per giorno **che cosa abbiamo c
 e per quale ragione**. Racconta idee e decisioni, non codice: chi vuole il dettaglio tecnico ha i
 messaggi di commit e le spec in `docs/superpowers/specs/`.
 
-Base: `ours/integration` sopra `master`. Al 2026-09-10 sono **152 commit** raggruppati in **50 rami
-`stage/*`** fusi, ognuno tenuto integrabile su `master` per conto proprio. Tutto quello che c'è qui fino
+Base: `ours/integration` sopra `master`. Alla sera del 2026-09-10 sono **189 commit** in rami
+`stage/*` fusi, ognuno tenuto integrabile su `master` per conto proprio. Tutto quello che c'è qui fino
 alla sezione 5 è girato in produzione sul server dal 2026-09-09; il blocco Telegram (rami `8a`–`8e`,
-`9a`, `9b`, `11`, `12`, `13`) è fuso e va in produzione il 2026-09-10. Suite: **3259 test, 9
-saltati**, verde in seriale a macchina quieta; in parallelo sotto carico ha ancora circa un rosso a
-corsa nella famiglia dei test a tempo reale (misurato il 10/9, due corse, due test diversi, entrambi
-verdi da soli) — è il primo debito aperto della sezione 7.
+`9a`, `9b`, `11`, `12`, `13`) è in produzione dalle 20:56 del 2026-09-10; i rami `15`–`20` (sera del
+10/9) sono fusi e **aspettano un solo riavvio** (sezione 7). Suite: **3307 test, 9 saltati**
+(3298 verdi sul ramo fuso, `c5deae8`); in parallelo sotto carico ha ancora circa un rosso a corsa
+nella famiglia dei test a tempo reale (misurato il 10/9; nelle quattro corse della sera zero) — è il
+primo debito aperto della sezione 7.
 
 ---
 
@@ -1061,6 +1062,93 @@ per sessione; il beneficio è un revisore che può provare invece di ragionare.
 
 **Dove.** `stage/18-the-reviewer-gets-a-scratch-folder`.
 
+### Un numero fatto per il 97 % di una cosa sola non è un numero
+
+**Com'era.** Lo strumento che misura quanto costa il sistema sommava in un totale unico quattro
+quantità diverse: il testo che il modello elabora davvero, quello che gli viene ripassato identico
+alla richiesta precedente, e la risposta. Misurato sul server il 2026-09-10, **il 97 % di quel
+totale è la seconda** — contesto che il modello aveva già ricevuto e che gli viene ripresentato.
+Il guadagno annunciato dopo il lavoro sulla memoria fra i turni, «meno 23 %», era un movimento
+dentro quella parte lì.
+
+**Cos'è adesso.** Le tre quantità si leggono separate e non si sommano mai. Quella che conta si
+chiama contesto per chiamata, ed è la sola che il lavoro sulla memoria sposti davvero: una cache
+mancata non la cambia, sposta soltanto token da «ripassato» a «nuovo». Lo strumento accetta un
+intervallo di date qualsiasi, e non ha più dentro né una data, né un elenco di sessioni, né un
+divisore.
+
+**Perché.** Un metro che somma cose di significato diverso non misura: dà un numero che si muove
+per la ragione sbagliata. E quattro dei difetti che aveva erano di questa stessa famiglia — ogni
+membro che non fosse un implementatore veniva dichiarato revisore; i divisori per «cosa abbiamo
+consegnato» erano stati stimati a occhio, con accanto un commento dell'autore che diceva di non
+esserne sicuro; lo stesso istante era scritto in due formati diversi in due file, confrontati come
+testo. Il quinto era il più istruttivo: **i supervisori venivano riconosciuti da un elenco di due
+sessioni scritto a mano**, perché l'informazione vera vive in un file nascosto che il criterio di
+ricerca usato non poteva vedere. Non era pigrizia, era una cosa invisibile. Leggendola, per il solo
+8 settembre, **423 chiamate da 539 mila token di contesto l'una** escono da «non attribuito» ed
+entrano sotto «supervisore».
+
+**Il prezzo.** I due strumenti precedenti sono stati rimossi, quindi i numeri pubblicati a suo tempo
+non si rigenerano più con il codice che li aveva prodotti: restano nella storia del repository e
+nel rapporto che li discute. La scelta è voluta — un metro rotto lasciato lì viene riusato.
+
+**Verificato** il 2026-09-10 contro gli stessi dati misurati a mano, senza modificare nessuna
+costante: il contesto per chiamata di un implementatore è 390 mila nella finestra dell'8 settembre e
+104 mila in quella del 10; la serie ora per ora sale da 146 a 442 mila prima del cambiamento e resta
+piatta dopo. Una seconda lettura, che prende i dati da tutt'altra parte, dà lo stesso risultato: il
+contesto della prima chiamata di un turno passa da 207 a 66 mila.
+
+**E un errore evitato per un soffio, scritto qui perché non torni.** La prima versione dello
+strumento mostrava anche «il contesto della prima chiamata» in una lettura per intervallo, e dava
+zero. Su una finestra non si distingue l'avvio di una sessione dalla prima chiamata che capita
+dentro l'intervallo, e una chiamata a metà sessione è tutta cache. La colonna è stata tolta, non
+spiegata: un numero sbagliato è peggio di un numero mancante.
+
+**Dove.** `stage/21-the-instrument`.
+
+### Il conto di quello che è stato consegnato adesso ha una storia
+
+**Com'era.** Il sistema sapeva dire quanto consuma e non quanto produce. «Ieri sono stati bruciati
+600 milioni di token» non è giudicabile da solo: lo stesso numero è un affare contro venti righe
+consegnate e un disastro contro una. Il conto non mancava — il piano di lavoro lo porta — ma
+mancava la sua storia. Misurato sul server il 2026-09-10: **nessuna delle sei lavorazioni tiene il
+proprio piano sotto controllo di versione**, il file viene riscritto sopra se stesso, e il registro
+dell'app annota «il piano è in ritardo sui verdetti» e non annota mai «questa riga si è chiusa alle
+14:23». Il conto di ieri non esiste più e non è recuperabile.
+
+**Cos'è adesso.** Un campionatore legge i piani a ogni ora e ne annota i conteggi. Da lì si ricava
+quante righe si sono chiuse fra due momenti, che è il divisore che mancava: non più «ieri abbiamo
+speso Y», ma «questa consegna è costata X».
+
+**Perché non dentro l'app.** Un evento scritto dall'applicazione sarebbe esatto al minuto e
+costerebbe una compilazione e una messa in produzione che riavvia sei lavorazioni vive — e le tre
+regole più dure di questo progetto parlano proprio di quanto si perda fra ciò che si compila, ciò
+che si installa e ciò che gira davvero. Il costo per consegna non ha bisogno del minuto: «fra le 14
+e le 15 si sono chiuse due righe» divide altrettanto bene. Il campionatore vive accanto
+all'applicazione, non tocca niente di suo, e si toglie cancellando due file di avvio, uno script e
+una cartella.
+
+**Conta come conta l'app, non «più o meno».** I sei marcatori del piano, la voce «non si fa» tenuta
+fuori dal totale, «bloccato sul proprietario» contato sia fra i bloccati sia a parte, e soprattutto
+le sezioni **parcheggiate** saltate — così una scoperta che nessuno ha chiesto non può muovere la
+barra del proprietario. Un divisore che non è d'accordo con la barra di avanzamento è peggio di
+nessun divisore.
+
+**La metà che i dati veri non toccano.** Al momento dell'installazione tutti e sette i piani vivi
+avevano zero righe sotto una sezione parcheggiata: un'esclusione che avesse smesso di funzionare
+sarebbe sembrata corretta, perché ogni conteggio coincideva con quello ingenuo. Il controllo interno
+usa quindi un piano finto che la esercita, e **è stato rotto apposta tre volte prima di crederci** —
+spegnendo l'esclusione, contando «non si fa» nel totale, togliendo «bloccato sul proprietario» dai
+bloccati: rosso tutte e tre le volte.
+
+**Il prezzo, e va detto subito.** Il campionatore **parte da zero**: la prima misura è la linea di
+partenza, e di tutto quello che è stato consegnato prima non resta niente. E duplica le regole di
+conteggio dell'applicazione: se quelle cambiano, va cambiato anche lui, altrimenti i due numeri
+divergono in silenzio.
+
+**Dove.** `stage/21-the-instrument`; installato sul server come temporizzatore d'utente, che è la
+convenzione della macchina, senza privilegi di amministratore.
+
 ## 6. Il ponte con Telegram: che cosa regge sotto
 
 L'audit del 2026-09-09 sull'integrazione Telegram (i brief in
@@ -1215,7 +1303,18 @@ risolvibile da sola» che tre sonde pinnano. Scelta del proprietario, la variant
 ## 7. Che cosa stiamo facendo adesso
 
 Questa sezione è l'unica che parla al futuro, quindi invecchia in fretta: **aggiornata al
-2026-09-10, pomeriggio**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
+2026-09-10, notte**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
+
+**Sei rami fusi e non ancora in produzione — un solo riavvio, quando i batch in corso hanno finito
+(decisione del proprietario, 2026-09-10 sera).** `stage/15` (la PULSE ogni cinque minuti, il freno
+per messaggio), `16` (il supervisore non fa la fila; il tocco ritenta; la PULSE rispetta il suo freno;
+le domande superate), `18` (la cartella scratch del revisore) e `19` (il rapporto finale non viene
+mai superato in silenzio; il runner print passa a `stream-json`). Deploy: `bash ~/aiorch-vps/03-aiorch.sh`
+sul server (binario **e** kit nello stesso passo). Due misure la sera dopo: i 429 nel journal
+(`journalctl -u aiorchestrator --since … | grep -c "HTTP 429"` — erano 382 in 56 minuti) e che un turno
+implementer produca la sua voce con il trasporto nuovo: i test «dal vivo» pinnano ancora
+`--output-format json`, quindi la prima prova vera del lettore `stream-json` sul runner print è il deploy
+stesso. Le sonde, i controlli per mutazione e i parcheggi sono nei piani `2026-09-10-stage-16…20`.
 
 **Il blocco Telegram va in produzione oggi.** Binario **e** kit nello stesso passo: le istruzioni del
 supervisore sono cambiate (ri-fa la domanda dopo «Let's talk», dichiara il suo stato a fine turno per
@@ -1226,6 +1325,27 @@ La prima sera è una misura: quante volte vibra il telefono, e se i sei campi di
 (le ricevute come reazioni e le voci tipizzate sono atterrate il 10/9 pomeriggio); il deploy — binario e
 kit nello stesso passo, lo strumento di scrittura compreso — è del proprietario. Resta da fare G, la suite
 affidabile sotto carico, deciso per dopo.
+
+**Il lavoro sui token è stato riletto da fuori, e il risultato regge — ma non per la ragione che
+era stata scritta.** Una sessione che non l'aveva fatto ha rimisurato la produzione il 2026-09-10.
+Il guadagno c'è ed è più grande di quanto annunciato: il contesto per chiamata di un implementatore
+scende del 76 %, a modello e ruolo costanti. La prova però non è il totale di giornata — quel
+confronto metteva una giornata intera contro mezza, sommava classi di token diverse, e cambiava di
+un ordine di grandezza a seconda di quale giorno si prendesse come partenza. La prova è **la
+forma**: prima il contesto di ogni chiamata cresceva senza fermarsi dentro la sessione, adesso è
+piatto. E il merito è di **una sola** delle cinque modifiche spedite, il pacchetto di memoria, andato
+in produzione la sera dell'8 e non del 9: attraverso la messa in produzione del 9 sera i numeri non
+si muovono di niente. Il rapporto, gli script e le due revisioni che l'hanno corretto stanno in
+`docs/superpowers/specs/2026-09-10-independent-review/`.
+
+**Il passo del supervisore resta in calendario, e adesso si sa che ci si arriva senza la protezione
+prevista.** Il piano dei token voleva prima il raggruppamento dei rapporti, sul conto che avrebbe
+dimezzato i risvegli del supervisore — «meno 40 %» a stima. Misurato: **circa il 9 %**, un quarto
+di quello. La condizione non era «se questo fallisce il passo è pericoloso», era di ordine: prima la
+cosa gratis. Quella cosa gratis non è arrivata, il supervisore è ancora l'unico ruolo che si
+trascina la trascrizione a **546 mila token per chiamata** — sei volte un implementatore — e il suo
+pacchetto è già scritto e spento. Il rischio, che è sul giudizio e non sul costo, è esattamente
+quello di prima.
 
 **Cose aperte, dette perché non sembrino risolte.**
 - **Lo sportello unico verso Telegram — progettato, non costruito (2026-09-10, notte).** Oggi ogni
@@ -1238,6 +1358,50 @@ affidabile sotto carico, deciso per dopo.
   precede tutte le correzioni, quindi i 388 dell'ora sono codice vecchio. Prima si mette in produzione
   quello che c'è, si conta, e poi si decide se lo sportello serve com'è disegnato. La spec è in
   `docs/superpowers/specs/`.
+- **Sette cose sono state proposte dalla revisione indipendente, tre fatte e quattro no. Le quattro
+  stanno qui perché non sembrino sviste.** Fatte: la verifica che il promemoria di metà turno non
+  rompe la cache (non la rompe — costa circa mille token per turno, venti volte in cinque giorni),
+  lo strumento di misura rifatto e il campionatore del piano. Le altre quattro non sono state fatte
+  di proposito, e ognuna ha una ragione diversa.
+- **Il tetto al pacchetto va riscritto come avviso, non come taglio — ed è un errore del
+  proponente.** La proposta originale era di limitare la dimensione del pacchetto di memoria. Ma le
+  voci che hanno svegliato il turno sono senza tetto **per scelta**, e il codice lo dice: sono la
+  ragione per cui il turno esiste. Tagliarle significa svegliare una sessione per del traffico e poi
+  non dirglielo — cioè fabbricare esattamente il guasto che il rapporto di chiusura di uno spoke
+  esiste per intercettare. La forma giusta è un avviso quando il pacchetto supera una soglia, così
+  lo vede una persona. Nessun incidente misurato: è un buco strutturale.
+- **Lo sforzo scelto per compito dal supervisore — idea del proprietario, parcheggiata per mancanza
+  di metro.** Lo sforzo è la leva che muove i token in uscita, che è l'unica quantità che nessun
+  altro cambiamento tocca. Un valore fisso per ruolo è cieco; il supervisore invece sceglie caso per
+  caso, e già lo fa per il modello. Resta però un baratto qualità contro token, e oggi il supervisore
+  non ha nessun modo di sapere se lo sforzo basso ha fatto danni. Si sblocca con il banco di prova
+  qui sotto, non prima.
+- **Il freno ai sub-agenti: rimandato, non scartato.** I sub-agenti sono il capitolo di spesa più
+  grosso rimasto — il 10 settembre costano più degli implementatori che li lanciano, e il loro
+  contesto per chiamata è salito del 51 % rispetto all'8. Il freno esiste già nello strumento a riga
+  di comando ed è verificato presente su questa macchina (un'opzione inventata dà «unknown option»,
+  quella no, pur non comparendo nell'aiuto). Non è stato messo perché un freno che tronca un lavoro a
+  metà produce **rifacimento**, e rifare costa più di quanto il freno risparmi; e perché non è stato
+  verificato che cosa conti né come termini. Va tarato sulla distribuzione misurata delle chiamate
+  per turno, mai a occhio, e deve fallire verso il completamento.
+- **Il taglio dell'output dei comandi: rimandato per lo stesso motivo.** Un agente che non vede
+  l'output del test che fallisce lo rilancia, o tira a indovinare. Il taglio va fatto con criterio —
+  tenere la coda di una traccia d'errore, buttare il mezzo — non a un numero di caratteri.
+- **Manca il banco di prova fisso, ed è la cosa che rende giudicabili le tre qui sopra.** Lo stesso
+  identico insieme di compiti eseguito con e senza la modifica: è l'unico disegno che elimina la
+  differenza di carico di lavoro **per costruzione**, invece di correggerla dopo. Senza, applicare
+  quelle leve è fede, e confrontare due periodi di produzione resta un disegno che non regge — è il
+  difetto che ha reso fragile il numero di partenza di tutto questo lavoro.
+- **Se la scelta del modello sia «solo prezzo» è una domanda aperta.** La seconda revisione l'ha
+  tolta dall'analisi perché non muove il conteggio dei token. Vero per un conteggio grezzo; non
+  ovvio per il vincolo che morde davvero qui, che è il limite d'uso dell'abbonamento — e l'app quel
+  limite lo sorveglia già, con gli allarmi al 90, 95, 97 per cento. Se quel limite è pesato per
+  modello, un token del modello grande e uno del piccolo non sono la stessa unità della risorsa
+  scarsa, e la scelta del modello torna a essere una leva di prima classe. Si risolve con i dati che
+  l'applicazione già raccoglie.
+- **Tre turni di implementatore falliti a livello di sistema su una lavorazione, visti passando.**
+  Preesistenti al lavoro di revisione e non indagati: non era quello che era stato chiesto, e il
+  costo di una scoperta non è la sua correzione, è l'orizzonte che apre.
 - **La suite non è affidabile sotto carico — deciso: si fa dopo A–F.** Verde in seriale a macchina
   quieta; in parallelo con un'altra suite in corsa ha circa un rosso a corsa, sempre in un test a tempo
   reale diverso, sempre verde da solo. Misurato il 10/9: su 352 file di test, 62 aspettano tempo reale,
