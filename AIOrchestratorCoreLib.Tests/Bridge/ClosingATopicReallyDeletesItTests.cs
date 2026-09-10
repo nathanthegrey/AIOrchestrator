@@ -347,7 +347,32 @@ internal sealed class DeletingTelegram_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
+    /// <summary>
+    /// Both of these are startup calls the bridge makes once (brief B): the bot's own name, for the
+    /// message that reports two hosts polling one token, and the webhook clear that stops a stale
+    /// registration looking exactly like a second poller. Neither is this probe's subject, so both
+    /// answer plainly.
+    /// </summary>
+    public Task<string> Get_BotUsername_Async(CancellationToken cancellationToken) => Task.FromResult("test_bot");
+
+    public Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken) => Task.FromResult(7777L);
+
+    /// <summary>
+    /// BOTH SHAPES ON PURPOSE, and the second one is not dead code — it is a merge guard.
+    ///
+    /// <para>
+    /// `stage/9b-telegram-hygiene` gives every topic a colour (brief F1) and changes this interface
+    /// method to carry it. Each stage merges into `ours/integration` cleanly on its own, but git
+    /// cannot see that a fake written against the OLD signature stops implementing the interface
+    /// once the other stage lands: the merge succeeds and the build fails, which is the worst
+    /// shape a conflict can take because nothing warns until afterwards. Declaring both means this
+    /// file compiles in either world — the extra method is simply unused until F1 arrives, and is
+    /// the one Telegram is asked for afterwards.
+    /// </para>
+    /// </summary>
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => Task.FromResult(7777L);
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Edit_GeneralForumTopic_Async(string newName, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
