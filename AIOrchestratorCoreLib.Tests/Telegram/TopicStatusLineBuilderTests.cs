@@ -557,6 +557,81 @@ public class TopicStatusLineBuilderTests
         Assert.Equal("🔕 PULSE", silenced.Split('\n')[0]);
     }
 
+    /// <summary>
+    /// AWAY ARRIVED HERE ON 2026-09-10, from the topic name — the claim
+    /// AwayModePolicyTests.AwayAndMode_ShowTogether used to make about a title. Away is app-wide, so
+    /// on a name one toggle renamed every open topic at once and Telegram wrote a service message
+    /// into each thread: the owner was told, once per orchestration, something they had just done
+    /// themselves. Here it is one character in a message that is being edited anyway.
+    /// </summary>
+    [Fact]
+    public void TheHeaderCarriesTheAwayGlyph()
+    {
+        Assert.Equal("✈ PULSE", Header(new TopicStatusFields(IsAway: true)));
+    }
+
+    /// <summary>
+    /// QUIET, likewise moved from the name (AwayModePolicyTests.Quiet_ShowsOnItsOwnTopic). Unlike
+    /// away it is PER TOPIC — this one orchestration stopped asking after three unanswered messages,
+    /// which may simply mean the owner is working in another topic.
+    /// </summary>
+    [Fact]
+    public void TheHeaderCarriesTheQuietGlyph()
+    {
+        Assert.Equal("🤐 PULSE", Header(new TopicStatusFields(IsQuiet: true)));
+    }
+
+    /// <summary>
+    /// TERMINAL, the third glyph to arrive from the name: the owner is sitting in THIS
+    /// orchestration's terminal, so nothing is pushed and nothing blocks on a tap.
+    /// </summary>
+    [Fact]
+    public void TheHeaderCarriesTheTerminalGlyph()
+    {
+        Assert.Equal("💻 PULSE", Header(new TopicStatusFields(Presence: OwnerPresenceModes.Terminal)));
+    }
+
+    /// <summary>
+    /// AWAY SUPERSEDES QUIET — the rule kept verbatim from the topic name it moved off, and the
+    /// reason is unchanged: away already means every orchestration has stopped asking, so drawing
+    /// both states says one fact twice on the one line the owner reads at a glance.
+    /// </summary>
+    [Fact]
+    public void AwaySupersedesQuietOnTheHeader()
+    {
+        Assert.Equal("✈ PULSE", Header(new TopicStatusFields(IsAway: true, IsQuiet: true)));
+    }
+
+    /// <summary>
+    /// TERMINAL REPLACES THE DELIVERY GLYPH rather than joining it — also moved verbatim. Sitting in
+    /// the terminal is WHAT silences the topic, so 💻 🔕 would state one fact twice: the
+    /// presence/delivery conflation this mode exists to remove, rendered.
+    /// </summary>
+    [Fact]
+    public void TerminalPresenceReplacesTheDeliveryGlyph()
+    {
+        var header = Header(new TopicStatusFields(
+            Mode: TelegramDeliveryModes.Silenced,
+            Presence: OwnerPresenceModes.Terminal));
+
+        Assert.Equal("💻 PULSE", header);
+    }
+
+    /// <summary>
+    /// AWAY STILL SHOWS BESIDE TERMINAL, and the distinction is the whole reason both exist: away is
+    /// about the owner's PHONE and is app-wide, terminal is about where they are sitting for THIS one
+    /// endeavour. Neither implies the other, so collapsing them would lose a fact.
+    /// </summary>
+    [Fact]
+    public void AwayStillShowsBesideTerminal()
+    {
+        var header = Header(new TopicStatusFields(
+            IsAway: true,
+            Presence: OwnerPresenceModes.Terminal));
+
+        Assert.Equal("✈ 💻 PULSE", header);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────────
     // FIELD 2 — "sup · …": the supervisor's own declared state, plus a usage-limit pause the app
     // adds on its own. Untested anywhere before this rewrite: the old lead-line-only builder had no
@@ -677,6 +752,19 @@ public class TopicStatusLineBuilderTests
     static IPlanProgress Progress(int done, int total)
     {
         return PlanProgress_Factory.Create(done, 0, 0, 0, total, null, [], [], []);
+    }
+
+    /// <summary>
+    /// PULSE's first line only, for the glyph tests. A ledger is passed so the line has substance and
+    /// is written at all — the header is not a message on its own — and no member, so the assertion
+    /// is about the header and nothing below it.
+    /// </summary>
+    static string Header(TopicStatusFields fields)
+    {
+        var line = TopicStatusLine_Builder.Build(
+            Progress(1, 4), [], null, NOW, aMessageIsAlreadyPosted: false, fields: fields);
+
+        return line.Split('\n')[0];
     }
 
     /// <summary>A ledger that carries one line, for field 1's ledger-derived-ask probe.</summary>

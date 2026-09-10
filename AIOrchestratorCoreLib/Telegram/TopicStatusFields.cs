@@ -75,6 +75,22 @@ public readonly record struct TopicLastEvent(string Subject, DateTime? At);
 /// <see cref="TelegramDeliveryMode_Glyphs"/>, so the two surfaces cannot come to disagree about
 /// what a muted topic looks like.
 /// </param>
+/// <param name="IsAway">
+/// Away mode — app-wide, and that is why it belongs here rather than on the name. On the name it
+/// renamed EVERY open topic the moment the owner went away, and each rename writes a service
+/// message into the thread it renames: one state change, one line of noise per topic, telling them
+/// something they had just done. Here it is one character in a message already being edited.
+/// </param>
+/// <param name="IsQuiet">
+/// This one orchestration has stopped asking after three unanswered messages. Per topic, unlike
+/// away — and away SUPERSEDES it, because away already means every orchestration has stopped asking,
+/// so drawing both would state one fact twice (the rule kept verbatim from the topic name).
+/// </param>
+/// <param name="Presence">
+/// Where the owner is sitting for THIS orchestration. Terminal presence REPLACES the mode glyph
+/// rather than joining it: sitting in the terminal already silences the topic, so 💻 🔕 together
+/// would say one thing twice — the presence/delivery conflation that mode exists to remove.
+/// </param>
 /// <param name="SupervisorDeclaredState">
 /// The supervisor's own one-line state, AS THE SUPERVISOR DECLARED IT at turn end. Null until it
 /// declares one — and null must read as "nothing declared", never as a state: the app does not know
@@ -94,6 +110,9 @@ public readonly record struct TopicLastEvent(string Subject, DateTime? At);
 /// </param>
 public readonly record struct TopicStatusFields(
     TelegramDeliveryModes Mode = TelegramDeliveryModes.Normal,
+    bool IsAway = false,
+    bool IsQuiet = false,
+    OwnerPresenceModes Presence = OwnerPresenceModes.Remote,
     string? SupervisorDeclaredState = null,
     DateTime? SupervisorDeclaredAt = null,
     DateTime? UsageLimitResumeAt = null,

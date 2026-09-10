@@ -206,9 +206,10 @@ public static class TopicStatusLine_Builder
             return aMessageIsAlreadyPosted ? LEAD_WORD : "";
 
         // THE SIX FIELDS IN THE OWNER'S OWN ORDER (2026-09-09), under a header line that carries the
-        // lead word and the topic's mode glyph. Every field omits itself when it has nothing to say;
-        // none of them substitutes a placeholder.
-        List<string> lines = [Build_HeaderLine(fields.Mode)];
+        // lead word and every MODE glyph — 🌙 🔕 ✈ 🤐 💻, all five of which left the topic name on
+        // 2026-09-10. Every field omits itself when it has nothing to say; none of them substitutes a
+        // placeholder.
+        List<string> lines = [Build_HeaderLine(fields)];
 
         if (asks.Count > 0)
             lines.Add(Build_WaitingOnYouLine(asks));
@@ -242,30 +243,45 @@ public static class TopicStatusLine_Builder
     }
 
     /// <summary>
-    /// The lead word, carrying the topic's MODE GLYPH — which moved here off the topic NAME on the
-    /// owner's 2026-09-09 directive.
+    /// PULSE'S HEADER — the lead word, and every MODE glyph the topic name used to carry: `✈ 💻 PULSE`.
     ///
     /// <para>
-    /// The glyph characters come from <see cref="TelegramDeliveryMode_Glyphs"/> rather than being
-    /// spelled again: the app still writes glyphs into topic names for away, quiet, terminal,
-    /// awaiting-test and done, and two definitions of 🌙 is how one surface comes to mean Deferred by
-    /// it while another means something else.
+    /// ALL FIVE LIVE HERE NOW (owner, 2026-09-10): 🌙 deferred, 🔕 silenced, ✈ away, 🤐 quiet,
+    /// 💻 terminal. They describe how the app is DELIVERING, which is not what a topic list is read
+    /// to answer — and two of them are app-wide, so on a name they renamed every open topic at once
+    /// and wrote a service message into each one. Here the same fact costs one silent edit of a
+    /// message that was being edited anyway.
     /// </para>
     /// <para>
-    /// STRIPPING THE MODE GLYPH FROM THE TOPIC NAME IS NOT DONE HERE and is not this class's to do —
-    /// it is <see cref="TelegramDeliveryMode_Glyphs.Decorate_TopicName"/>'s. Until that half lands
-    /// the glyph shows in both places, which is the harmless direction to be caught mid-change in.
+    /// THE PRECEDENCE IS THE TOPIC NAME'S, MOVED VERBATIM, because it was right and because changing
+    /// it in the same commit as the move would make a behaviour change look like a relocation. AWAY
+    /// SUPERSEDES QUIET: away already means every orchestration has stopped asking, so both together
+    /// state one fact twice. TERMINAL REPLACES THE DELIVERY GLYPH: sitting in the terminal is what
+    /// silences the topic, so 💻 🔕 says the same thing in two characters. Away still shows beside
+    /// terminal — it is about the owner's PHONE, which is a different fact from where they are
+    /// sitting for this one endeavour.
     /// </para>
     /// </summary>
-    static string Build_HeaderLine(TelegramDeliveryModes mode)
+    static string Build_HeaderLine(TopicStatusFields fields)
     {
-        return mode switch
+        var presenceOrMode = fields.Presence == OwnerPresenceModes.Terminal
+            ? $"{TelegramDeliveryMode_Glyphs.TERMINAL} "
+            : fields.Mode switch
+            {
+                TelegramDeliveryModes.Normal => "",
+                TelegramDeliveryModes.Deferred => $"{TelegramDeliveryMode_Glyphs.DEFERRED} ",
+                TelegramDeliveryModes.Silenced => $"{TelegramDeliveryMode_Glyphs.SILENCED} ",
+                _ => throw new Exception($"Unhandled TelegramDeliveryModes: {fields.Mode}"),
+            };
+
+        var ownerAttention = fields switch
         {
-            TelegramDeliveryModes.Normal => LEAD_WORD,
-            TelegramDeliveryModes.Deferred => $"{TelegramDeliveryMode_Glyphs.DEFERRED} {LEAD_WORD}",
-            TelegramDeliveryModes.Silenced => $"{TelegramDeliveryMode_Glyphs.SILENCED} {LEAD_WORD}",
-            _ => throw new Exception($"Unhandled TelegramDeliveryModes: {mode}"),
+            { IsAway: true } => $"{TelegramDeliveryMode_Glyphs.AWAY} ",
+            { IsQuiet: true } => $"{TelegramDeliveryMode_Glyphs.QUIET} ",
+            _ => "",
         };
+
+        return $"{ownerAttention}{presenceOrMode}{LEAD_WORD}";
     }
 
     /// <summary>

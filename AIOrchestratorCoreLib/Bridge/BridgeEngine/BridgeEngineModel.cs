@@ -8864,9 +8864,24 @@ internal sealed class BridgeEngineModel(
     {
         var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
 
-        return TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-            baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-            session.AwaitingTest, Last_OwnerReplyState(session.OrchId), session.Done);
+        // FOUR INPUTS LEFT AND TWO ARRIVED, on 2026-09-10. Mode, away, quiet and presence moved to
+        // PULSE's header, so nothing about DELIVERY renames a topic any more — away and quiet were
+        // the expensive pair, both app-wide, so one toggle used to rename every open topic at once
+        // and every rename writes a service message into the thread it renames. Paused-for-a-limit
+        // and closed arrived, because both are facts about the WORK, which is what this surface is
+        // for.
+        //
+        // They travel as a named record rather than as seven positional arguments, four of them
+        // bool: any two of those could be swapped with everything still compiling, and this caller
+        // is `internal sealed`, so the suite could not see the swap either.
+        return TelegramDeliveryMode_Glyphs.Compose_TopicName(
+            baseName,
+            new TelegramDeliveryMode_Glyphs.TopicNameFlags(
+                OwnerReply: Last_OwnerReplyState(session.OrchId),
+                IsPausedForUsageLimit: Is_SupervisorPausedForUsageLimit(session),
+                IsClosed: session.ClosedUtc != null,
+                IsAwaitingTest: session.AwaitingTest,
+                IsDone: session.Done));
     }
 
     async Task Sync_TopicNames_Inside_Gate_Async(CancellationToken cancellationToken)
@@ -9254,6 +9269,14 @@ internal sealed class BridgeEngineModel(
                 SupervisorDeclaredAt = declared == null ? null : Read_TrustedStamp_OrNull(lastSpoken?.DateText),
                 UsageLimitResumeAt = Read_UsageLimitResumeAt_OrNull(session),
                 OwnerAsks = asks,
+
+                // THE THREE THAT MOVED OFF THE TOPIC NAME on 2026-09-10. The planner fills `Mode`
+                // itself — it already takes the mode for its own delivery gate, and asking the engine
+                // to pass the same value twice is how two surfaces come to disagree about whether a
+                // topic is muted — so only these three arrive here.
+                IsAway = Is_AwayMode(),
+                IsQuiet = Is_Quiet(session.OrchId),
+                Presence = session.OwnerPresence,
             };
         }
         catch (Exception ex)
@@ -9903,10 +9926,11 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var baseName = TelegramDeliveryMode_Glyphs.Strip_Glyph(session.DisplayName ?? session.OrchId);
-            var topicName = TelegramDeliveryMode_Glyphs.Decorate_TopicName(
-                baseName, Resolve_EffectiveMode(session.OrchId), Is_AwayMode(), Is_Quiet(session.OrchId), session.OwnerPresence,
-                session.AwaitingTest, Last_OwnerReplyState(session.OrchId), session.Done);
+            // THE ONE COMPOSER, not a second copy of the expression. This site duplicated
+            // `Build_WantedTopicName`'s argument list verbatim, which is the drift decision 12 is
+            // about: the eight-argument call was written twice and the recreated topic would have
+            // kept whichever glyph set the last editor forgot to change here.
+            var topicName = Build_WantedTopicName(session);
 
             // Recreate rather than delete-by-id: it is the only way to leave the topic genuinely
             // empty, and it cannot touch a neighbouring topic by accident.
