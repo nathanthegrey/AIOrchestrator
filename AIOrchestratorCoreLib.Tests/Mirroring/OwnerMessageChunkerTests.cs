@@ -58,12 +58,28 @@ public class OwnerMessageChunkerTests
     }
 
     /// <summary>
-    /// THE ONE THE OLD CHUNKER GOT WRONG. Text that is almost all escapable characters is legal
-    /// markdown at 4096 and illegal HTML at 4096; Telegram counts the HTML, because the choice of
-    /// API method IS the parse mode.
+    /// THE ONE THE OLD CHUNKER GOT WRONG, WITH THE MEASUREMENT CORRECTED (brief F4, 2026-09-10).
+    ///
+    /// <para>
+    /// The property is unchanged and still the point: text that is almost all escapable characters
+    /// must not produce a piece Telegram refuses, because the plain-text fallback re-sends the same
+    /// text into the same refusal and the entry wedges.
+    /// </para>
+    /// <para>
+    /// WHAT CHANGED IS WHICH READING OF "THE HTML" IS THE TRUE ONE. This case used to assert
+    /// <c>Render(chunk).Length</c> — the raw markup — and its old summary said "Telegram counts the
+    /// HTML". Telegram's own wording is "1-4096 characters AFTER ENTITIES PARSING" [documented], so
+    /// the tags and the <c>&amp;amp;</c> expansions do not count. Asserting the raw length was
+    /// asserting a stricter rule than Telegram's, which is why long formatted reports arrived cut
+    /// into numbered pieces that would have fitted whole.
+    /// </para>
+    /// <para>
+    /// Both readings are still asserted, because both still matter: the MARKDOWN length is what the
+    /// plain-text fallback sends, and the PARSED length is what the HTML send is measured against.
+    /// </para>
     /// </summary>
     [Fact]
-    public void EveryPiece_FitsTelegramsCap_MEASUREDONTHERENDEREDHTML()
+    public void EveryPiece_FitsTelegramsCap_MeasuredAfterEntityParsing()
     {
         var text = string.Join('\n', Enumerable.Range(1, 600).Select(i => $"<{i}> & <{i}> & <{i}> & <{i}> & <{i}>"));
 
@@ -75,12 +91,39 @@ public class OwnerMessageChunkerTests
                 chunk.Length <= TelegramMessage_Chunker.TELEGRAM_MAX_MESSAGE_LENGTH,
                 $"a chunk of {chunk.Length} markdown characters would be refused by the plain-text fallback");
 
-            var rendered = TelegramHtml_Renderer.Render(chunk).Length;
+            var parsed = TelegramText_Ruler.Count_AfterEntityParsing(TelegramHtml_Renderer.Render(chunk));
 
             Assert.True(
-                rendered <= TelegramMessage_Chunker.TELEGRAM_MAX_MESSAGE_LENGTH,
-                $"a chunk renders to {rendered} characters of HTML — Telegram refuses it, and the plain-text fallback is what the owner's message was already lost to");
+                parsed <= TelegramMessage_Chunker.TELEGRAM_MAX_MESSAGE_LENGTH,
+                $"a chunk is {parsed} characters after entity parsing — Telegram refuses it, and the plain-text fallback is what the owner's message was already lost to");
         }
+    }
+
+    /// <summary>
+    /// AND THE CORRECTION HAS TO BUY SOMETHING, or it is a loosened assertion and nothing else.
+    ///
+    /// A page of heavily formatted markdown — bold, headings, code spans, links — that fits inside
+    /// Telegram's real cap must arrive as ONE message. Under the old raw-markup measurement the
+    /// same text was split, and the owner read the second piece starting mid-sentence as a glitch.
+    /// </summary>
+    [Fact]
+    public void AHeavilyFormattedEntryThatReallyFits_IsNotSplit()
+    {
+        var paragraph = "## What I did\n\n**Merged** `FIN-D-293` into `staging` — the [run](https://example.internal/ci/12345) is green & the diff is small.\n";
+        var text = string.Concat(Enumerable.Repeat(paragraph, 25));
+
+        // The premise: it is over the cap when the MARKUP is counted, and under it when Telegram's
+        // own measurement is. Without this the case could pass for the boring reason.
+        var rendered = TelegramHtml_Renderer.Render(text);
+        Assert.True(rendered.Length > TelegramMessage_Chunker.TELEGRAM_MAX_MESSAGE_LENGTH,
+            $"the fixture no longer exercises the correction: {rendered.Length} characters of markup");
+        Assert.True(TelegramText_Ruler.Count_AfterEntityParsing(rendered) <= TelegramMessage_Chunker.TELEGRAM_MAX_MESSAGE_LENGTH,
+            $"the fixture is genuinely too long: {TelegramText_Ruler.Count_AfterEntityParsing(rendered)} after parsing");
+
+        var chunks = OwnerMessage_Chunker.Chunk_ForOwner(text);
+
+        Assert.Single(chunks);
+        Assert.Equal(text, chunks[0]);
     }
 
     /// <summary>A single line longer than a whole message is still delivered, hard-split, never dropped.</summary>
