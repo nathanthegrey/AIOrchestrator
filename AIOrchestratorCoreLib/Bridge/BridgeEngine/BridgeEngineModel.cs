@@ -6773,63 +6773,11 @@ internal sealed class BridgeEngineModel(
     {
         try
         {
+            // THE LIST LIVES IN Telegram.BotCommandMenu (brief F2): setMyCommands preserves
+            // order, so it IS the menu the owner scrolls, and inline here nothing could assert
+            // it. The engine names it and sends it; the reasoning travelled with it.
             await client.Set_MyCommands_Async(
-                [
-                    ("status", "What every session of this orchestration is doing"),
-                    // NOT "what's LEFT" any more, since 2026-08-13: in a topic the command prints the
-                    // whole ledger, done and dropped rows included. Same class as the kit line that
-                    // told supervisors it would shorten a long ledger for them — text promising the
-                    // old behaviour, in the one place the owner reads BEFORE running the command.
-                    //
-                    // BOTH SCOPES, and the first attempt at this string got that wrong. "every row"
-                    // is true in a topic and false in General, where Build_ProgressReportText emits
-                    // one counts line per open orchestration and no rows at all. The phrasing it
-                    // replaced — "what's LEFT to do" — happened to be true in both, because a count
-                    // IS an answer to what is left. A correction has to be checked in every scope the
-                    // thing it corrects runs in, or it is the same defect with a newer date.
-                    ("progress", "This topic's task ledger, every row — in General, one line per orchestration"),
-                    ("left", "Only what is still open — no done or dropped rows"),
-                    ("tasks", "The FULL ledger of this orchestration, done lines included"),
-                    ("cost", "What this topic has cost, per session — in General, per orchestration"),
-                    ("tokens", "Token and usage totals"),
-                    ("limits", "5-hour and weekly usage limits"),
-                    // Listed next to /limits because the owner reaches for them together: one is how
-                    // full the ACCOUNT is, the other how full each SESSION's window is.
-                    ("context", "How full each session's context window is"),
-                    ("show", "Bring this orchestration's session window to the front"),
-                    ("screen", "Photograph this orchestration's terminal and send it here"),
-                    ("screens", "Toggle 📸 — the half-hourly status carries a picture of the terminal"),
-                    ("organize", "Tile this orchestration's terminals across the screen"),
-                    ("organize_mains", "Tile EVERY orchestration's main terminal — each sup and solo, once"),
-                    ("merge", "Land this orchestration's work: merge, test, push, then clean up"),
-                    ("test", "Toggle 🧪 — finished, muted, and still to be tested before closing"),
-                    ("done", "Toggle ✅ — finished, muted, and kept open in case you come back"),
-                    ("refresh", "Re-sync this topic's NAME — use when a ❓ or a glyph is stuck on it"),
-                    ("switch", "Turn this into a full crew, or back into one session — send twice"),
-                    ("close", "End THIS orchestration — you confirm with a tap"),
-                    ("diff", "What the repo and worktrees ACTUALLY contain"),
-                    ("imp", "Latest traffic of an implementer (/imp 2)"),
-                    ("tail", "What a headless session is doing right now (/tail 1, /tail sup)"),
-                    ("log", "The whole of a headless session's last turn (/log 1, /log sup)"),
-                    ("summary", "What is going on across all orchestrations"),
-                    ("pending", "Open questions awaiting me"),
-                    ("resume", "Wake EVERY session — use when the usage limit resets"),
-                    ("clear", "Wipe THIS topic's messages (the sessions keep running)"),
-                    // "THIS topic" WAS A LIE IN GENERAL, and this is the worst instance of the class
-                    // the two entries above were fixed for: in General the BARE command takes the
-                    // app-wide path (`Apply_ModeCommand_Async` — `session == null` routes to
-                    // `Apply_AppWideMode_Async`, as that method's own docstring already said). So an
-                    // owner reading "THIS topic — drop its messages" in the pinned General topic and
-                    // tapping /mute silences EVERY orchestration — and Silenced DROPS rather than
-                    // defers, so traffic from every session is destroyed until they notice. The reply
-                    // does say "everywhere", but a correction after the fact is exactly what the
-                    // /progress fix rejected as sufficient: the menu is what they read BEFORE tapping.
-                    ("mute", "Toggle 🔕 this topic — drop its messages (in General: everywhere)"),
-                    ("dnd", "Toggle 🌙 this topic — hold its messages for later (in General: everywhere)"),
-                    ("mute_all", "Toggle 🔕 everywhere"),
-                    ("dnd_all", "Toggle 🌙 everywhere"),
-                    ("pc", "Toggle 💻 THIS topic — I'm at its terminal, don't text or block"),
-                ],
+                Telegram.BotCommandMenu.ALL,
                 cancellationToken);
 
             // AND PIN THE BUTTON THAT OPENS THAT MENU. Registering the commands only says what the

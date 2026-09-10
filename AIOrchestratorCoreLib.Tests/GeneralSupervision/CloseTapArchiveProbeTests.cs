@@ -275,7 +275,11 @@ public class CloseTapArchiveProbeTests : IDisposable
         _telegram.Queue_Updates(
             "{\"ok\":true,\"result\":[{\"update_id\":2001,\"callback_query\":{\"id\":\"cbq-1\","
             + $"\"data\":\"{data}\",\"from\":{{\"id\":{OWNER_USER_ID}}},"
-            + $"\"message\":{{\"message_id\":9100,\"message_thread_id\":{TOPIC_ID}}}}}}}]}}");
+            // THE CHAT IS PART OF A REAL callback_query.message, and since brief F6 the parser
+            // requires it: a tap is now fenced to the supervision supergroup, not merely to the
+            // owner. Without it this synthetic update is one Telegram never sends, and the probe
+            // times out waiting for a tap that was correctly discarded.
+            + $"\"message\":{{\"message_id\":9100,\"message_thread_id\":{TOPIC_ID},\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}}}}}}}}]}}");
     }
 
     /// <summary>

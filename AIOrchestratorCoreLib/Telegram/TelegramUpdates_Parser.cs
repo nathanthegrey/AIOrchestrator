@@ -46,11 +46,11 @@ public static class TelegramUpdates_Parser
             if (ownerMessage != null)
                 ownerMessages.Add(ownerMessage);
 
-            var callbackTap = Parse_CallbackTap_OrNull(update, updateId, ownerUserId);
+            var callbackTap = Parse_CallbackTap_OrNull(update, updateId, supergroupChatId, ownerUserId);
             if (callbackTap != null)
                 callbackTaps.Add(callbackTap);
 
-            var serviceMessageId = Parse_TopicServiceMessageId_OrNull(update);
+            var serviceMessageId = Parse_TopicServiceMessageId_OrNull(update, supergroupChatId);
             if (serviceMessageId != null)
                 topicServiceMessageIds.Add(serviceMessageId.Value);
         }
@@ -63,9 +63,18 @@ public static class TelegramUpdates_Parser
     /// bridge renames topics to show their delivery mode, so those notices are OUR noise to clean
     /// up — this returns their ids for deletion.
     /// </summary>
-    static long? Parse_TopicServiceMessageId_OrNull(JsonObject update)
+    static long? Parse_TopicServiceMessageId_OrNull(JsonObject update, long supergroupChatId)
     {
         if (update["message"] is not JsonObject message)
+            return null;
+
+        // OUR SUPERGROUP OR NOTHING (brief F6), and this is the filter that matters most of the
+        // three. The id this returns is fed to `deleteMessage` — so a `forum_topic_edited` from ANY
+        // other chat the bot has been added to made the bridge try to delete a message in a
+        // stranger's group. It would mostly fail for want of rights, which is not a defence: it is
+        // an unauthorised write attempt, once per rename, in a chat nobody here has ever seen.
+        // The owner-message parser has filtered on the chat id all along; these two never did.
+        if (!Is_OurSupergroup(message, supergroupChatId))
             return null;
 
         if (message["forum_topic_edited"] == null)
@@ -79,7 +88,7 @@ public static class TelegramUpdates_Parser
         return messageIdNode.GetValue<long>();
     }
 
-    static ITelegramCallbackTap? Parse_CallbackTap_OrNull(JsonObject update, long updateId, long ownerUserId)
+    static ITelegramCallbackTap? Parse_CallbackTap_OrNull(JsonObject update, long updateId, long supergroupChatId, long ownerUserId)
     {
         if (update["callback_query"] is not JsonObject callbackQuery)
             return null;
@@ -96,13 +105,54 @@ public static class TelegramUpdates_Parser
 
         var messageObject = callbackQuery["message"] as JsonObject;
 
-        var threadIdNode = messageObject?["message_thread_id"];
+        // THE OWNER CHECK IS NOT THIS CHECK (brief F6). "From the owner" says WHO tapped; it says
+        // nothing about WHERE, and the two are independent: the owner is a person who is in other
+        // chats, and a bot added to one of them would carry their taps here. The tap's `data` is a
+        // token this app minted, so a foreign tap is normally inert — but "inert because the
+        // payload will not match" is a property of the registry, not a boundary, and the tap is
+        // answered, counted and logged as the owner's before anything looks at the payload.
+        //
+        // A callback_query with no `message` at all (an inline-mode tap) has no chat to check and
+        // is refused for that reason: this bridge only ever puts buttons in its own supergroup.
+        if (messageObject == null || !Is_OurSupergroup(messageObject, supergroupChatId))
+            return null;
+
+        // No `?.` on messageObject from here down: it was rejected as null above, and a leftover
+        // null-conditional reads as if the case were still live.
+        var threadIdNode = messageObject["message_thread_id"];
         long? threadId = threadIdNode == null ? null : threadIdNode.GetValue<long>();
 
-        var messageIdNode = messageObject?["message_id"];
+        var messageIdNode = messageObject["message_id"];
         long? messageId = messageIdNode == null ? null : messageIdNode.GetValue<long>();
 
         return TelegramCallbackTap_Factory.Create(updateId, queryId, data, threadId, messageId);
+    }
+
+    /// <summary>
+    /// Whether a message object belongs to the supervision supergroup. One reading of the fact for
+    /// all three parsers, rather than the two that had it and the two that did not.
+    /// </summary>
+    static bool Is_OurSupergroup(JsonObject message, long supergroupChatId)
+    {
+        if (message["chat"] is not JsonObject chat)
+            return false;
+
+        // TOLERANT, BECAUSE A THROW HERE REPLAYS THE WHOLE BATCH FOR EVER. GetValue<long>() throws
+        // on a chat.id that is not a JSON number, and this predicate is now on the callback and
+        // service-message paths, which never read `chat` before — so the throw surface is wider
+        // than it was. Parse_OwnerMessages has no catch of its own and the inbound loop backs off
+        // WITHOUT advancing the offset, so one malformed update from a proxy or gateway would be
+        // re-served until someone noticed. A chat id we cannot read is not our supergroup.
+        try
+        {
+            return chat["id"]?.GetValue<long>() == supergroupChatId;
+        }
+        catch (Exception)
+        {
+            // Broad by intent: this is a parser of untrusted external data, and the file's contract
+            // is that anything it cannot read is filtered out rather than thrown over.
+            return false;
+        }
     }
 
     static ITelegramOwnerMessage? Parse_OwnerMessage_OrNull(
@@ -125,11 +175,7 @@ public static class TelegramUpdates_Parser
         if (text == null && photoFileId == null && voiceFileId == null && document == null)
             return null;
 
-        if (message["chat"] is not JsonObject chat)
-            return null;
-
-        var chatIdNode = chat["id"];
-        if (chatIdNode == null || chatIdNode.GetValue<long>() != supergroupChatId)
+        if (!Is_OurSupergroup(message, supergroupChatId))
             return null;
 
         if (message["from"] is not JsonObject from)

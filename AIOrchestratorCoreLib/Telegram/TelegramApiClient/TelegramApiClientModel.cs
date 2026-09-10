@@ -27,6 +27,30 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
     readonly TelegramSendBudget.ITelegramSendBudget _budget;
 
     public TelegramApiClientModel(string botToken, long supergroupChatId, TelegramSendBudget.ITelegramSendBudget budget)
+        : this(botToken, supergroupChatId, budget, transport: null)
+    {
+    }
+
+    /// <summary>
+    /// <paramref name="transport"/> is THE TEST SEAM, and null everywhere in production (brief F9).
+    ///
+    /// <para>
+    /// Until now nothing in this file was reachable from a test: it builds its own
+    /// <see cref="HttpClient"/>, so every URL it composes, every payload it shapes and every status
+    /// it classifies could only be checked by reading it. That is a lot of untested surface for the
+    /// one component whose mistakes are invisible until the owner's phone goes quiet — the
+    /// <c>getUpdates</c> query string alone decides whether button taps arrive at all.
+    /// </para>
+    /// <para>
+    /// A handler rather than an <c>HttpClient</c>, so the timeout below stays the shipped one in a
+    /// test as well: what is faked is the wire, not the client's own configuration.
+    /// </para>
+    /// </summary>
+    internal TelegramApiClientModel(
+        string botToken,
+        long supergroupChatId,
+        TelegramSendBudget.ITelegramSendBudget budget,
+        HttpMessageHandler? transport)
     {
         _budget = budget;
         _botToken = botToken;
@@ -42,13 +66,16 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         //
         // The idle timeout is separate and shorter for the same reason it always is: an idle
         // connection that a middlebox has already dropped is worse than no connection.
-        var handler = new SocketsHttpHandler
+        HttpMessageHandler handler = transport ?? new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(2),
             PooledConnectionIdleTimeout = TimeSpan.FromSeconds(90),
         };
 
-        _httpClient = new HttpClient(handler)
+        // disposeHandler ONLY for the one we built. A handler handed in by a caller is the
+        // caller's to dispose; taking ownership of it would mean a fake reused across two clients
+        // is dead by the second, whenever this type grows an IDisposable.
+        _httpClient = new HttpClient(handler, disposeHandler: transport == null)
         {
             // Must exceed the getUpdates long-poll timeout with margin.
             Timeout = TimeSpan.FromSeconds(90),
