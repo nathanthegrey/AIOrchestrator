@@ -4,6 +4,7 @@ using AIOrchestratorCoreLib.Planning.PlanProgress;
 using AIOrchestratorCoreLib.Telegram;
 using AIOrchestratorCoreLib.Telegram.TopicStatusMember;
 using Xunit;
+using AIOrchestratorCoreLib.Formatting;
 
 namespace AIOrchestratorCoreLib.Tests.Telegram;
 
@@ -522,65 +523,25 @@ public class TopicStatusLinePlannerTests
     /// `Is_RepostDue` refuses a topic it knows nothing about. This test pins the PAIR — the two blind
     /// spots cover each other, and either one made durable alone would open the storm.
     /// </summary>
-    /// <summary>
-    /// THE HEARTBEAT IS NOT NEWS — and until 2026-09-10 it silently was, which made the owner's whole
-    /// rule ("buried AND its content changed") mean "buried, then within sixty seconds".
-    ///
-    /// <para>
-    /// Field 6 is `updated HH:MM`, emitted unconditionally, so PULSE's raw text differs from the
-    /// previous one at every minute boundary however still the orchestration is. The repost gate
-    /// compares texts, so a quiet buried topic reposted as soon as the wall clock rolled over: the
-    /// delete-plus-post carrying no news still happened, merely late — which is the worse failure,
-    /// because it looks fixed.
-    /// </para>
-    /// <para>
-    /// THE WHOLE SUITE WAS BLIND TO IT because every planner test freezes `NOW` at one constant, so
-    /// the two texts it compares are minted from the same clock. These two are the only ones that
-    /// advance the clock between them, which is the ONLY way the bug is visible. That is the trap
-    /// stage 8b already paid for once, from the other direction — a frozen test clock hiding a
-    /// tailer rule.
-    /// </para>
-    /// <para>
-    /// NO LIVE MEMBER IN THE FIXTURE, DELIBERATELY, and this is the thing to understand before
-    /// changing it. A member row ends in "for how long", which is ALSO derived from `now` — so with a
-    /// member present, advancing the clock changes two lines and the test could not say which one it
-    /// was measuring. A ledger and no members leaves the heartbeat as the only clock-dependent line
-    /// on the surface. (The duration ticking is the same class of problem with a narrower blast
-    /// radius, and it is reported rather than fixed here: whether "5 min instead of 4" is news the
-    /// owner wants their line moved for is theirs to rule on, not mine to assume.)
-    /// </para>
-    /// </summary>
-    [Fact]
-    public void TheMinuteRollingOverIsNotSomethingNewToSay()
-    {
-        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
-
-        var atOneMinutePast = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
-
-        var aMinuteLater = Plan_At(NOW.AddMinutes(1), atOneMinutePast.Text, buried);
-
-        // The text really did change — otherwise this test would pass for the identical-text rule's
-        // reason and prove nothing about the heartbeat.
-        Assert.NotEqual(atOneMinutePast.Text, aMinuteLater.Text);
-
-        // …and it is still not worth moving the message for.
-        Assert.NotEqual(TopicStatusActions.Repost, aMinuteLater.Action);
-    }
-
-    /// <summary>
-    /// AND THE EDIT STILL FIRES for that same clock tick, which is the half that must NOT change: the
-    /// heartbeat exists precisely so a frozen line can be told from a quiet orchestration, and an
-    /// edit notifies nobody. Asserted beside the case above so neither can pass for the other's reason.
-    /// </summary>
-    [Fact]
-    public void TheMinuteRollingOverStillEditsTheLineInPlace()
-    {
-        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
-
-        var atOneMinutePast = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
-
-        Assert.Equal(TopicStatusActions.Edit, Plan_At(NOW.AddMinutes(1), atOneMinutePast.Text, buried).Action);
-    }
+    // ── RETIRED 2026-09-10, AFTER THE DEPLOY ──────────────────────────────────────────────────────
+    //
+    // Two tests lived here and both asserted that PULSE's text CHANGES every minute and is edited in
+    // place: `TheMinuteRollingOverIsNotSomethingNewToSay` (the text differs, but the line must not
+    // MOVE) and `TheMinuteRollingOverStillEditsTheLineInPlace` (and it must still be edited). They
+    // were written in stage 8d against the heartbeat's per-minute clock, on the reasoning that "an
+    // edit notifies nobody, so silencing it buys nothing".
+    //
+    // TRUE OF THE OWNER'S PHONE, FALSE OF THE API. In production on 2026-09-10, three minutes after
+    // the deploy, that per-minute edit drew 429s with `retry_after` 20, then 22, then 32 seconds —
+    // once a minute, per live topic. Telegram throttles edits of ONE message far harder than calls to
+    // the group, which is the ceiling the control bucket was sized from. The heartbeat steps to five
+    // minutes now, so from one minute to the next the text does not change and there is NO call at
+    // all — which those two tests would have forbidden.
+    //
+    // Their surviving claim — a heartbeat must never MOVE the line — belongs to `Strip_Heartbeat` and
+    // is still asserted by the repost cases above. What replaced them is
+    // `OneMinuteLaterPulseSaysTheSameThing_SoNothingIsEdited` and its two neighbours, which pin the
+    // stronger property: not "the edit is harmless" but "there is no edit".
 
     /// <summary>One merged line of four, so the surface has substance without a member on it.</summary>
     static IPlanProgress A_Ledger()
@@ -646,10 +607,12 @@ public class TopicStatusLinePlannerTests
             TopicStatusLine_Builder.Strip_Heartbeat(first.Text),
             TopicStatusLine_Builder.Strip_Heartbeat(insideTheStep.Text));
 
-        // EDIT, NOT NONE, and not Repost. The heartbeat did change, so the line is rewritten in
-        // place — which is its whole job, and costs no notification. What the ruling forbids is the
-        // MOVE: a delete plus a post, for a minute hand.
-        Assert.Equal(TopicStatusActions.Edit, insideTheStep.Action);
+        // NONE, since 2026-09-10 — and it was Edit until then, for a reason that has gone. The
+        // heartbeat used to change every minute, so SOMETHING always differed and the line was
+        // rewritten in place; that per-minute edit is what drew 429s from Telegram in production.
+        // With the heartbeat stepped to five minutes as well, four minutes apart inside one step
+        // means nothing on the surface has changed, and the cheapest correct answer is no call.
+        Assert.Equal(TopicStatusActions.None, insideTheStep.Action);
 
         // +5 minutes: 6 minutes in, over the step, so the row genuinely changed and the line moves.
         var pastTheStep = Plan_At(NOW.AddMinutes(5), [working], first.Text, buried);
@@ -679,6 +642,87 @@ public class TopicStatusLinePlannerTests
             BACKOFF,
             newestTopicMessage,
             repostIsImpossible: false);
+    }
+
+    /// <summary>
+    /// THE PROBE THAT WOULD HAVE CAUGHT THE 429s. PULSE's text must not change from one MINUTE to
+    /// the next when nothing has happened — because the app EDITS the message whenever the text
+    /// changes, and Telegram throttles edits of one message far harder than calls to the group.
+    ///
+    /// <para>
+    /// PRODUCTION, 2026-09-10 20:57-20:59, three minutes after the deploy: `editMessageText` fired
+    /// once a minute per live topic and Telegram answered 429 with `retry_after` 20, then 22, then 32
+    /// seconds, per topic. Nothing was lost — the retry lands — but that is a throttle being hit
+    /// continuously, and it was hit because field 6 carried a per-minute clock.
+    /// </para>
+    /// <para>
+    /// STAGE 8d EXCLUDED THE HEARTBEAT FROM THE REPOST AND LEFT THE EDIT, on the reasoning that "an
+    /// edit notifies nobody". True of the owner's phone, false of the API — silence is not the only
+    /// cost of a write. The test that pinned the repost said nothing about the edit, which is exactly
+    /// the gap this fills.
+    /// </para>
+    /// <para>
+    /// The clock still moves: across a five-minute step the text changes and the line is edited, and
+    /// that half is asserted too, or a heartbeat that had simply stopped would satisfy the first.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void OneMinuteLaterPulseSaysTheSameThing_SoNothingIsEdited()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var atTheStart = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+
+        var aMinuteLater = Plan_At(NOW.AddMinutes(1), atTheStart.Text, buried);
+
+        // The TEXT is identical, which is what stops the edit: the decider answers None to identical
+        // text, and None is no API call at all.
+        Assert.Equal(atTheStart.Text, aMinuteLater.Text);
+        Assert.Equal(TopicStatusActions.None, aMinuteLater.Action);
+    }
+
+    /// <summary>
+    /// AND THE HEARTBEAT HAS NOT SIMPLY STOPPED. Across the five-minute step the text changes and the
+    /// line is edited in place — which is the field's whole job, telling a quiet orchestration apart
+    /// from a dead app. Without this, a heartbeat deleted outright would pass the test above.
+    /// </summary>
+    [Fact]
+    public void FiveMinutesLaterTheHeartbeatHasMoved()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var atTheStart = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+
+        // NOW is 15:00 in this fixture, so +5 crosses a step boundary whatever the minute happens to be.
+        var laterStill = Plan_At(NOW.AddMinutes(5), atTheStart.Text, buried);
+
+        Assert.NotEqual(atTheStart.Text, laterStill.Text);
+        Assert.Equal(TopicStatusActions.Edit, laterStill.Action);
+    }
+
+    /// <summary>
+    /// THE STEP IS THE MEMBER DURATION'S STEP, read from the one constant. Two ticking fields on one
+    /// line tuned apart by accident would put the surface back to changing every minute through
+    /// whichever of them was left finer.
+    /// </summary>
+    [Fact]
+    public void EveryMinuteInsideOneStepRendersTheSameHeartbeat()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+        var step = UnchangedFor_Formatter.STEP_MINUTES;
+
+        // From a moment floored to a step, every minute up to the next boundary must read alike.
+        var start = NOW.AddMinutes(-(NOW.Minute % step));
+        var atTheStart = Plan_At(start, null, buried);
+
+        for (var minute = 1; minute < step; minute++)
+        {
+            Assert.Equal(
+                atTheStart.Text,
+                Plan_At(start.AddMinutes(minute), null, buried).Text);
+        }
+
+        Assert.NotEqual(atTheStart.Text, Plan_At(start.AddMinutes(step), null, buried).Text);
     }
 
     [Fact]

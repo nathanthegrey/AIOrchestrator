@@ -611,9 +611,47 @@ public static class TopicStatusLine_Builder
     /// FIELD 6 — the heartbeat. A status line that has stopped being redrawn looks exactly like one
     /// describing a quiet orchestration, and this is the only field that can tell them apart.
     /// </summary>
+    /// <summary>
+    /// FIELD 6, STEPPED TO FIVE MINUTES — the same step as a member's duration, so PULSE's text
+    /// changes at most every five minutes when nothing else moves.
+    ///
+    /// <para>
+    /// MEASURED IN PRODUCTION, 2026-09-10 20:57-20:59, the first three minutes after the deploy: a
+    /// per-minute clock made `editMessageText` fire once a minute PER LIVE TOPIC, and Telegram
+    /// answered 429 with `retry_after` 20, then 22, then 32 seconds — once a minute, per topic. It
+    /// throttles edits of the SAME message far harder than the twenty-a-minute group ceiling, which
+    /// is the number the control bucket was sized from.
+    /// </para>
+    /// <para>
+    /// MY OWN REASONING WAS WRONG, and this is the correction. Stage 8d excluded the heartbeat from
+    /// the REPOST decision and left the edit firing every minute, on the grounds that "an edit
+    /// notifies nobody" — true of the owner's phone and false of the API. Silence is not the only
+    /// cost of a write.
+    /// </para>
+    /// <para>
+    /// THE HEARTBEAT STILL EARNS ITS PLACE at five minutes: it exists so a frozen line can be told
+    /// from a quiet orchestration, and five minutes is well inside the patience of somebody asking
+    /// "is this thing still alive". A stepped clock reads as a clock; what it stops being is a
+    /// per-minute write.
+    /// </para>
+    /// </summary>
     static string Build_UpdatedLine(DateTime now)
     {
-        return $"{HEARTBEAT_PREFIX}{TopicStatusWording.Clock(now)}";
+        return $"{HEARTBEAT_PREFIX}{TopicStatusWording.Clock(Step_Down(now, UnchangedFor_Formatter.STEP_MINUTES))}";
+    }
+
+    /// <summary>
+    /// A moment floored to a whole number of minutes. Seconds go too: a clock rendered `HH:mm` never
+    /// showed them, and leaving them in would make two moments inside one step compare unequal for a
+    /// difference the owner cannot see.
+    /// </summary>
+    static DateTime Step_Down(DateTime moment, int stepMinutes)
+    {
+        return new DateTime(
+            moment.Year, moment.Month, moment.Day, moment.Hour,
+            moment.Minute / stepMinutes * stepMinutes,
+            0,
+            moment.Kind);
     }
 
     /// <summary>How the heartbeat line opens, so a reader can recognise it without re-spelling it.</summary>
