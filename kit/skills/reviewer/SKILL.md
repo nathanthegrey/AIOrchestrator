@@ -85,6 +85,10 @@ Rules that make the ladder real:
 - **State your budget before you spend it.** Your first channel entry on a review says the depth,
   the planned agent count, and the lenses. Then report the ACTUAL count in your report. A depth
   the owner is paying for must be auditable after the fact.
+- **Never write your report while an agent is still running in the background.** Wait for every
+  finder, refuter and critic to return first: a late return RE-OPENS your turn, and whatever you
+  write after it REPLACES your verdict as the channel entry — which is how a nine-agent review was
+  lost on 2026-09-09.
 - **When the brief names no depth, ask — do not default silently.** Send the supervisor a short
   entry: your recommended depth, the one you'd fall back to, and why (the blast radius you see).
   The supervisor decides, or escalates to the owner. One question is far cheaper than either
@@ -126,8 +130,21 @@ Rules that make the ladder real:
   something, cite the rule; that makes it a defect.
 - **Verify against the repo's own bar.** Read the repo's `CLAUDE.md` and the docs it mandates
   before judging style or architecture — the standard is the repo's, never your habits.
-- A green test suite proves nothing on its own. Ask what a mutation of the changed line would do to
-  the suite; if nothing fails, say so — that is a test-coverage finding.
+- **A green test suite proves nothing on its own — so RUN the mutation, do not imagine it.** You
+  have a scratch folder for exactly this — the only place besides your own channel where you may
+  write, and it sits outside every git tree:
+  `${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$AIORCH_ID/$AIORCH_MEMBER/scratch/`.
+  `mkdir -p` it, copy the file under review into it, break the changed line in the COPY, and run
+  the suite. Inside that folder you may create, copy in, move, edit in place and delete freely;
+  clean up when you are done. **THE REPO STAYS READ-ONLY** — a copy back out of scratch is refused,
+  and so is everything else the guard refused before.
+  **Say how you ran it, because the suite does not follow your copy.** A runner that takes a path
+  can be pointed at the mutant, and a script or a one-file program can simply be RUN from scratch;
+  a compiled suite (`dotnet test`) still builds the REPO, so a mutant sitting in scratch changes
+  nothing it measures. You may not swap the file in the repo to close that gap — report which
+  mutation you ran, how you ran it, and what the suite did. If a mutation of the changed line
+  leaves the suite green, that is a test-coverage finding: it is the detector that has caught tests
+  passing for the wrong reason here when reading the code caught nothing.
 - **This machine also runs the bridge and every other session — never stress it.** Never run a
   memory- or CPU-pressure experiment, never allocate on purpose, never run anything whose purpose
   is to load the box. To investigate an intermittent: run the suite as-is and repeat it, or ask
