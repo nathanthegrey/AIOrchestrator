@@ -34,21 +34,38 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// THE DELIVERY GATE, on the POST. A topic the owner silenced must not be the thing that pushes
-    /// to their phone.
+    /// THE DELIVERY GATE, on the POST — and SILENCED ONLY since 2026-09-10. 🔕 means the owner is
+    /// reading the same content live in a terminal and asked not to have it twice; dropping is the
+    /// mode's whole contract, so a first PULSE is not posted into it.
     /// </summary>
-    [Theory]
-    [InlineData(TelegramDeliveryModes.Silenced)]
-    [InlineData(TelegramDeliveryModes.Deferred)]
-    public void ASilencedTopicIsNotPostedInto(TelegramDeliveryModes mode)
+    [Fact]
+    public void ASilencedTopicIsNotPostedInto()
     {
-        Assert.Equal(TopicStatusActions.None, Plan(mode: mode).Action);
+        Assert.Equal(TopicStatusActions.None, Plan(mode: TelegramDeliveryModes.Silenced).Action);
     }
 
     /// <summary>
-    /// And NOT on the edit. An edit notifies nobody, so gating it buys nothing and costs a line
-    /// frozen at pre-DND content for the whole period — Deferred's contract is that nothing is lost.
-    /// Asserted separately from the POST case so neither can pass for the other's reason.
+    /// AND DEFERRED IS NOT SILENCED — the other half of the owner's ruling of 2026-09-09: "🌙 holds
+    /// only what rings; PULSE and the dashboard keep updating silently". This case asserted None
+    /// until 2026-09-10, sharing a Theory with the Silenced one, and the shared assertion was the
+    /// mistake: the two modes mean OPPOSITE things about content. Deferred keeps everything and
+    /// replays it because the owner is coming back to it; Silenced throws it away.
+    ///
+    /// The gate could treat them alike while a post NOTIFIED. Every write here is silent now, so
+    /// under 🌙 there is nothing left to protect the owner from — and refusing the first post cost
+    /// them a topic with NO status surface at all for the length of the mute, which is what their
+    /// check-in ritual reads when they come back.
+    /// </summary>
+    [Fact]
+    public void ADeferredTopicIsStillPostedInto_Silently()
+    {
+        Assert.Equal(TopicStatusActions.Post, Plan(mode: TelegramDeliveryModes.Deferred).Action);
+    }
+
+    /// <summary>
+    /// And NOT on the edit, under either mode. An edit notifies nobody, so gating it buys nothing and
+    /// costs a line frozen at pre-DND content for the whole period — Deferred's contract is that
+    /// nothing is lost. Asserted separately from the POST cases so none can pass for another's reason.
     /// </summary>
     [Theory]
     [InlineData(TelegramDeliveryModes.Silenced)]
@@ -490,21 +507,33 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// THE DELIVERY GATE APPLIES, because a repost NOTIFIES and a topic the owner silenced must not
-    /// be the thing that pushes to their phone — the same rule the POST already obeys.
-    ///
-    /// It falls back to the EDIT rather than to silence: the edit notifies nobody, so Deferred's
-    /// contract that nothing is lost survives, and the line stays current instead of freezing at
-    /// pre-DND content for the whole period. The move to the bottom is what waits for the unmute.
+    /// THE DELIVERY GATE APPLIES TO SILENCED, and it falls back to the EDIT rather than to silence:
+    /// the edit notifies nobody, so the line stays current instead of freezing, and only the MOVE to
+    /// the bottom waits.
     /// </summary>
-    [Theory]
-    [InlineData(TelegramDeliveryModes.Silenced)]
-    [InlineData(TelegramDeliveryModes.Deferred)]
-    public void ASilencedTopicIsNotRepostedIntoAndFallsBackToTheEdit(TelegramDeliveryModes mode)
+    [Fact]
+    public void ASilencedTopicIsNotRepostedIntoAndFallsBackToTheEdit()
     {
         Assert.Equal(
             TopicStatusActions.Edit,
-            Plan(mode: mode, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+            Plan(mode: TelegramDeliveryModes.Silenced, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
+                 newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// A DEFERRED TOPIC STILL MOVES ITS LINE, silently — the repost half of the same ruling. It
+    /// shared a Theory with the Silenced case until 2026-09-10 on the strength of one sentence, "a
+    /// repost NOTIFIES", which stopped being true when every send in this surface became silent.
+    ///
+    /// Under 🌙 the owner is away and will read this topic when they return; a PULSE stranded above
+    /// an hour of later traffic is the one thing they then have to scroll for.
+    /// </summary>
+    [Fact]
+    public void ADeferredTopicStillMovesItsLine_Silently()
+    {
+        Assert.Equal(
+            TopicStatusActions.Repost,
+            Plan(mode: TelegramDeliveryModes.Deferred, existingMessageId: STATUS_ID, lastWrittenText: "an older line",
                  newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
     }
 

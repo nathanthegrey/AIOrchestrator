@@ -136,23 +136,30 @@ public static class TopicStatusLine_Planner
             ? TopicStatusActions.Repost
             : decided;
 
-        // THE DELIVERY GATE IS ON THE MESSAGES THAT NOTIFY — the POST, and now the REPOST, which is a
-        // delete followed by a send and so pushes to the phone exactly as a first post does. An edit
-        // notifies nobody, so silencing it buys nothing and costs a line frozen at pre-DND content for
-        // the whole period; a topic the owner silenced must not be the thing that wakes them.
+        // THE DELIVERY GATE IS ON SILENCED ONLY — it used to be on everything but Normal, and the
+        // reason it could be is gone. Every one of these writes is `TelegramSendSounds.Silent` now
+        // (brief C), so a post and a repost wake nobody; the gate was reasoning about a post that
+        // notified, and it outlived that post.
         //
-        // A BLOCKED REPOST FALLS BACK TO WHAT THE DECIDER SAID rather than to silence. The content
-        // still updates in place — Deferred's contract is that nothing is lost — and only the MOVE
-        // waits for the unmute. Falling back to a blanket Edit instead would rewrite identical text
-        // every tick for the whole DND period, which is the wasted-call spin the identical-text rule
-        // exists to stop.
-        if (action == TopicStatusActions.Repost && mode != TelegramDeliveryModes.Normal)
+        // DEFERRED (🌙) AND SILENCED (🔕) PART COMPANY HERE, on the owner's ruling of 2026-09-09:
+        // "DND holds only what rings; PULSE and the dashboard keep updating silently". The two modes
+        // mean opposite things about content — Deferred KEEPS everything and replays it, because the
+        // owner is away and will come back to it; Silenced DROPS it, because they are reading the
+        // same thing live in the terminal and do not want it twice. So a status surface must stay
+        // current under Deferred (their check-in ritual reads it, and a line frozen at the moment
+        // they went away is a line that lies) and must stay out of the way under Silenced.
+        //
+        // A BLOCKED REPOST FALLS BACK TO WHAT THE DECIDER SAID rather than to silence: the content
+        // still updates in place and only the MOVE waits. Falling back to a blanket Edit instead
+        // would rewrite identical text every tick, which is the wasted-call spin the identical-text
+        // rule exists to stop.
+        if (action == TopicStatusActions.Repost && mode == TelegramDeliveryModes.Silenced)
             action = decided;
 
         if (action == TopicStatusActions.None)
             return new TopicStatusPlan(TopicStatusActions.None, text);
 
-        if (action == TopicStatusActions.Post && mode != TelegramDeliveryModes.Normal)
+        if (action == TopicStatusActions.Post && mode == TelegramDeliveryModes.Silenced)
             return new TopicStatusPlan(TopicStatusActions.None, text);
 
         // THE BACKOFF, last: a 429 answered at the tick rate inverts the cadence from once a minute

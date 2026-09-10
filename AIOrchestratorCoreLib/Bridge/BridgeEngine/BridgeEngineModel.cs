@@ -1478,11 +1478,32 @@ internal sealed class BridgeEngineModel(
         // when there is one the pass runs off this thread so a slow adapter cannot stall the tick.
         Start_PlanBackendPass();
 
-        // DND: skip tailing entirely — offsets freeze, so unmute delivers everything pending
-        // in one catch-up burst (including supervisors' questions that waited for the owner).
-        // Crash-loop alerts stay queued in the watchdog until unmute for the same reason.
+        // DND HOLDS ONLY WHAT RINGS — the owner's ruling of 2026-09-09 (brief C): "🌙 holds only what
+        // rings (supervisor entries, actionable alerts); PULSE and the dashboard keep updating
+        // silently".
+        //
+        // Everything below this line stays held: tailing is skipped entirely, so offsets freeze and
+        // unmute delivers the whole backlog in one catch-up burst (supervisors' questions included),
+        // and crash-loop alerts stay queued in the watchdog for the same reason.
+        //
+        // THE TWO SILENT SURFACES RUN FIRST INSTEAD OF BEING SKIPPED WITH THE REST. They are the two
+        // things the owner READS when they come back rather than things that reach them — the
+        // check-in ritual is "show me where everything stands", and it was reading a PULSE and a
+        // dashboard frozen at the moment the mute went on. A status surface that stops updating while
+        // the owner is away is not quiet, it is WRONG, and it is wrong exactly when it is being used.
+        //
+        // They cost nothing that DND is protecting: both are silent sends (brief C), both are one
+        // message edited in place, and neither reads the tailer — they build from the channel files
+        // and the ledger directly. What they cannot do is reach past their own gates: PULSE still
+        // refuses to POST or move under Silenced, and both surfaces answer None when their text has
+        // not changed, which under a mute is most ticks.
         if (_telegramMuted && _telegramClient != null)
+        {
+            await Refresh_TopicStatusLines_Async(cancellationToken);
+            await Push_GeneralDashboard_Async(cancellationToken);
+
             return;
+        }
 
         // PROMPTING stays after the DND return — nothing is asked, and so nothing closes, while the
         // owner is not being disturbed. Expiry ran above, before the gate, because lapsing is not a
@@ -3283,9 +3304,13 @@ internal sealed class BridgeEngineModel(
         if (_telegramClient == null)
             return;
 
-        // The same gate the other outbound sites use. DND holds and Silenced drops, and a dashboard
-        // that ignored the owner's own switch would be the loudest thing in the app.
-        if (Resolve_EffectiveMode(ChannelDiscovery.GENERAL_ORCH_ID) != TelegramDeliveryModes.Normal)
+        // SILENCED DROPS THIS, DEFERRED DOES NOT — narrowed on the owner's ruling of 2026-09-09.
+        // The gate used to refuse every mode but Normal, and the dashboard was the loudest thing in
+        // the app when it was written: it posted with sound. It is a silent edit of one message now,
+        // so under 🌙 there is nothing to protect the owner from, and freezing it costs them the one
+        // surface their check-in ritual reads. Under 🔕 they are watching the same thing live in a
+        // terminal and asked not to have it twice, which is the mode's whole contract.
+        if (Resolve_EffectiveMode(ChannelDiscovery.GENERAL_ORCH_ID) == TelegramDeliveryModes.Silenced)
             return;
 
         // Backoff after a failure. Without it the retry is a 2-second hammer at an endpoint that is
