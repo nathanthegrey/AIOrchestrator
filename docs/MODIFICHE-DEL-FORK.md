@@ -1311,6 +1311,50 @@ pacchetto è già scritto e spento. Il rischio, che è sul giudizio e non sul co
 quello di prima.
 
 **Cose aperte, dette perché non sembrino risolte.**
+- **Sette cose sono state proposte dalla revisione indipendente, tre fatte e quattro no. Le quattro
+  stanno qui perché non sembrino sviste.** Fatte: la verifica che il promemoria di metà turno non
+  rompe la cache (non la rompe — costa circa mille token per turno, venti volte in cinque giorni),
+  lo strumento di misura rifatto e il campionatore del piano. Le altre quattro non sono state fatte
+  di proposito, e ognuna ha una ragione diversa.
+- **Il tetto al pacchetto va riscritto come avviso, non come taglio — ed è un errore del
+  proponente.** La proposta originale era di limitare la dimensione del pacchetto di memoria. Ma le
+  voci che hanno svegliato il turno sono senza tetto **per scelta**, e il codice lo dice: sono la
+  ragione per cui il turno esiste. Tagliarle significa svegliare una sessione per del traffico e poi
+  non dirglielo — cioè fabbricare esattamente il guasto che il rapporto di chiusura di uno spoke
+  esiste per intercettare. La forma giusta è un avviso quando il pacchetto supera una soglia, così
+  lo vede una persona. Nessun incidente misurato: è un buco strutturale.
+- **Lo sforzo scelto per compito dal supervisore — idea del proprietario, parcheggiata per mancanza
+  di metro.** Lo sforzo è la leva che muove i token in uscita, che è l'unica quantità che nessun
+  altro cambiamento tocca. Un valore fisso per ruolo è cieco; il supervisore invece sceglie caso per
+  caso, e già lo fa per il modello. Resta però un baratto qualità contro token, e oggi il supervisore
+  non ha nessun modo di sapere se lo sforzo basso ha fatto danni. Si sblocca con il banco di prova
+  qui sotto, non prima.
+- **Il freno ai sub-agenti: rimandato, non scartato.** I sub-agenti sono il capitolo di spesa più
+  grosso rimasto — il 10 settembre costano più degli implementatori che li lanciano, e il loro
+  contesto per chiamata è salito del 51 % rispetto all'8. Il freno esiste già nello strumento a riga
+  di comando ed è verificato presente su questa macchina (un'opzione inventata dà «unknown option»,
+  quella no, pur non comparendo nell'aiuto). Non è stato messo perché un freno che tronca un lavoro a
+  metà produce **rifacimento**, e rifare costa più di quanto il freno risparmi; e perché non è stato
+  verificato che cosa conti né come termini. Va tarato sulla distribuzione misurata delle chiamate
+  per turno, mai a occhio, e deve fallire verso il completamento.
+- **Il taglio dell'output dei comandi: rimandato per lo stesso motivo.** Un agente che non vede
+  l'output del test che fallisce lo rilancia, o tira a indovinare. Il taglio va fatto con criterio —
+  tenere la coda di una traccia d'errore, buttare il mezzo — non a un numero di caratteri.
+- **Manca il banco di prova fisso, ed è la cosa che rende giudicabili le tre qui sopra.** Lo stesso
+  identico insieme di compiti eseguito con e senza la modifica: è l'unico disegno che elimina la
+  differenza di carico di lavoro **per costruzione**, invece di correggerla dopo. Senza, applicare
+  quelle leve è fede, e confrontare due periodi di produzione resta un disegno che non regge — è il
+  difetto che ha reso fragile il numero di partenza di tutto questo lavoro.
+- **Se la scelta del modello sia «solo prezzo» è una domanda aperta.** La seconda revisione l'ha
+  tolta dall'analisi perché non muove il conteggio dei token. Vero per un conteggio grezzo; non
+  ovvio per il vincolo che morde davvero qui, che è il limite d'uso dell'abbonamento — e l'app quel
+  limite lo sorveglia già, con gli allarmi al 90, 95, 97 per cento. Se quel limite è pesato per
+  modello, un token del modello grande e uno del piccolo non sono la stessa unità della risorsa
+  scarsa, e la scelta del modello torna a essere una leva di prima classe. Si risolve con i dati che
+  l'applicazione già raccoglie.
+- **Tre turni di implementatore falliti a livello di sistema su una lavorazione, visti passando.**
+  Preesistenti al lavoro di revisione e non indagati: non era quello che era stato chiesto, e il
+  costo di una scoperta non è la sua correzione, è l'orizzonte che apre.
 - **La suite non è affidabile sotto carico — deciso: si fa dopo A–F.** Verde in seriale a macchina
   quieta; in parallelo con un'altra suite in corsa ha circa un rosso a corsa, sempre in un test a tempo
   reale diverso, sempre verde da solo. Misurato il 10/9: su 352 file di test, 62 aspettano tempo reale,
