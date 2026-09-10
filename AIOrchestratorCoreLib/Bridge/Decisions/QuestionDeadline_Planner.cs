@@ -34,7 +34,7 @@ public enum QuestionDeadlineActions
 /// </para>
 /// <para>
 /// AT THE INSTANT, NOT AFTER IT. Both comparisons are <c>&gt;=</c>, for the reason
-/// <see cref="Telegram.TopicNameSync_Gate.Is_AttemptDue"/> states: a deadline that is never due at
+/// <see cref="Telegram.TelegramAttempt_Gate.Is_AttemptDue"/> states: a deadline that is never due at
 /// exactly its own moment is a deadline silently longer than it says.
 /// </para>
 /// </summary>
@@ -75,7 +75,7 @@ public static class QuestionDeadline_Planner
     /// <summary>
     /// Halfway between the asking and the deadline. Separate from <see cref="Decide"/> so a test can
     /// set a stamp and walk the clock across it, rather than assert on an arithmetic it performed
-    /// itself — the same split <see cref="Telegram.TopicNameSync_Gate"/> makes.
+    /// itself — the same split <see cref="Telegram.TelegramAttempt_Gate"/> makes.
     /// </summary>
     public static DateTime Compute_ReminderAtUtc(DateTime askedUtc, DateTime deadlineUtc)
     {

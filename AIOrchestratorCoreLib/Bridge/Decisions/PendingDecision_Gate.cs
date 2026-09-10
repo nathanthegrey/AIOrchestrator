@@ -56,7 +56,7 @@ public static class PendingDecision_Gate
         if (!found)
             return TapOutcomes.Unknown;
 
-        // >= so the button dies at its own instant. See TopicNameSync_Gate.Is_AttemptDue.
+        // >= so the button dies at its own instant. See TelegramAttempt_Gate.Is_AttemptDue.
         if (nowUtc >= expiresUtc)
             return TapOutcomes.Expired;
 

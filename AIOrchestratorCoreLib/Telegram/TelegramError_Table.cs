@@ -41,7 +41,7 @@ public enum TelegramErrorCases
 /// <para>
 /// WHY IT EXISTS. The distinctions below were spread across three files as private predicates that
 /// grew one wording at a time: <see cref="TopicStatusLine_Decider"/> held three of them,
-/// <see cref="TopicNameSync_Gate"/> a fourth, and each new wording was added wherever the incident
+/// <see cref="TelegramAttempt_Gate"/> a fourth, and each new wording was added wherever the incident
 /// happened to be observed. Nothing said what the whole set was, so the same Telegram answer could
 /// be recognised in one caller and unrecognised in the next — which is precisely what
 /// <c>TOPIC_NOT_MODIFIED</c> did for months (recognised by a private <c>when</c> filter inside the

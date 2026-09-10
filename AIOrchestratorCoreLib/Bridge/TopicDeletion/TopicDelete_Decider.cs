@@ -16,7 +16,7 @@ namespace AIOrchestratorCoreLib.Bridge.TopicDeletion;
 /// list full of finished ones is noise). A delete nobody retries is that decision not being kept.
 /// </para>
 /// <para>
-/// HERE RATHER THAN IN THE ENGINE, for the reason <see cref="TopicNameSync_Gate"/> gives in full:
+/// HERE RATHER THAN IN THE ENGINE, for the reason <see cref="TelegramAttempt_Gate"/> gives in full:
 /// <c>BridgeEngineModel</c> is <c>internal sealed</c> with no <c>InternalsVisibleTo</c>, so a rule
 /// written inside it cannot be asserted by the suite. The decision moves out; the I/O stays where it
 /// is. What remains unpinned is the one-line call from the engine, which the engine-level probe in
@@ -94,7 +94,7 @@ public static class TopicDelete_Decider
     /// <summary>
     /// Telegram's wordings for "there is no such topic". All of them are 400s, so the status alone
     /// cannot separate them from a refusal — this is the same narrow, documented exception to the
-    /// no-string-parsing rule that <see cref="TopicNameSync_Gate"/> makes for <c>TOPIC_NOT_MODIFIED</c>
+    /// no-string-parsing rule that <see cref="TelegramAttempt_Gate"/> makes for <c>TOPIC_NOT_MODIFIED</c>
     /// and <see cref="TopicStatusLine_Decider.Is_MessageGone"/> makes for a deleted message.
     /// </summary>
     static bool Says_TopicAlreadyGone(string errorMessage)

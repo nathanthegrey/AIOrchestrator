@@ -77,7 +77,7 @@ public class AwaySuppressesAppAlertsScanTests
     [Fact]
     public void TheAwayDigestIsRememberedOnlyAfterAConfirmedWrite()
     {
-        var body = Extract_Method("async Task Push_PeriodicStatus_Async");
+        var body = Extract_Method("async Task Push_AwayDigests_Async");
 
         Assert.Contains("AwayDigest_Decider.Should_Send", body);
 

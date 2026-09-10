@@ -234,7 +234,7 @@ public class TelegramSendBudgetTests : IDisposable
     /// <c>Create_WithTiming</c> composes on the production path — load the bucket, build the client
     /// around it, hand the same object to the engine — and it is unasserted for a specific reason:
     /// reaching it means constructing the REAL Telegram client, whose inbound loop would call
-    /// api.telegram.org. Stated rather than hidden, exactly as <see cref="TopicNameSync_Gate"/>
+    /// api.telegram.org. Stated rather than hidden, exactly as <see cref="TelegramAttempt_Gate"/>
     /// states the same gap about its own caller.
     /// </para>
     /// </summary>

@@ -202,23 +202,6 @@ public class ThePhoneRingsOnlyForTheSupervisorTests : IDisposable
         Assert.False(_telegram.Has_Sent_Containing("pick it up when this turn ends"), _telegram.Dump_Sent());
     }
 
-    /// <summary>
-    /// NO ⚠️ WITHOUT A REAL QUESTION, however long the silence. "Nothing more needed from you" is the
-    /// exact entry that earned a stall alert thirty minutes later on 2026-09-09.
-    /// </summary>
-    string Channel(string orchId) => File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));
-
-    void Age_Everything(string orchId, TimeSpan by)
-    {
-        var stamp = DateTime.Now - by;
-        var session = _store.Get_Session(orchId);
-
-        File.SetLastWriteTime(_paths.Get_OwnerChannelFile(orchId), stamp);
-
-        foreach (var member in session.Members)
-            File.SetLastWriteTime(_paths.Get_ImplementerChannelFile(orchId, member.MemberId), stamp);
-    }
-
     async Task<string> Start_Async()
     {
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
