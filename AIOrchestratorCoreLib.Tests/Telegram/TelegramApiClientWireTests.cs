@@ -1,0 +1,255 @@
+using System.Net;
+using System.Text.Json.Nodes;
+using AIOrchestratorCoreLib.Telegram;
+using AIOrchestratorCoreLib.Telegram.TelegramApiClient;
+using AIOrchestratorCoreLib.Telegram.TelegramSendBudget;
+using Xunit;
+
+namespace AIOrchestratorCoreLib.Tests.Telegram;
+
+/// <summary>
+/// WHAT THIS CLIENT ACTUALLY PUTS ON THE WIRE — brief F9, and the first tests this file has ever
+/// had.
+///
+/// <para>
+/// It built its own <see cref="HttpClient"/>, so every URL it composes, every payload it shapes
+/// and every status it classifies could only be checked by reading it. That is a lot of untested
+/// surface on the one component whose mistakes are invisible until the owner's phone goes quiet:
+/// drop <c>callback_query</c> from the <c>getUpdates</c> query string and every button in the
+/// system stops working, with no error anywhere.
+/// </para>
+/// </summary>
+public class TelegramApiClientWireTests
+{
+    const string TOKEN = "12345:test-token";
+    const long CHAT_ID = -1001234567890;
+
+    /// <summary>
+    /// THE QUERY STRING THAT DECIDES WHETHER TAPS ARRIVE. <c>allowed_updates</c> is URL-encoded, so
+    /// it is decoded and read as the JSON array it is rather than matched as an opaque blob — a
+    /// test that pinned the encoded literal would pass just as happily on a wrongly-encoded one.
+    /// </summary>
+    [Fact]
+    public async Task GetUpdates_AsksForMessagesAndTaps_WithTheOffsetAndTheLongPoll()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":[]}""");
+
+        await Build_Client(transport).Get_UpdatesJson_Async(offset: 4242, timeoutSeconds: 50, CancellationToken.None);
+
+        var request = Assert.Single(transport.Requests);
+        var query = System.Web.HttpUtility.ParseQueryString(request.Uri.Query);
+
+        Assert.EndsWith($"/bot{TOKEN}/getUpdates", request.Uri.AbsolutePath);
+        Assert.Equal("4242", query["offset"]);
+        Assert.Equal("50", query["timeout"]);
+
+        var allowed = JsonNode.Parse(query["allowed_updates"]!)!.AsArray().Select(node => node!.GetValue<string>()).ToList();
+
+        Assert.Contains("message", allowed);
+        Assert.Contains("callback_query", allowed);
+    }
+
+    /// <summary>
+    /// A 409 REACHES THE CALLER AS A 409 (brief B put a named situation behind this status: two
+    /// pollers, or a webhook). It must arrive as a TelegramApiException carrying the code, not as
+    /// a sentence someone has to parse.
+    /// </summary>
+    [Fact]
+    public async Task GetUpdates_Answering409_SurfacesTheStatusOnTheException()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With((HttpStatusCode)409, """{"ok":false,"error_code":409,"description":"Conflict: terminated by other getUpdates request"}""");
+
+        var failure = await Assert.ThrowsAsync<TelegramApiException>(
+            () => Build_Client(transport).Get_UpdatesJson_Async(0, 50, CancellationToken.None));
+
+        Assert.Equal(409, failure.StatusCode);
+        Assert.False(failure.Is_Retryable, "a 409 is a named situation with an action attached, not a 'try again'");
+    }
+
+    /// <summary>
+    /// A 429 ON A MESSAGE-CREATING CALL IS HONOURED WITH TELEGRAM'S OWN NUMBER and retried — and
+    /// the retry is what the owner's message rides on, so it is worth pinning that it happens at
+    /// all rather than trusting the branch.
+    /// </summary>
+    [Fact]
+    public async Task ASendThatIsRateLimited_IsRetried_AndTheSecondAttemptIsTheOneThatCounts()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":1}}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":77}}""");
+
+        var messageId = await Build_Client(transport).Send_Message_Async(5, "hello", CancellationToken.None);
+
+        Assert.Equal(77, messageId);
+        Assert.Equal(2, transport.Requests.Count);
+        Assert.All(transport.Requests, request => Assert.EndsWith("/sendMessage", request.Uri.AbsolutePath));
+    }
+
+    /// <summary>
+    /// PAST THE INLINE CAP THE FAILURE GOES TO THE CALLER, rather than the client sleeping through
+    /// a wait that would hold a mirror tick open for minutes.
+    /// </summary>
+    [Fact]
+    public async Task ASendRateLimitedForTooLong_IsHandedBack_NotSleptThrough()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":600}}""");
+
+        var failure = await Assert.ThrowsAsync<TelegramApiException>(
+            () => Build_Client(transport).Send_Message_Async(5, "hello", CancellationToken.None));
+
+        Assert.Equal(429, failure.StatusCode);
+        Assert.Equal(600, failure.RetryAfterSeconds);
+        Assert.Single(transport.Requests);
+    }
+
+    /// <summary>
+    /// THE MULTIPART SHAPE. A document upload builds its own request and therefore does not pass
+    /// through the JSON path at all — the caption's parse mode and the chat/thread fields are
+    /// composed separately here, which is exactly how the two paths drift apart.
+    /// </summary>
+    [Fact]
+    public async Task ADocumentUpload_CarriesTheChatTheThreadTheCaptionAndTheBytes()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":9}}""");
+
+        await Build_Client(transport).Send_Document_Async(7, "report.md", "hello file"u8.ToArray(), "<b>caption</b>", CancellationToken.None);
+
+        var request = Assert.Single(transport.Requests);
+
+        Assert.EndsWith("/sendDocument", request.Uri.AbsolutePath);
+        Assert.Contains("multipart/form-data", request.ContentType);
+        Assert_HasPart(request.Body, "chat_id");
+        Assert_HasPart(request.Body, "message_thread_id");
+        Assert_HasPart(request.Body, "caption");
+        Assert_HasPart(request.Body, "parse_mode");
+        Assert_HasPart(request.Body, "document");
+
+        Assert.Contains(CHAT_ID.ToString(), request.Body);
+        Assert.Contains("<b>caption</b>", request.Body);
+        Assert.Contains("HTML", request.Body);
+        Assert.Contains("report.md", request.Body);
+        Assert.Contains("hello file", request.Body);
+    }
+
+    /// <summary>
+    /// A DOCUMENT over Telegram's cap never reaches the wire at all (brief F7).
+    ///
+    /// <para>
+    /// The refusal is pinned by its MESSAGE and by NOT being a <see cref="TelegramApiException"/>,
+    /// not merely by "something threw". <c>ThrowsAnyAsync&lt;Exception&gt;</c> plus an empty request
+    /// list is satisfied by an OutOfMemoryException from the allocation below, or by any future
+    /// NullReferenceException on the way to the wire — two routes to the same green, which is what
+    /// CLAUDE.md decision 20 forbids. The type matters too: the client throws a plain Exception
+    /// here on purpose, because Telegram did not answer this — we did — and manufacturing a status
+    /// code would put a fiction in front of every caller that classifies by status.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AnOversizedDocument_IsRefusedBeforeAnythingIsSent()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"message_id":9}}""");
+
+        var refusal = await Assert.ThrowsAnyAsync<Exception>(
+            () => Build_Client(transport).Send_Document_Async(7, "huge.bin", new byte[TelegramFileCaps.MAX_DOCUMENT_BYTES + 1], "c", CancellationToken.None));
+
+        Assert.Contains("sendDocument", refusal.Message);
+        Assert.Contains($"{TelegramFileCaps.In_Megabytes(TelegramFileCaps.MAX_DOCUMENT_BYTES)} MB cap", refusal.Message);
+        Assert.IsNotType<TelegramApiException>(refusal);
+        Assert.Empty(transport.Requests);
+    }
+
+    /// <summary>
+    /// The startup handshake brief B added: the bot's own name, and the webhook clear that must NOT
+    /// drop what the owner sent while the webhook was in the way.
+    /// </summary>
+    [Fact]
+    public async Task TheStartupHandshake_AsksWhoWeAre_AndClearsAWebhookWithoutDroppingUpdates()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":{"username":"vibe_bridge_bot"}}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":true}""");
+
+        var client = Build_Client(transport);
+
+        Assert.Equal("vibe_bridge_bot", await client.Get_BotUsername_Async(CancellationToken.None));
+
+        await client.Delete_Webhook_Async(dropPendingUpdates: false, CancellationToken.None);
+
+        Assert.Equal(2, transport.Requests.Count);
+        Assert.EndsWith("/getMe", transport.Requests[0].Uri.AbsolutePath);
+        Assert.EndsWith("/deleteWebhook", transport.Requests[1].Uri.AbsolutePath);
+        Assert.Contains("false", transport.Requests[1].Body);
+    }
+
+    /// <summary>
+    /// One multipart part, by name. Quoted and unquoted both accepted: .NET writes
+    /// <c>name=chat_id</c> without quotes when the name needs none, and pinning the quoted form
+    /// would make this test a test of the framework's formatting rather than of our payload.
+    /// </summary>
+    static void Assert_HasPart(string body, string name)
+    {
+        Assert.True(
+            body.Contains($"name=\"{name}\"", StringComparison.Ordinal) || body.Contains($"name={name}", StringComparison.Ordinal),
+            $"the multipart body carries no '{name}' part:{Environment.NewLine}{body}");
+    }
+
+    static ITelegramApiClient Build_Client(RecordingTransport_Fake transport)
+    {
+        return TelegramApiClient_Factory.Create_WithTransport(
+            TOKEN, CHAT_ID, TelegramSendBudget_Factory.Create_Fresh(), transport);
+    }
+}
+
+/// <summary>
+/// Records every request and answers from a scripted queue, one answer per request, IN ORDER. An
+/// unscripted request throws rather than receiving a default success: a fake that invents an
+/// answer lets a test pass for a reason the test does not state.
+/// </summary>
+internal sealed class RecordingTransport_Fake : HttpMessageHandler
+{
+    readonly Lock _lock = new();
+    readonly List<(Uri Uri, string Body, string ContentType)> _requests = [];
+    readonly Queue<(HttpStatusCode Status, string Body)> _answers = new();
+
+    public IReadOnlyList<(Uri Uri, string Body, string ContentType)> Requests
+    {
+        get { lock (_lock) return [.. _requests]; }
+    }
+
+    public void Answer_With(HttpStatusCode status, string body)
+    {
+        lock (_lock)
+            _answers.Enqueue((status, body));
+    }
+
+    public void Then_Answer_With(HttpStatusCode status, string body) => Answer_With(status, body);
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var body = request.Content == null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
+        var contentType = request.Content?.Headers.ContentType?.ToString() ?? "";
+
+        (HttpStatusCode Status, string Body) answer;
+
+        lock (_lock)
+        {
+            _requests.Add((request.RequestUri!, body, contentType));
+
+            // AN UNSCRIPTED REQUEST IS A FAILURE, not a free OK. An earlier version repeated the
+            // last answer for ever, so a test whose subject quietly made one call more than it
+            // scripted went green on a fabricated success — the test passing for a reason that has
+            // nothing to do with what it claims.
+            if (_answers.Count == 0)
+                throw new InvalidOperationException($"the fake transport was asked for {request.RequestUri} with no answer scripted for it");
+
+            answer = _answers.Dequeue();
+        }
+
+        return new HttpResponseMessage(answer.Status) { Content = new StringContent(answer.Body) };
+    }
+}
