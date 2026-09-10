@@ -537,6 +537,101 @@ il prezzo giusto: prima era istantaneo perché buttava via il lavoro.
 
 **Dove.** `stage/4e-host-shutdown-timeout`.
 
+### Un turno lungo viene avvisato una volta, e il conto lo dice per intero
+
+**Com'era.** Un turno lungo veniva tagliato dall'orologio: alla scadenza dei trenta minuti la sessione
+era uccisa e le si chiedeva un rapporto. Il punto in cui si fermava lo scegliava la scure.
+
+**Cos'è adesso.** Passate circa trentacinque chiamate, alla sessione arriva **un solo avviso**: sei a
+questo punto, se sei arrivato a qualcosa di stabile salva e racconta, se sei a metà di una modifica
+finiscila prima. Non è un divieto: nulla viene bloccato, e continuare è sempre permesso. La scadenza
+resta la rete dura di prima.
+
+**Perché.** Con le sessioni fresche il trascinamento tra turni è finito, e la spesa si è concentrata
+**dentro** i turni lunghi: **misurato** il 2026-09-09, il 41% dei token dei membri stava in turni
+arrivati fino alla scadenza, e il contesto dentro uno di quei turni sale attorno ai 200.000, quindi
+ogni chiamata in più costa più della precedente. Un turno che finisce in un punto scelto costa meno di
+uno tagliato a caso.
+
+**Quello che questa voce racconta più della funzione.** La prima versione **non funzionava affatto** e
+i suoi ventuno test erano verdi: due informazioni lette dal messaggio della CLI si fondevano in una
+quando la seconda mancava — e mancava sempre, sulle sessioni che questo sistema avvia. I test
+passavano perché il messaggio finto che usavano conteneva un campo che quello vero non ha. Da lì due
+regole: **il messaggio finto di un test parte dalla forma vera**, e un test si giudica da una domanda
+sola — passerebbe anche se la funzione fosse spenta?
+
+**Cosa cambia per chi lo usa.** Nulla di visibile, se non che i turni lunghissimi dovrebbero
+diradarsi. L'avviso dice anche una cosa che prima non diceva: il numero di chiamate è **del turno**,
+non solo di chi lo riceve — un agente che ha delegato letture in parallelo ne ha spese molte senza
+vederle nella propria cronologia.
+
+**Dove.** `stage/4g-soft-boundary`.
+
+### Il supervisore viene svegliato per decidere, non per prendere nota
+
+**Com'era.** Ogni riga scritta da un membro svegliava il supervisore, e ogni suo risveglio gli fa
+rileggere tutta la propria memoria. **Misurato** dal 6 al 9 settembre: circa 400 risvegli, **247
+causati dai membri**, con un contesto medio di 398.000 token per chiamata — l'ordine di un milione di
+token per un risveglio, e il 15% dei suoi turni era lungo quanto un cenno del capo.
+
+**Cos'è adesso.** I messaggi del proprietario lo svegliano subito, come prima, su qualunque canale. Lo
+sveglia subito anche un membro che dichiara di essere bloccato o che fa una domanda, e il primo
+messaggio di un membro appena creato. I rapporti ordinari invece **si raccolgono**, per non più di
+cinque minuti, e viaggiano insieme: un equipaggio che consegna a raffica compra un turno, non tre. Gli
+avvisi meccanici dell'app non lo svegliano affatto — e non lo facevano già, cosa che si è scoperta
+verificando invece di supporre.
+
+**Perché.** È l'unico taglio grosso sul ruolo più costoso che **non tocca la sua memoria**, quindi non
+mette a rischio il suo giudizio. E il principio: chi decide va interrotto per una decisione, non per
+un aggiornamento.
+
+**Il prezzo pagato.** Un rapporto ordinario può aspettare fino a cinque minuti prima di essere letto.
+Il tetto è cinque minuti e non di più per una ragione precisa: a otto minuti l'app comincia a
+sollecitare il supervisore perché "deve un verdetto" — solleciterebbe per un rapporto che essa stessa
+sta trattenendo. Una configurazione oltre il tetto viene rifiutata, e il rifiuto **viene scritto nel
+registro** con entrambi i numeri.
+
+**Due difetti che questa voce deve raccontare, perché sono stati introdotti e corretti in giornata.**
+La prima versione funzionava **una volta sola**: il suo cronometro non veniva mai azzerato, quindi dal
+secondo rapporto in poi il supervisore si svegliava come prima. La seconda lo azzerava quando un turno
+*partiva* — ma un turno che parte e **fallisce** non consuma i messaggi, e allora il tentativo
+successivo si prendeva una finestra nuova: con tre tentativi un rapporto poteva aspettare venti minuti
+invece di cinque. Adesso il cronometro si spende **dove i messaggi lasciano davvero il canale**. Il
+difetto era lo stesso, spostato di confine: sono i posti dove una cosa "quasi sempre accade" a
+nascondere i casi in cui non accade.
+
+**Dove.** `stage/4h-wakeup-digest`.
+
+### Il revisore ha il suo modello, e la firma di un messaggio non dà privilegi
+
+**Com'era.** La configurazione aveva un modello per ruolo, ma non uno per il revisore né per il solo:
+entrambi ereditavano quello dell'implementatore. Dire "implementatore economico, revisore grosso" era
+letteralmente inesprimibile.
+
+**Cos'è adesso.** Ogni ruolo ha la sua chiave, lette tutte da un unico punto, e una chiave assente
+continua a seguire quella dell'implementatore — quindi una configurazione esistente si comporta
+esattamente come prima.
+
+**Cosa è stato tentato e ritirato, che è la parte che vale.** Insieme a questo era stata costruita una
+cosa più ambiziosa: il supervisore scriveva `MODEL: sonnet` nell'incarico e il bridge la leggeva. È
+stata **cancellata** dopo che una revisione avversaria ha dimostrato che si appoggiava a una firma
+falsificabile: l'autore di un messaggio, in questo sistema, è solo testo, e un membro che cita un
+messaggio nel proprio rapporto — cosa che il protocollo gli chiede — può far comparire una firma che
+non è sua. Un membro si sarebbe potuto assegnare il modello costoso. Il privilegio passerà per il
+foglietto di richiesta che il supervisore già usa: lì conta **dove** lo scrivi, non cosa ci scrivi.
+
+**Il principio, oltre questo caso.** Un privilegio non si concede sulla base di un'affermazione che
+chi ne beneficia può scrivere da sé. Dove serve autorizzare, l'autorizzazione deve venire da qualcosa
+che il richiedente non controlla.
+
+**Un difetto corretto nella stessa giornata.** Rendendo tollerante la lettura dei valori di
+configurazione (un numero scritto dove va una parola non deve impedire l'avvio dell'app) era stato
+riaperto, da un'altra porta, un difetto chiuso mesi prima: il motore del piano scivolava sul
+comportamento predefinito **in silenzio**. Ora un valore del tipo sbagliato arriva a chi lo deve
+rifiutare, e viene rifiutato ad alta voce.
+
+**Dove.** `stage/4i-model-per-task`.
+
 ### Un'impostazione che si legge una volta sola è un'impostazione che mente
 
 **Com'era.** Il modello del supervisore generale veniva fissato alla prima registrazione della
@@ -708,25 +803,28 @@ lì spento.
 - Il file di istruzioni del progetto principale è stato modificato benché sia territorio di chi ha
   scritto l'originale: andrà risolto al prossimo allineamento.
 
-**Tre modifiche scritte e tutte e tre fermate, la notte del 9 settembre.** Il consiglio a metà
-turno, il riassunto di risveglio del supervisore e la scelta del modello dentro l'incarico sono
-state scritte, verificate da chi le ha commissionate (diff letto, suite verde) e poi **rotte una per
-una da una revisione avversaria indipendente**, con una prova per ogni difetto. Nessuna è in
-produzione. I difetti, le prove e la lista di lavoro stanno in
-`docs/superpowers/specs/2026-09-09-review-findings-4g-4h-4i.md`; i rami sono `stage/4g-soft-boundary`,
-`stage/4h-wakeup-digest`, `stage/4i-model-per-task`.
+**Le tre modifiche di quella notte sono state fermate, corrette e consegnate il giorno dopo.** Il
+consiglio a metà turno, il riassunto di risveglio del supervisore e la chiave del revisore sono state
+scritte la notte del 9 settembre, **rotte una per una da una revisione avversaria indipendente** con
+una prova per ogni difetto, corrette, **rotte di nuovo** dalla seconda revisione — che ha trovato una
+regressione introdotta dalla prima correzione — corrette ancora, e messe in produzione il 10 settembre
+alle 11:43. Le tre voci qui sopra raccontano cosa fanno e cosa è costato; i difetti con le loro sonde
+stanno in `docs/superpowers/specs/2026-09-09-review-findings-4g-4h-4i.md`.
 
-Vale la pena dire *come* sono state rotte, perché sono tre volte lo stesso errore in tre posti
-diversi: **una funzione che non funziona affatto, dietro una suite verde.** Il consiglio a metà turno
-non arrivava mai, perché due campi vuoti si fondevano in uno — e tutti i suoi ventuno test passavano
-perché il messaggio finto usato nei test conteneva un campo che la CLI vera non manda. Il riassunto
-di risveglio funzionava una volta sola, perché il suo cronometro non veniva mai azzerato. La scelta
-del modello si appoggiava alla firma di un messaggio, che in questo sistema è solo testo.
+Vale la pena dire *come* erano rotte la prima volta, perché sono tre volte lo stesso errore in tre
+posti diversi: **una funzione che non funziona affatto, dietro una suite verde.** Il consiglio a metà
+turno non arrivava mai, perché due informazioni lette dal messaggio della CLI si fondevano in una — e
+tutti i suoi ventuno test passavano perché il messaggio finto che usavano conteneva un campo che
+quello vero non manda. Il riassunto di risveglio funzionava una volta sola, perché il suo cronometro
+non veniva mai azzerato. La scelta del modello si appoggiava alla firma di un messaggio, che in questo
+sistema è solo testo.
 
-**La lezione, che conta più delle tre funzioni.** Tre revisioni su tre hanno trovato difetti reali
-*dopo* che qualcuno aveva letto il diff e visto la suite verde — la stessa proporzione dell'audit del
-mattino. Quindi: nessuna modifica che cambia comportamento vivo va integrata senza la sua revisione
-avversaria, e chi la commissiona non è chi la certifica. E un test si giudica da una domanda sola:
+**La lezione, che conta più delle tre funzioni.** Cinque revisioni su cinque hanno trovato difetti
+reali *dopo* che qualcuno aveva letto il diff e visto la suite verde — e la seconda tornata ha trovato
+difetti nelle correzioni della prima, compresa una regressione che spostava un difetto da un confine
+raro a uno frequente. Quindi: nessuna modifica che cambia comportamento vivo va integrata senza la sua
+revisione avversaria, chi la commissiona non è chi la certifica, e **una correzione va revisionata come
+una modifica** — è codice nuovo, quindi superficie nuova. E un test si giudica da una domanda sola:
 passerebbe anche se la funzione fosse spenta? Se sì, non fissa nulla.
 
 **Una lezione di processo, che vale più di una funzione.** Il 2026-09-09 due filoni di lavoro sono

@@ -194,8 +194,41 @@ public static class SpawnCommand_Builder
 
     static string Build_ClaudeInvocation(string? model)
     {
-        var modelPart = string.IsNullOrWhiteSpace(model) ? string.Empty : $" --model {model}";
-        return $"claude{modelPart} {CLAUDE_LAUNCH_FLAGS}";
+        if (string.IsNullOrWhiteSpace(model))
+            return $"claude {CLAUDE_LAUNCH_FLAGS}";
+
+        Validate_Model(model);
+
+        return $"claude --model {model} {CLAUDE_LAUNCH_FLAGS}";
+    }
+
+    /// <summary>
+    /// THE MODEL WORD TRAVELS THROUGH A SHELL COMMAND, exactly like the orchestration id below, and
+    /// until 2026-09-10 it was the only part of this script that went in unprotected: role, id, member
+    /// and pid path are all single-quoted, and the model was interpolated bare into a PowerShell string
+    /// that is then base64-encoded and run. A value carrying a quote or a semicolon would have become
+    /// PowerShell in every session spawned with it. Found by the re-review of the per-role model keys,
+    /// which had just added two more places an owner types this word by hand.
+    ///
+    /// <para>
+    /// VALIDATED RATHER THAN QUOTED, for the reason the id beside it is: quoting a value that may
+    /// itself contain a quote only moves the problem, while the alphabet a model name actually uses —
+    /// letters, digits, dots and dashes — excludes every character that could end the argument. It
+    /// THROWS, naming the value: this is a spawn that must not happen, not a setting that can fall back
+    /// (`.claude/rules/code-conventions.md`: invariant violations throw, naming the bad value). The
+    /// bridge-driven runners are unaffected either way — they pass --model as a real argument, never
+    /// through a shell — so this closes the terminal path, which is the one that builds a script.
+    /// </para>
+    /// </summary>
+    static void Validate_Model(string model)
+    {
+        foreach (var character in model)
+        {
+            var valid = char.IsAsciiLetterOrDigit(character) || character == '-' || character == '_' || character == '.';
+
+            if (!valid)
+                throw new ArgumentException($"Model '{model}' contains invalid character '{character}' — a model name may hold letters, digits, '-', '_' or '.' (it travels through a shell command)");
+        }
     }
 
     static void Validate_OrchId(string orchId)

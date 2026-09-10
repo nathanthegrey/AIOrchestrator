@@ -114,4 +114,39 @@ public class SpawnCommandBuilderTests
         Assert.Equal(wtCommand.Arguments[wtCommand.Arguments.Count - 1], fallback.Arguments[fallback.Arguments.Count - 1]);
         Assert.Equal(@"C:\repos\arb", fallback.WorkingDirectory);
     }
+
+    /// <summary>
+    /// THE MODEL WORD CANNOT BECOME POWERSHELL. Everything else this script interpolates is
+    /// single-quoted; the model was bare until 2026-09-10, so a value carrying a quote or a semicolon
+    /// would have run as a command in every session spawned with it. The alphabet is the same one the
+    /// orchestration id is held to, and for the same stated reason: it travels through a shell.
+    /// </summary>
+    [Theory]
+    [InlineData("opus'; Remove-Item C:\\x; '")]
+    [InlineData("sonnet; whoami")]
+    [InlineData("opus`nwhoami")]
+    [InlineData("opus $(id)")]
+    [InlineData("opus|tee /tmp/x")]
+    public void AModelCarryingShellPunctuation_IsRefused_NamingTheValue(string model)
+    {
+        var refusal = Assert.Throws<ArgumentException>(() =>
+            SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", model, PID_FILE, null));
+
+        Assert.Contains(model, refusal.Message);
+        Assert.Contains("travels through a shell command", refusal.Message);
+    }
+
+    [Theory]
+    [InlineData("opus")]
+    [InlineData("sonnet")]
+    [InlineData("claude-opus-5")]
+    [InlineData("claude-sonnet-4.5")]
+    [InlineData("some_internal.alias-9")]
+    public void AModelSpelledTheWayModelsAreSpelled_IsAccepted(string model)
+    {
+        var command = SpawnCommand_Builder.Build_ForImplementer("arb-fix", "imp-1", @"C:\repos\arb", model, PID_FILE, null);
+        var script = SpawnCommand_Builder.Decode_SessionScript(command);
+
+        Assert.Contains($"claude --model {model} ", script);
+    }
 }
