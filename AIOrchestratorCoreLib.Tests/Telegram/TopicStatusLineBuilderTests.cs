@@ -301,9 +301,9 @@ public class TopicStatusLineBuilderTests
     [Fact]
     public void TheLastLineIsAddedOnlyWhenThereIsSomethingToSay()
     {
-        Assert.Contains("last", TopicStatusLine_Builder.Build(null, [], "gate cleared on 34e5515", NOW, aMessageIsAlreadyPosted: false));
+        Assert.Contains("last", TopicStatusLine_Builder.Build(null, [], Last("gate cleared on 34e5515"), NOW, aMessageIsAlreadyPosted: false));
         Assert.DoesNotContain("last", TopicStatusLine_Builder.Build(null, [], null, NOW, aMessageIsAlreadyPosted: false));
-        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build(null, [], "   ", NOW, aMessageIsAlreadyPosted: false));
+        Assert.DoesNotContain("last", TopicStatusLine_Builder.Build(null, [], Last("   "), NOW, aMessageIsAlreadyPosted: false));
     }
 
     /// <summary>
@@ -328,7 +328,7 @@ public class TopicStatusLineBuilderTests
                 Member("rev-2", Brief("reviewing the hooks branch", "2026-08-12 12:18")),
                 Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
             ],
-            "gate cleared on 34e5515",
+            Last("gate cleared on 34e5515"),
             NOW, aMessageIsAlreadyPosted: false);
 
         var lines = line.Split('\n');
@@ -365,7 +365,7 @@ public class TopicStatusLineBuilderTests
         var lines = TopicStatusLine_Builder.Build(
             null,
             [Member("imp-9", Brief(sevenWords, "2026-08-12 12:26"))],
-            sevenWords,
+            Last(sevenWords),
             NOW, aMessageIsAlreadyPosted: false).Split('\n');
 
         Assert.Equal("• imp-9 · migrate every supervisor session · working · 4 min", lines[1]);
@@ -391,7 +391,7 @@ public class TopicStatusLineBuilderTests
                 Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
                 Member("imp-4", Brief("the task", "2026-08-13 23:00")),
             ],
-            "gate cleared on 34e5515",
+            Last("gate cleared on 34e5515"),
             NOW, aMessageIsAlreadyPosted: false);
 
         Assert.DoesNotContain("  ", line);
@@ -411,7 +411,7 @@ public class TopicStatusLineBuilderTests
                 Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26")),
                 Member("rev-3", [Entry(1, ChannelAuthors.Reviewer, "rev-3 online", "2026-08-12 12:00")]),
             ],
-            "gate cleared on 34e5515",
+            Last("gate cleared on 34e5515"),
             NOW, aMessageIsAlreadyPosted: false).Split('\n');
 
         Assert.StartsWith("• imp-1", lines[1]);
@@ -431,7 +431,7 @@ public class TopicStatusLineBuilderTests
         var line = TopicStatusLine_Builder.Build(
             Progress(3, 4),
             [Member("imp-1", Brief("committing the marker fix", "2026-08-12 12:26"))],
-            "gate cleared on 34e5515",
+            Last("gate cleared on 34e5515"),
             NOW, aMessageIsAlreadyPosted: false);
 
         Assert.DoesNotContain("─", line);
@@ -701,5 +701,15 @@ public class TopicStatusLineBuilderTests
         return ChannelEntry_Factory.Create(
             index, author, stamp, subject, "body",
             $"## [{index}] FROM {author} — {stamp} — {subject}\nbody");
+    }
+
+    /// <summary>
+    /// Field 4's value as ONE argument, which is what it became on 2026-09-10. The clock defaults to
+    /// null so every test that only ever cared about the subject reads as it did — and a test that
+    /// wants the clock now has to name the event it belongs to, which is the whole point.
+    /// </summary>
+    static TopicLastEvent? Last(string subject, DateTime? at = null)
+    {
+        return new TopicLastEvent(subject, at);
     }
 }

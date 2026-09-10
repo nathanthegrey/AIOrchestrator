@@ -9241,7 +9241,6 @@ internal sealed class BridgeEngineModel(
                 // produce nothing instead of a confident wrong clock.
                 SupervisorDeclaredAt = declared == null ? null : Read_TrustedStamp_OrNull(lastSpoken?.DateText),
                 UsageLimitResumeAt = Read_UsageLimitResumeAt_OrNull(session),
-                LastEventAt = Read_TrustedStamp_OrNull(lastSpoken?.DateText),
                 OwnerAsks = asks,
             };
         }

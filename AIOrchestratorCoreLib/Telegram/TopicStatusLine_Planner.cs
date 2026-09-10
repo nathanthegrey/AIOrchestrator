@@ -97,7 +97,7 @@ public static class TopicStatusLine_Planner
         // own repost gate, and asking the engine to pass the same value twice is how two surfaces
         // come to disagree about whether a topic is muted.
         var text = TopicStatusLine_Builder.Build(
-            progress, members, Pick_LastSubject_OrNull(members, now), now, existingMessageId != null,
+            progress, members, Pick_LastEvent_OrNull(members, now), now, existingMessageId != null,
             figuresUnchangedFor, supervisorContext, fields with { Mode = mode });
 
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
@@ -172,14 +172,22 @@ public static class TopicStatusLine_Planner
 
 
     /// <summary>
-    /// The most recent real entry across the LIVE members, by the stamp the agent wrote. A closed
-    /// member does not feed this: one message must not disagree with itself about whether a member
-    /// exists.
+    /// The most recent real entry across the LIVE members, by the stamp the agent wrote — AND ITS
+    /// STAMP, which is the change of 2026-09-10. A closed member does not feed this: one message
+    /// must not disagree with itself about whether a member exists.
     ///
     /// App entries are not conversation — without that, /resume appends to every member channel in
     /// every orchestration and every topic simultaneously reads `last GO AHEAD`.
+    ///
+    /// <para>
+    /// IT USED TO RETURN THE SUBJECT ALONE and throw the winning entry away, so the clock beside it
+    /// had to come from somewhere else — and it came from another file. The entry it already holds
+    /// carries both, so returning both is not new work; it is stopping the discard. The stamp goes
+    /// through the same trusted reader that decides which entry WINS, so a future or unparseable
+    /// stamp reads as null here exactly as it loses there — one rule, not two.
+    /// </para>
     /// </summary>
-    public static string? Pick_LastSubject_OrNull(IReadOnlyList<ITopicStatusMember> members, DateTime now)
+    public static TopicLastEvent? Pick_LastEvent_OrNull(IReadOnlyList<ITopicStatusMember> members, DateTime now)
     {
         IChannelEntry? latest = null;
 
@@ -198,7 +206,12 @@ public static class TopicStatusLine_Planner
                 latest = candidate;
         }
 
-        return latest?.Subject;
+        if (latest == null)
+            return null;
+
+        return new TopicLastEvent(
+            latest.Subject,
+            SessionDuration_Formatter.Try_ReadTrustedStamp(latest.DateText, now, out var stamp) ? stamp : null);
     }
 
     /// <summary>

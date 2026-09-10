@@ -145,7 +145,7 @@ public class TopicStatusLinePlannerTests
             Member("imp-2", "stamped in the future", "2026-08-13 23:00"),
         };
 
-        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
+        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastEvent_OrNull(members, NOW)?.Subject);
     }
 
     /// <summary>An unparseable stamp loses rather than winning by accident.</summary>
@@ -158,7 +158,7 @@ public class TopicStatusLinePlannerTests
             Member("imp-2", "no date at all", "not a date"),
         };
 
-        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
+        Assert.Equal("the real latest", TopicStatusLine_Planner.Pick_LastEvent_OrNull(members, NOW)?.Subject);
     }
 
     /// <summary>And the ordinary case still picks the genuinely most recent.</summary>
@@ -171,7 +171,7 @@ public class TopicStatusLinePlannerTests
             Member("imp-2", "newer", "2026-08-12 14:55"),
         };
 
-        Assert.Equal("newer", TopicStatusLine_Planner.Pick_LastSubject_OrNull(members, NOW));
+        Assert.Equal("newer", TopicStatusLine_Planner.Pick_LastEvent_OrNull(members, NOW)?.Subject);
     }
 
     /// <summary>
@@ -209,6 +209,56 @@ public class TopicStatusLinePlannerTests
 
         Assert.Contains("the winning subject", lastFieldLine);
         Assert.DoesNotContain("older thing", lastFieldLine);
+    }
+
+    /// <summary>
+    /// FIELD 4'S CLOCK AND ITS SUBJECT COME FROM THE SAME EVENT — the owner's ruling of 2026-09-10,
+    /// and a defect nothing could have caught before it.
+    ///
+    /// <para>
+    /// What it was: the subject was the newest session entry across the live member SPOKES, and the
+    /// clock was the stamp on the supervisor's last entry in `owner-channel.md` — the same value that
+    /// fills "declared HH:MM" one field above. So a topic where the supervisor spoke at 10:00 and an
+    /// implementer reported at 14:55 rendered `last · 10:00 · &lt;the implementer's subject&gt;`. Two true
+    /// facts, one false sentence, in the field the owner reads to know when something last moved.
+    /// </para>
+    /// <para>
+    /// It survived because the two halves were never asserted TOGETHER: no test in the suite ever
+    /// set the clock at all. This asserts the pair — the winner's own stamp is printed, and the
+    /// loser's is absent — and the pair is now structural: the builder takes one
+    /// &lt;see cref="TopicLastEvent"/&gt;, so there is no second argument left to fill from a second file.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheLastFieldsClockIsTheClockOfTheEventItNames()
+    {
+        var plan = Plan(members:
+        [
+            Member("imp-1", "older thing", "2026-08-12 10:00"),
+            Member("imp-2", "the winning subject", "2026-08-12 14:55"),
+        ]);
+
+        var lastFieldLine = plan.Text.Split('\n').Single(line => line.StartsWith("last "));
+
+        Assert.Equal("last · 14:55 · the winning subject", lastFieldLine);
+        Assert.DoesNotContain("10:00", lastFieldLine);
+    }
+
+    /// <summary>
+    /// AND AN UNTRUSTWORTHY STAMP PRINTS NO CLOCK rather than a plausible one. The entry still WINS
+    /// the field on the rule that already governed the pick — this fixture has only one member, so
+    /// there is nothing to lose to — and its unreadable stamp simply prints nothing, which is
+    /// decision 12: a time is shown only when it was read from something an agent actually wrote in
+    /// a form that could be read.
+    /// </summary>
+    [Fact]
+    public void AnEventWhoseStampCannotBeReadPrintsNoClock()
+    {
+        var plan = Plan(members: [Member("imp-1", "the only subject", "not a date")]);
+
+        var lastFieldLine = plan.Text.Split('\n').Single(line => line.StartsWith("last "));
+
+        Assert.Equal("last · the only subject", lastFieldLine);
     }
 
     /// <summary>
@@ -746,7 +796,7 @@ public class TopicStatusLinePlannerTests
 
         Assert.Equal(
             "fix landed — 1316 green",
-            TopicStatusLine_Planner.Pick_LastSubject_OrNull([solo], NOW));
+            TopicStatusLine_Planner.Pick_LastEvent_OrNull([solo], NOW)?.Subject);
     }
 
     /// <summary>The app was already excluded, and still is — this pins that the new filter kept it out.</summary>
@@ -761,7 +811,7 @@ public class TopicStatusLinePlannerTests
             ],
             isClosed: false);
 
-        Assert.Equal("fix landed", TopicStatusLine_Planner.Pick_LastSubject_OrNull([solo], NOW));
+        Assert.Equal("fix landed", TopicStatusLine_Planner.Pick_LastEvent_OrNull([solo], NOW)?.Subject);
     }
 
     /// <summary>
@@ -780,7 +830,7 @@ public class TopicStatusLinePlannerTests
             ],
             isClosed: false);
 
-        Assert.Equal("brief — TASK 2", TopicStatusLine_Planner.Pick_LastSubject_OrNull([imp], NOW));
+        Assert.Equal("brief — TASK 2", TopicStatusLine_Planner.Pick_LastEvent_OrNull([imp], NOW)?.Subject);
     }
 
     static IChannelEntry Entry(int index, ChannelAuthors author, string stamp, string subject)

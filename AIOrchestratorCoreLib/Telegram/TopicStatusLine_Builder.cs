@@ -164,7 +164,7 @@ public static class TopicStatusLine_Builder
     public static string Build(
         IPlanProgress? progress,
         IReadOnlyList<ITopicStatusMember> members,
-        string? lastSubject,
+        TopicLastEvent? lastEvent,
         DateTime now,
         bool aMessageIsAlreadyPosted,
         TimeSpan? figuresUnchangedFor = null,
@@ -199,7 +199,7 @@ public static class TopicStatusLine_Builder
         // question on a topic whose ledger has not been written yet must still reach the owner.
         var hasSubstance = live.Count > 0
             || (progress != null && progress.Total > 0)
-            || !string.IsNullOrWhiteSpace(lastSubject)
+            || !string.IsNullOrWhiteSpace(lastEvent?.Subject)
             || asks.Count > 0;
 
         if (!hasSubstance)
@@ -227,8 +227,8 @@ public static class TopicStatusLine_Builder
         // one more session called "last". Not having the bullet is what separates it now that the
         // divider is gone. It affords two more task words than a member row because it carries no
         // duration — a longer field, in a shorter row.
-        if (!string.IsNullOrWhiteSpace(lastSubject))
-            lines.Add(Build_LastLine(lastSubject, fields.LastEventAt, now));
+        if (lastEvent != null && !string.IsNullOrWhiteSpace(lastEvent.Value.Subject))
+            lines.Add(Build_LastLine(lastEvent.Value, now));
 
         if (progress != null && progress.Total > 0)
             lines.Add(Build_MergedLine(progress, figuresUnchangedFor));
@@ -536,17 +536,20 @@ public static class TopicStatusLine_Builder
     /// different field.
     /// </para>
     /// <para>
-    /// WHICH event this is remains <c>TopicStatusLine_Planner.Pick_LastSubject_OrNull</c>'s to decide
-    /// — the last session entry across the live members, by trusted stamp. This method words it.
+    /// WHICH event this is remains <c>TopicStatusLine_Planner.Pick_LastEvent_OrNull</c>'s to decide
+    /// — the last session entry across the live members, by trusted stamp, WITH the stamp of that
+    /// same entry. This method words it, and can no longer be handed a mismatched pair.
     /// </para>
     /// </summary>
-    static string Build_LastLine(string lastSubject, DateTime? lastEventAt, DateTime now)
+    static string Build_LastLine(TopicLastEvent lastEvent, DateTime now)
     {
-        var clock = TopicStatusWording.Clock_OrNull(lastEventAt, now);
+        // ONE ARGUMENT, so the clock and the subject cannot come from different events. They used to
+        // be two parameters filled from two files — see TopicLastEvent for what that rendered.
+        var clock = TopicStatusWording.Clock_OrNull(lastEvent.At, now);
 
         var clockPart = clock == null ? "" : $"{clock}{FIELD_SEPARATOR}";
 
-        return $"last{FIELD_SEPARATOR}{clockPart}{TextSummary_Formatter.Summarize_Task(lastSubject, MEMBER_TASK_WORDS + 2)}";
+        return $"last{FIELD_SEPARATOR}{clockPart}{TextSummary_Formatter.Summarize_Task(lastEvent.Subject, MEMBER_TASK_WORDS + 2)}";
     }
 
     /// <summary>

@@ -24,6 +24,33 @@ namespace AIOrchestratorCoreLib.Telegram;
 public readonly record struct TopicOwnerAsk(string Source, string What, DateTime? Since = null);
 
 /// <summary>
+/// PULSE's field 4 — the last relevant event, AS ONE VALUE: `last · 18:00 · FIN-D-293 merged to
+/// staging`.
+///
+/// <para>
+/// THE PAIR IS THE POINT. The clock and the subject used to arrive separately and from DIFFERENT
+/// FILES: the subject was the newest session entry across the live member spokes, and the clock was
+/// the stamp on the supervisor's last entry in `owner-channel.md` — the same value that fills
+/// "declared HH:MM" one field above. So a topic where the supervisor had spoken at 18:00 and an
+/// implementer had reported at 18:47 rendered `last · 18:00 · &lt;the implementer's subject&gt;`: two true
+/// facts, one false sentence, and the owner reads that line to know when something last moved.
+/// </para>
+/// <para>
+/// Nothing was wrong with either half, which is why nothing caught it — no test ever set the clock
+/// (grep found not one `LastEventAt` in the suite), because the two halves were never asserted
+/// together. A record makes the pairing structural: there is no longer a way to hand the builder a
+/// time from one event and a subject from another, because there is only one argument.
+/// </para>
+/// <para>
+/// <paramref name="At"/> stays nullable, and null prints no clock rather than borrowing `now` —
+/// which would date every event to the moment the line was drawn. An agent-written stamp that cannot
+/// be trusted (unparseable, or in the future) arrives here as null by the same rule that already
+/// keeps it from winning the field at all.
+/// </para>
+/// </summary>
+public readonly record struct TopicLastEvent(string Subject, DateTime? At);
+
+/// <summary>
 /// The inputs PULSE needs that are not derivable from the ledger and the member channels — passed
 /// as ONE named value rather than a growing tail of optional parameters.
 ///
@@ -59,10 +86,6 @@ public readonly record struct TopicOwnerAsk(string Source, string What, DateTime
 /// because it is the one thing it knows for certain — and it is what the false stall alerts of
 /// 2026-09-09 were actually looking at: a supervisor that was not waiting for the owner but paused.
 /// </param>
-/// <param name="LastEventAt">
-/// When the `last` event happened, for its `HH:MM`. Null prints the event without a clock rather
-/// than borrowing `now`, which would date every event to the moment the line was drawn.
-/// </param>
 /// <param name="OwnerAsks">
 /// What the APP knows the owner is being waited on for — the open questions on the owner channel,
 /// which PULSE cannot see for itself: the builder is handed per-member channels, and a supervisor's
@@ -74,7 +97,11 @@ public readonly record struct TopicStatusFields(
     string? SupervisorDeclaredState = null,
     DateTime? SupervisorDeclaredAt = null,
     DateTime? UsageLimitResumeAt = null,
-    DateTime? LastEventAt = null,
+
+    // NO `LastEventAt` HERE ANY MORE. It was the second half of field 4, filled by the engine from
+    // the owner channel while the first half came from the member spokes — see TopicLastEvent for
+    // what that rendered. The pair now travels together as one argument to the builder, and the only
+    // way to keep this field would be to keep the two-source bug available.
     IReadOnlyList<TopicOwnerAsk>? OwnerAsks = null);
 
 /// <summary>
