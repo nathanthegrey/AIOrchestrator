@@ -196,7 +196,8 @@ sub-agents, no extra shell work**. Be reachable fast; learn things when a reques
   **THE MARKER WORDS ARE NOT SPELLED HERE ANY MORE, AND THAT IS DELIBERATE.** `QUESTION:`, `OPTION:`,
   `STATE:`, the header shape — the tool writes them, from ONE file it and the app both read
   (`kit/grammar/channel-grammar.json`). Three pages plus nine code files each carrying their own copy
-  is how `QUESTION:` came to be written on one side and `QUESTION` recognised on the other.
+  is how the question marker came to be written WITH its colon on one side and matched WITHOUT it on
+  the other, in three files, each looking correct where it sat.
   **The LIMITS above still stand and you still need them** — 3 lines, 5 the ceiling, 600 characters,
   2 to 4 options, 28 characters a label — because they govern what you decide to say, which no tool
   can do for you. The difference is that you no longer type the syntax that carries it, and the tool
