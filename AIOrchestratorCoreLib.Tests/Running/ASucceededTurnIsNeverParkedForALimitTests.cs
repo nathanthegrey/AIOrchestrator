@@ -71,12 +71,30 @@ public class ASucceededTurnIsNeverParkedForALimitTests
         Assert.True(held.Wait(TimeSpan.FromSeconds(10)), "the test could not take the channel gate it is testing against");
 
         bool counted;
+        var observedFailedAttempts = 0;
 
         try
         {
             // Every append the turn makes now fails: its reply, and then its turn_ended record. The
             // turn itself exits 0 with is_error false and no api_error_status.
-            counted = PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Implementer, orchId, memberId).FailedAttempts >= 1, TimeSpan.FromSeconds(60));
+            counted = PrintRunnerTestHarness.Drive_Until(
+                dispatcher,
+                () =>
+                {
+                    // OBSERVED, NOT RE-READ. The attempt count is recorded at the instant the
+                    // predicate sees it, because the assertion below used to take a SECOND reading
+                    // after Stop_Async and could find 0 where Drive_Until had just found 1 — the
+                    // state file is written by the dispatcher while the test reads it, so the two
+                    // readings are two different facts. That gave one claim two routes to being
+                    // true and one route to being falsely false: red once in three full runs on
+                    // 2026-09-10, with the message "the attempt was not counted" while `counted`
+                    // was itself true. Decision 20's corollary — never assert on a state with two
+                    // routes to it — applies to a state read twice as much as to one reached twice.
+                    observedFailedAttempts = harness.Read_State(SessionRoles.Implementer, orchId, memberId).FailedAttempts;
+
+                    return observedFailedAttempts >= 1;
+                },
+                TimeSpan.FromSeconds(60));
         }
         finally
         {
@@ -93,6 +111,6 @@ public class ASucceededTurnIsNeverParkedForALimitTests
         // never be retried by anything except the owner noticing.
         Assert.Null(state.RetryNotBeforeUtc);
         Assert.True(counted, $"the successful turn was PARKED instead of counted — failed_attempts {state.FailedAttempts}, retry_not_before {state.RetryNotBeforeUtc:O}");
-        Assert.True(state.FailedAttempts >= 1, "the attempt was not counted, so this turn can never stall or alert");
+        Assert.True(observedFailedAttempts >= 1, "the attempt was not counted, so this turn can never stall or alert");
     }
 }
