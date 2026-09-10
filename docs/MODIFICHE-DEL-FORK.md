@@ -6,8 +6,8 @@ messaggi di commit e le spec in `docs/superpowers/specs/`.
 
 Base: `ours/integration` sopra `master`. Al 2026-09-10 sono **152 commit** raggruppati in **50 rami
 `stage/*`** fusi, ognuno tenuto integrabile su `master` per conto proprio. Tutto quello che c'è qui fino
-alla sezione 5 è girato in produzione sul server dal 2026-09-09; il blocco Telegram della sezione 6
-(rami `8a`–`8d`, `9a`, `9b`, `11`) è fuso e va in produzione il 2026-09-10. Suite: **3187 test, 9
+alla sezione 5 è girato in produzione sul server dal 2026-09-09; il blocco Telegram (rami `8a`–`8e`,
+`9a`, `9b`, `11`, `12`, `13`) è fuso e va in produzione il 2026-09-10. Suite: **3259 test, 9
 saltati**, verde in seriale a macchina quieta; in parallelo sotto carico ha ancora circa un rosso a
 corsa nella famiglia dei test a tempo reale (misurato il 10/9, due corse, due test diversi, entrambi
 verdi da soli) — è il primo debito aperto della sezione 7.
@@ -324,7 +324,7 @@ PULSE (⏸ `/wait` ↔ ▶ `/go`, con il conteggio dei trattenuti); `WAIT` e `GO
 Un vincolo di Telegram ha scelto le emoji: i bot possono mettere una sola reazione per messaggio, da una
 lista fissa in cui ✅ non c'è.
 
-**Dove.** `stage/9c-receipts-are-reactions` (in consegna il 2026-09-10).
+**Dove.** `stage/12`.
 
 ### Chiudere un'orchestrazione cancella il suo argomento, davvero
 
@@ -944,6 +944,40 @@ chi scrive e da chi legge — è deciso e sta nella sezione 7.
 
 **Dove.** `stage/8e-durations-and-the-general-header`.
 
+### Le voci di canale si scrivono con uno strumento che controlla prima, e la grammatica ha una casa sola
+
+**Com'era.** Per far arrivare una domanda con i bottoni, il supervisore doveva scrivere a mano, byte per
+byte, `QUESTION:`, `OPTION:`, `RECOMMEND:`, `RISK:`, `ROW:` sotto un'intestazione di cui indovinava anche
+numero e ora. La grammatica viveva in tre manuali e in nove file di codice, ognuno con la sua copia: da
+una parte il marcatore era scritto con i due punti, dall'altra riconosciuto senza. Ogni scostamento era
+silenzioso: la domanda arrivava senza bottoni, o non arrivava. Lo strumento di scrittura accettava
+qualunque firma: un membro poteva firmarsi «supervisore», ed è così che una scelta di modello è sparita da
+un incarico. Il pacchetto di memoria indovinava l'incarico di un membro dalla prima parola dell'oggetto.
+
+**Cos'è adesso.** La grammatica è **un file dati** (`kit/grammar/channel-grammar.json`) letto sia dallo
+strumento di scrittura (bash) sia dall'app (.NET, che lo incorpora): nessun altro posto può scrivere un
+marcatore, e un test lo verifica cercandolo. Lo strumento che già era «l'unico modo di scrivere su un
+canale» accetta i tipi (`--question`, `--option`, `--recommend`, `--risk`, `--row`, `--state`,
+`--report`, `--attach`), calcola da sé numero e ora della voce, e **rifiuta prima di scrivere** nominando
+i campi mancanti. L'autore lo deduce dal ruolo che il lanciatore esporta alla sessione: una firma che non
+corrisponde è rifiutata. Ogni voce porta un **tipo dichiarato** su una riga sotto l'intestazione, e il
+pacchetto di memoria sceglie l'incarico dal tipo, non dalla parola. Le voci vecchie, senza tipo, si leggono
+esattamente come prima: la transizione è per costruzione, e un test fissa che una storia interamente
+«senza tipo» si comporti come ieri.
+
+**Perché.** Un formato che un modello deve riprodurre a mano è un formato che ogni tanto sbaglia, e qui
+lo sbaglio costava una decisione. Spostare il controllo **prima** della scrittura elimina la classe di
+errore, non il singolo caso; tenere la grammatica in un file letto da chi scrive e da chi legge elimina la
+deriva fra le copie (le decisioni 12 e 13 del file di istruzioni sono la storia di quella deriva). Il
+prezzo: lo strumento dipende da `jq`, che il kit già richiedeva; e le sessioni vive con il manuale vecchio
+continuano a scrivere a mano finché non vengono riavviate con il kit nuovo — per questo la lettura delle
+due forme resta.
+
+**Cosa cambia per chi lo usa.** Niente sul telefono. Cambia per gli agenti: non «scrivi questa
+intestazione», ma «chiama lo strumento».
+
+**Dove.** `stage/13`.
+
 ---
 
 ## 6. Il ponte con Telegram: che cosa regge sotto
@@ -1047,17 +1081,10 @@ supervisore sono cambiate (ri-fa la domanda dopo «Let's talk», dichiara il suo
 PULSE); con il binario nuovo e le istruzioni vecchie le decisioni discusse non verrebbero più riproposte.
 La prima sera è una misura: quante volte vibra il telefono, e se i sei campi di PULSE dicono il vero.
 
-**In consegna.** Le ricevute come reazioni (sezione 1). Il metro unico di brevità (sezione 5) è atterrato
-il 10/9 pomeriggio, con una guardia che legge il manuale del supervisore e verifica che citi i numeri del
-codice.
-
-**Deciso, non iniziato.** Le voci di canale scritte attraverso uno strumento che controlla prima di
-scrivere: la grammatica dei marcatori (`QUESTION:`, `OPTION:`…) oggi vive in tre manuali e in chi la
-legge, e ogni scostamento è silenzioso. Lo strumento calcola da sé numero e ora della voce, rifiuta un
-autore che non è il ruolo della sessione, e scrive un tipo dichiarato che chi legge — ponte, riassunto,
-pacchetto di memoria — usa al posto di indovinare dalla prima parola. Chi scrive e chi legge leggono la
-stessa costante. Parte da solo, dopo che il blocco Telegram è in produzione, tenendo per un periodo la
-lettura di entrambe le forme.
+**Consegnato tutto il blocco.** I sei pacchetti dell'audit Telegram sono fusi su `ours/integration`
+(le ricevute come reazioni e le voci tipizzate sono atterrate il 10/9 pomeriggio); il deploy — binario e
+kit nello stesso passo, lo strumento di scrittura compreso — è del proprietario. Resta da fare G, la suite
+affidabile sotto carico, deciso per dopo.
 
 **Cose aperte, dette perché non sembrino risolte.**
 - **La suite non è affidabile sotto carico — deciso: si fa dopo A–F.** Verde in seriale a macchina
