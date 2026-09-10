@@ -417,7 +417,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
             result.ExitCode, result.TimedOut, result.IsError, result.Subtype, result.ResultText, result.SessionId,
             result.TotalCostUsd == null && bootCost == 0 ? null : (result.TotalCostUsd ?? 0) + bootCost,
             result.DurationMs, result.DurationApiMs, result.NumTurns, result.ApiErrorStatus,
-            result.RawStdout, result.RawStderr, result.Elapsed + bootElapsed);
+            result.RawStdout, result.RawStderr, result.Elapsed + bootElapsed, supersededFinals: result.SupersededFinals);
     }
 
     static string Describe_Stderr(string stderr)

@@ -113,7 +113,10 @@ public static class TurnLog_Store
 
     static void Append_TurnResult(string logFile, string requestId, ITurnResult result, string kind)
     {
-        var record = StreamTurn.StreamEvent_Reader.Parse_OrNull(result.RawStdout) ?? new JsonObject
+        // THE RESULT LINE, not the whole of stdout. Both transports now speak NDJSON, and a blob of
+        // several lines parses as nothing — which would file every print turn as the synthesised
+        // record below and quietly drop the fields /tail reads.
+        var record = TurnResult.TurnResult_Parser.Find_TurnDocument_OrNull(result.RawStdout) ?? new JsonObject
         {
             ["type"] = "result",
             ["subtype"] = result.Subtype,

@@ -39,7 +39,9 @@ public class PrintTurnDispatcherTests
         var args = PrintRunnerTestHarness.Args(invocation);
 
         // A1.2 — the command line.
-        Assert.Equal(["-p", "--output-format", "json", "--name", $"{orchId}-{memberId}", "--session-id", state.SessionId, "--model", "haiku", "--dangerously-skip-permissions", $"/implementer {orchId}/{memberId}"], args);
+        // STREAM-JSON SINCE STAGE 19, with the --verbose the CLI demands beside it: both transports read
+        // the same event stream, so a superseded final report is visible on this one too.
+        Assert.Equal(["-p", "--output-format", "stream-json", "--verbose", "--name", $"{orchId}-{memberId}", "--session-id", state.SessionId, "--model", "haiku", "--dangerously-skip-permissions", $"/implementer {orchId}/{memberId}"], args);
         Assert.Equal("argument", invocation["prompt_source"]!.GetValue<string>());
         Assert.Equal("implementer", invocation["env"]!["AIORCH_ROLE"]!.GetValue<string>());
         Assert.Equal(orchId, invocation["env"]!["AIORCH_ID"]!.GetValue<string>());

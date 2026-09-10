@@ -71,4 +71,12 @@ public static class PrintTurn_Words
 
     /// <summary>Subject prefix of the note written when part of a reply named a channel the session is not woken by.</summary>
     public const string MISADDRESSED_SUBJECT = "reply not addressable";
+
+    /// <summary>
+    /// Subject prefix of the note written when a turn wrote a final message and then went on to
+    /// write another — the second one becomes the entry, and the first would otherwise be lost.
+    /// Agent audience: it is the SESSION that has to change what it does (wait for its background
+    /// sub-agents before writing the report), and the owner cannot act on it (decision 15).
+    /// </summary>
+    public const string SUPERSEDED_FINAL_SUBJECT = "an earlier final message was superseded";
 }

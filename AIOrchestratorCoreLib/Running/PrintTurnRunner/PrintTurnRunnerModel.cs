@@ -86,7 +86,11 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation, ISessio
         if (cancelled)
             cancellationToken.ThrowIfCancellationRequested();
 
-        return TurnResult_Parser.Parse(timedOut ? -1 : process.ExitCode, timedOut, stdout, stderr, stopwatch.Elapsed);
+        // READ AS A STREAM, because that is what the command line now asks for (stage 19). The
+        // reader falls back to the legacy single-document reading when there is no `result` line, so
+        // a caller that still passes `--output-format json` — the runner's own unit tests do — is
+        // parsed exactly as it always was.
+        return TurnResult_Parser.Parse_Stream(timedOut ? -1 : process.ExitCode, timedOut, stdout, stderr, stopwatch.Elapsed);
     }
 
     static ProcessStartInfo Build_StartInfo(IClaudeInvocation invocation, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlyDictionary<string, string> environment)

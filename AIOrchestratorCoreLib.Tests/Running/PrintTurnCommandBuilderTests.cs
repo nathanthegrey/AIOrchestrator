@@ -20,7 +20,7 @@ public class PrintTurnCommandBuilderTests
     {
         var arguments = PrintTurnCommand_Builder.Build_Arguments(State(SessionRoles.Implementer), RoleRunnerConfig_Factory.Create_Default(SessionRoles.Implementer), SESSION_ID, resumeTranscript: false, null);
 
-        Assert.Equal(["-p", "--output-format", "json", "--name", "orch-1-imp-1", "--session-id", SESSION_ID, "--model", "opus", "--dangerously-skip-permissions", "/implementer orch-1/imp-1"], arguments);
+        Assert.Equal(["-p", "--output-format", "stream-json", "--verbose", "--name", "orch-1-imp-1", "--session-id", SESSION_ID, "--model", "opus", "--dangerously-skip-permissions", "/implementer orch-1/imp-1"], arguments);
     }
 
     [Fact]
@@ -28,7 +28,7 @@ public class PrintTurnCommandBuilderTests
     {
         var arguments = PrintTurnCommand_Builder.Build_Arguments(State(SessionRoles.Implementer), RoleRunnerConfig_Factory.Create_Default(SessionRoles.Implementer), SESSION_ID, resumeTranscript: true, null);
 
-        Assert.Equal(["-p", "--output-format", "json", "--name", "orch-1-imp-1", "--resume", SESSION_ID, "--model", "opus", "--dangerously-skip-permissions"], arguments);
+        Assert.Equal(["-p", "--output-format", "stream-json", "--verbose", "--name", "orch-1-imp-1", "--resume", SESSION_ID, "--model", "opus", "--dangerously-skip-permissions"], arguments);
         Assert.DoesNotContain("--session-id", arguments);
     }
 

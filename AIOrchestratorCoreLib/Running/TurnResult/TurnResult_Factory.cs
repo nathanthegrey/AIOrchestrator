@@ -17,9 +17,10 @@ public static class TurnResult_Factory
         string rawStdout,
         string rawStderr,
         TimeSpan elapsed,
-        bool nothingToClose = false)
+        bool nothingToClose = false,
+        IReadOnlyList<string>? supersededFinals = null)
     {
-        return new TurnResultModel(exitCode, timedOut, isError, subtype, resultText, sessionId, totalCostUsd, durationMs, durationApiMs, numTurns, apiErrorStatus, rawStdout, rawStderr, elapsed, nothingToClose);
+        return new TurnResultModel(exitCode, timedOut, isError, subtype, resultText, sessionId, totalCostUsd, durationMs, durationApiMs, numTurns, apiErrorStatus, rawStdout, rawStderr, elapsed, nothingToClose, supersededFinals ?? []);
     }
 
     /// <summary>
@@ -35,6 +36,6 @@ public static class TurnResult_Factory
         return Create(
             source.ExitCode, source.TimedOut, source.IsError, source.Subtype, source.ResultText, source.SessionId,
             source.TotalCostUsd, source.DurationMs, source.DurationApiMs, source.NumTurns, source.ApiErrorStatus,
-            source.RawStdout, source.RawStderr, source.Elapsed, nothingToClose: true);
+            source.RawStdout, source.RawStderr, source.Elapsed, nothingToClose: true, source.SupersededFinals);
     }
 }

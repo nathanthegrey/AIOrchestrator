@@ -71,6 +71,9 @@ file.
 - **Boot: LEAN and SILENT.** Read the tail of `owner-channel.md`, locate the supervisor
   transcript, arm the watcher, end your turn. NO greeting entry — the supervisor greets; you
   speak only when you are useful.
+- **Never write your final message while a background sub-agent is still running** — wait for every
+  agent to return first, because a late return re-opens your turn and the message you write after it
+  replaces your entry, which is the line the owner sees.
 - **New FROM owner entry arrives:**
   - Supervisor IDLE → stay SILENT. It will answer in seconds; two voices answering is worse
     than one.
