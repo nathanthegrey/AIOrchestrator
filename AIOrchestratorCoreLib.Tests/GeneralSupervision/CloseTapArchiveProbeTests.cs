@@ -452,7 +452,7 @@ internal sealed class TappableTelegram_Fake : ITelegramApiClient
         return Edit_MessageText_Async(messageId, html, cancellationToken);
     }
 
-    public Task<long> Create_ForumTopic_Async(string topicName, CancellationToken cancellationToken)
+    public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken)
     {
         return Task.FromResult(7777L);
     }

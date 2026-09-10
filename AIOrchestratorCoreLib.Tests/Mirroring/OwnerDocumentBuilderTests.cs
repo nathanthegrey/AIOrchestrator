@@ -1,5 +1,6 @@
 using System.Text;
 using AIOrchestratorCoreLib.Mirroring;
+using AIOrchestratorCoreLib.Telegram;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Mirroring;
@@ -84,12 +85,21 @@ public class OwnerDocumentBuilderTests
         Assert.Equal(new string('z', caption.Length), caption);
     }
 
+    /// <summary>
+    /// MEASURED AS TELEGRAM MEASURES IT (brief F4, 2026-09-10): the caption cap, like the message
+    /// cap, counts characters AFTER entity parsing [documented], so the <c>&amp;amp;</c> expansions
+    /// this fixture is made of do not each cost five. The property is unchanged — the caption must
+    /// be one Telegram accepts, because a refused caption fails the whole sendDocument and takes
+    /// the file with it.
+    /// </summary>
     [Fact]
     public void AnEscapableFirstLine_StillFitsTheCaptionCap()
     {
         var caption = OwnerDocument_Builder.Build_CaptionHtml(string.Concat(Enumerable.Repeat("<a> & ", 600)) + "\nbody");
 
-        Assert.True(caption.Length <= OwnerDocument_Builder.CAPTION_LIMIT, $"caption is {caption.Length} characters");
+        var parsed = TelegramText_Ruler.Count_AfterEntityParsing(caption);
+
+        Assert.True(parsed <= OwnerDocument_Builder.CAPTION_LIMIT, $"caption is {parsed} characters after entity parsing");
         Assert.DoesNotContain("<a>", caption, StringComparison.Ordinal);
     }
 

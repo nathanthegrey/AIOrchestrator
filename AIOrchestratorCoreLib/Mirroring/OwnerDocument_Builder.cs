@@ -98,11 +98,17 @@ public static class OwnerDocument_Builder
     {
         var firstLine = Read_FirstLine(text);
 
-        while (TelegramHtml_Renderer.Render(firstLine).Length > CAPTION_LIMIT && firstLine.Length > 1)
+        while (TelegramText_Ruler.Count_AfterEntityParsing(TelegramHtml_Renderer.Render(firstLine)) > CAPTION_LIMIT
+            && firstLine.Length > 1)
         {
             // Halved rather than trimmed to the overshoot: escaping grows characters unevenly, so
             // subtracting the difference can loop many times on a line that is mostly markup.
-            firstLine = firstLine[..Math.Max(1, firstLine.Length / 2)];
+            //
+            // AND NEVER THROUGH THE MIDDLE OF AN EMOJI (brief F4): a caption that ends in half a
+            // surrogate pair is a 400 on sendDocument, which fails the WHOLE upload — the file, not
+            // just its caption. Truncate_WholeCharacters gives back at most one code unit, so the
+            // halving still terminates.
+            firstLine = TelegramText_Ruler.Truncate_WholeCharacters(firstLine, Math.Max(1, firstLine.Length / 2));
         }
 
         return TelegramHtml_Renderer.Render(firstLine);

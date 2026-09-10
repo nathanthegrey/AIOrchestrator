@@ -51,6 +51,48 @@ public static class TokenBucket_Gate
     public const double DEFAULT_CAPACITY = TELEGRAM_GROUP_MESSAGES_PER_MINUTE / 2;
 
     /// <summary>
+    /// THE SECOND BUCKET: edits, deletes and <c>answerCallbackQuery</c> (brief F5).
+    ///
+    /// <para>
+    /// They were metered by NOTHING. The opt-in above is deliberately narrow — it covers the calls
+    /// that CREATE A MESSAGE, which is what Telegram's twenty-a-minute ceiling counts — and the
+    /// reasoning for keeping edits out of it is still right: spending the message allowance on an
+    /// edit is spending it on something the ceiling does not charge for, and queueing an
+    /// <c>answerCallbackQuery</c> behind a mirror backlog hangs a button spinner on the owner's
+    /// phone. But "not on the message bucket" was implemented as "on no bucket at all", and this app
+    /// edits a topic's status line, its name and its command bar on a tick — the edits are its
+    /// HIGHEST-VOLUME traffic, and the only thing that has ever slowed them down is a 429 arriving.
+    /// </para>
+    /// <para>
+    /// LARGER, AND THE NUMBER IS A GUESS — stated as one. Telegram documents no per-chat edit limit,
+    /// so this cannot be derived the way <see cref="DEFAULT_CAPACITY"/> is derived from a published
+    /// ceiling. Sixty a minute is several times the app's own steady rate and well under anything
+    /// observed to draw a 429, and the same capacity-plus-refill arithmetic is applied to it: 30 + 30
+    /// = 60. It is a brake against a runaway, not a model of a limit — the 429 handling remains what
+    /// actually respects the limit.
+    /// </para>
+    /// </summary>
+    public const double CONTROL_CALLS_PER_MINUTE = 60;
+
+    /// <summary>Half the ceiling, for the reason <see cref="DEFAULT_CAPACITY"/> gives: capacity + one window's refill must fit.</summary>
+    public const double CONTROL_CAPACITY = CONTROL_CALLS_PER_MINUTE / 2;
+
+    /// <summary>
+    /// The longest a 429 may hold a CONTROL call — far shorter than the message one, and the
+    /// shortness is the whole point.
+    ///
+    /// <para>
+    /// Retrying these used to be forbidden outright, for a measured reason: a 429 carrying
+    /// <c>retry_after: 300</c> slept five minutes twice inside a single two-second mirror tick, and
+    /// for a callback query the wait was worse than useless because Telegram invalidates one after
+    /// about ten seconds. Two seconds covers the burst a 429 on an edit actually is, cannot hold a
+    /// tick open, and leaves a callback query most of its life. Past it the failure goes to the
+    /// caller, where the per-channel backoff already lives.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan MAXIMUM_CONTROL_RETRY_WAIT = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// The bucket after time has passed, and how long the caller must wait before spending a token.
     ///
     /// <para>

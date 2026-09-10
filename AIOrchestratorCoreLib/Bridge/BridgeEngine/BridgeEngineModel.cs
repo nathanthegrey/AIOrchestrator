@@ -60,7 +60,12 @@ internal sealed class BridgeEngineModel(
     EngineStateSnapshot restoredState,
     IClock clock,
     IBridgeEngineTiming timing,
-    Hosting.HostWindowing.IHostWindowing hostWindowing) : IBridgeEngine
+    Hosting.HostWindowing.IHostWindowing hostWindowing,
+
+    // The OUTBOUND ALLOWANCE the Telegram client spends from, held here only so it can be written
+    // into .bridge-state.json beside the cursor (brief F5) — the engine never asks it for a token.
+    // Null in file-only mode and on the test seams that hand in their own client.
+    Telegram.TelegramSendBudget.ITelegramSendBudget? sendBudget = null) : IBridgeEngine
 {
     /// <summary>
     /// WHAT THIS HOST CAN DO WITH WINDOWS, asked rather than assumed. The engine used to call
@@ -4156,12 +4161,19 @@ internal sealed class BridgeEngineModel(
 
         var exists = File.Exists(path);
         var length = exists ? new FileInfo(path).Length : 0L;
-        var verdict = EntryAttachment_Policy.Decide(path, allowedRoots, exists, length, asPicture);
+
+        // MEASURED ONLY FOR A PICTURE, and only when the file is really there: Telegram's dimension
+        // rule applies to sendPhoto alone, and reading a header off a missing path buys a caught
+        // exception rather than an answer. Null when the format cannot be measured — which means
+        // ALLOW, see ImageDimensions_Reader.
+        var dimensions = exists && asPicture ? Telegram.ImageDimensions_Reader.Read_FromFile_OrNull(path) : null;
+
+        var verdict = EntryAttachment_Policy.Decide(path, allowedRoots, exists, length, asPicture, dimensions);
 
         if (verdict == AttachmentVerdicts.Send)
             return true;
 
-        var reason = EntryAttachment_Policy.Describe(verdict, path, allowedRoots, asPicture);
+        var reason = EntryAttachment_Policy.Describe(verdict, path, allowedRoots, asPicture, dimensions);
         _log.Log_Warning(channel.OrchId, reason);
 
         // NOT DEDUPED, unlike contract coaching: every refused file is a file the owner did not get,
@@ -4272,7 +4284,7 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var topicId = await _telegramClient.Create_ForumTopic_Async(channel.OrchId, cancellationToken);
+            var topicId = await _telegramClient.Create_ForumTopic_Async(channel.OrchId, Resolve_TopicColour_OrNull(session.RepoName), cancellationToken);
             _store.Set_TelegramTopicId(channel.OrchId, topicId);
             _log.Log_Info(channel.OrchId, $"Telegram topic created (thread id {topicId})");
             Remove_TopicCreationPin_FireAndForget(channel.OrchId, topicId);
@@ -4492,6 +4504,57 @@ internal sealed class BridgeEngineModel(
             {
                 Delete_RequestFile(request.SourceFilePath);
             }
+        }
+    }
+
+    /// <summary>
+    /// THE COLOUR THIS REPOSITORY'S TOPICS ARE CREATED WITH — brief F1; the rotation itself is
+    /// <see cref="TopicColor_Rotation"/>'s and the file format is
+    /// <see cref="ConfigRepoColor_Writer"/>'s. This is only the point of effect, which is the one
+    /// place that knows which repository a topic belongs to.
+    ///
+    /// <para>
+    /// ASSIGNED ON FIRST USE AND WRITTEN DOWN, because the rotation depends on what has already
+    /// been handed out and the repo list is reordered at runtime — a colour derived from a position
+    /// would change under the owner every time they dragged a row. A repository not in config.json
+    /// at all (removed while an orchestration on it is still open) gets no colour rather than a
+    /// wrong one.
+    /// </para>
+    /// <para>
+    /// NEVER FAILS THE TOPIC. A colour is the least important thing happening on this path; every
+    /// way of not getting one ends in null, and the topic is created in Telegram's default.
+    /// </para>
+    /// </summary>
+    int? Resolve_TopicColour_OrNull(string repoName)
+    {
+        try
+        {
+            var repos = _configProvider.Get_Current().Repos;
+            var repo = repos.FirstOrDefault(entry => string.Equals(entry.Name, repoName, StringComparison.OrdinalIgnoreCase));
+
+            if (repo == null)
+                return null;
+
+            if (repo.TopicColor != null)
+                return repo.TopicColor;
+
+            var inUse = repos.Where(entry => entry.TopicColor != null).Select(entry => entry.TopicColor!.Value).ToList();
+            var colour = TopicColor_Rotation.Pick_ForNewRepo(inUse);
+
+            // A colour that cannot be persisted is still USED for this topic — the alternative is a
+            // repository whose topics are all Telegram's default while the file stays unwritable.
+            // The next topic re-picks; the rotation is deterministic, so it very likely picks the
+            // same one again.
+            if (!ConfigRepoColor_Writer.Persist_Colour(_paths, repo.Name, colour))
+                _log.Log_Warning(GLOBAL_ORCH_ID, $"Topic colour for repo '{repo.Name}' could not be written to config.json — this topic uses it, the next one re-picks");
+
+            return colour;
+        }
+        catch (Exception ex)
+        {
+            // Broad by intent: this must never be the reason a topic is not created.
+            _log.Log_Warning(GLOBAL_ORCH_ID, $"Could not resolve a topic colour for repo '{repoName}' ({ex.Message}) — creating the topic in Telegram's default colour");
+            return null;
         }
     }
 
@@ -9521,7 +9584,7 @@ internal sealed class BridgeEngineModel(
             // empty, and it cannot touch a neighbouring topic by accident.
             await client.Delete_ForumTopic_Async(messageThreadId ?? throw new Exception($"orchestration '{session.OrchId}' has no topic id to clear"), cancellationToken);
 
-            var newTopicId = await client.Create_ForumTopic_Async(topicName, cancellationToken);
+            var newTopicId = await client.Create_ForumTopic_Async(topicName, Resolve_TopicColour_OrNull(session.RepoName), cancellationToken);
             _store.Set_TelegramTopicId(session.OrchId, newTopicId);
 
             _appliedTopicNames[session.OrchId] = topicName;
@@ -14217,7 +14280,7 @@ internal sealed class BridgeEngineModel(
             if (!force && _persistedUpdateId == _lastUpdateId && Is_SameCursor(_persistedOffsets, offsets))
                 return;
 
-            BridgeState_Store.Save(_paths, offsets, _lastUpdateId);
+            BridgeState_Store.Save(_paths, offsets, _lastUpdateId, sendBudget);
 
             // AFTER the write, never before: remembering a cursor the disk never took is how the
             // skip turns into a lost cursor rather than a saved write.

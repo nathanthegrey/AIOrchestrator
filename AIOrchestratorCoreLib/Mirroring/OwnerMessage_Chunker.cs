@@ -109,11 +109,21 @@ public static class OwnerMessage_Chunker
 
     /// <summary>
     /// Measured on BOTH readings — the markdown as the plain-text fallback would send it, and the
-    /// HTML as the primary send does. Either one over the cap is a refusal, and the fallback path
-    /// is exactly the one that was left with nothing to fall back to.
+    /// rendered HTML as the primary send does. Either one over the cap is a refusal, and the
+    /// fallback path is exactly the one that was left with nothing to fall back to.
+    ///
+    /// <para>
+    /// THE HTML IS MEASURED AS TELEGRAM MEASURES IT: after entities are parsed (brief F4). Counting
+    /// the raw markup charged <c>&lt;b&gt;</c>, <c>&lt;/b&gt;</c>, <c>&lt;blockquote expandable&gt;</c>
+    /// and every <c>&amp;amp;</c> against a budget none of them spends — always in the safe
+    /// direction, and "safe" is not free: it cut entries that fit comfortably into three numbered
+    /// pieces, worst on exactly the long formatted reports the owner most wants whole. The paragraph
+    /// above still holds; what changed is which reading of "the HTML" is the true one.
+    /// </para>
     /// </summary>
     static bool Fits(string text, int maxLength)
     {
-        return text.Length <= maxLength && TelegramHtml_Renderer.Render(text).Length <= maxLength;
+        return text.Length <= maxLength
+            && TelegramText_Ruler.Count_AfterEntityParsing(TelegramHtml_Renderer.Render(text)) <= maxLength;
     }
 }

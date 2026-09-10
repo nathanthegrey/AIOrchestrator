@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Telegram;
+
 namespace AIOrchestratorCoreLib.Bridge;
 
 /// <summary>What the app decides about an <c>ATTACH: &lt;path&gt;</c> line.</summary>
@@ -10,6 +12,17 @@ public enum AttachmentVerdicts
 
     /// <summary>An <c>IMAGE:</c> line pointing at something Telegram cannot render as a photo.</summary>
     NotAPicture,
+
+    /// <summary>
+    /// A picture whose width and height together exceed Telegram's 10000 — a tall screenshot or a
+    /// long banner, which can be well under the size cap and still be refused. Appended rather than
+    /// slotted beside NotAPicture: the values are compared, never persisted, but a renumbering is a
+    /// silent change to every logged reading of them and buys nothing.
+    /// </summary>
+    PictureTooBig,
+
+    /// <summary>A picture more than twenty times longer than it is wide (or the reverse).</summary>
+    PictureTooOblong,
 }
 
 /// <summary>
@@ -31,11 +44,15 @@ public enum AttachmentVerdicts
 /// </summary>
 public static class EntryAttachment_Policy
 {
-    /// <summary>Telegram Bot API cap for <c>sendDocument</c> uploads (documented: 50 MB).</summary>
-    public const long MAX_BYTES = 50L * 1024 * 1024;
+    /// <summary>
+    /// Telegram Bot API cap for <c>sendDocument</c> uploads. The NUMBER now lives in
+    /// <see cref="TelegramFileCaps"/> (brief F7), which the HTTP client can also reach; this name
+    /// stays because its callers and their reasoning are here.
+    /// </summary>
+    public const long MAX_BYTES = TelegramFileCaps.MAX_DOCUMENT_BYTES;
 
     /// <summary>Telegram's own cap for <c>sendPhoto</c>, a fifth of the document one.</summary>
-    public const long MAX_PICTURE_BYTES = 10L * 1024 * 1024;
+    public const long MAX_PICTURE_BYTES = TelegramFileCaps.MAX_PHOTO_BYTES;
 
     /// <summary>
     /// What Telegram will actually render as a photo. Checked BEFORE the upload because the failure
@@ -51,7 +68,18 @@ public static class EntryAttachment_Policy
     /// what Telegram will accept and in what it caps, and in nothing else — so they share this
     /// decision rather than each carrying half of it.
     /// </param>
-    public static AttachmentVerdicts Decide(string path, IReadOnlyList<string> allowedRoots, bool exists, long lengthBytes, bool asPicture = false)
+    /// <param name="pictureDimensions">
+    /// The picture's pixel size when it could be measured, null when it could not — see
+    /// <see cref="ImageDimensions_Reader"/> for why unmeasurable means ALLOW rather than refuse.
+    /// Ignored for an <c>ATTACH:</c>, which Telegram does not measure.
+    /// </param>
+    public static AttachmentVerdicts Decide(
+        string path,
+        IReadOnlyList<string> allowedRoots,
+        bool exists,
+        long lengthBytes,
+        bool asPicture = false,
+        (int Width, int Height)? pictureDimensions = null)
     {
         if (!exists)
             return AttachmentVerdicts.MissingFile;
@@ -67,13 +95,35 @@ public static class EntryAttachment_Policy
         if (lengthBytes > (asPicture ? MAX_PICTURE_BYTES : MAX_BYTES))
             return AttachmentVerdicts.TooLarge;
 
+        // AFTER THE SIZE AND ONLY FOR A PICTURE (brief F7). A file can be a tenth of the size cap
+        // and still be refused: Telegram caps width + height at 10000 and the ratio at 20, and a
+        // tall screenshot hits the first while weighing nothing. It answered
+        // PHOTO_INVALID_DIMENSIONS, the send path logged a warning, and NOBODY was told — the same
+        // silent-drop shape that produced this whole policy on 2026-09-08.
+        if (asPicture && pictureDimensions != null)
+        {
+            var (width, height) = pictureDimensions.Value;
+
+            if (!TelegramFileCaps.Is_DimensionSumAcceptable(width, height))
+                return AttachmentVerdicts.PictureTooBig;
+
+            if (!TelegramFileCaps.Is_RatioAcceptable(width, height))
+                return AttachmentVerdicts.PictureTooOblong;
+        }
+
         return AttachmentVerdicts.Send;
     }
 
-    public static string Describe(AttachmentVerdicts verdict, string path, IReadOnlyList<string> allowedRoots, bool asPicture = false)
+    public static string Describe(
+        AttachmentVerdicts verdict,
+        string path,
+        IReadOnlyList<string> allowedRoots,
+        bool asPicture = false,
+        (int Width, int Height)? pictureDimensions = null)
     {
         var marker = asPicture ? "IMAGE" : "ATTACH";
-        var cap = (asPicture ? MAX_PICTURE_BYTES : MAX_BYTES) / (1024 * 1024);
+        var cap = TelegramFileCaps.In_Megabytes(asPicture ? MAX_PICTURE_BYTES : MAX_BYTES);
+        var size = pictureDimensions == null ? "" : $"{pictureDimensions.Value.Width}×{pictureDimensions.Value.Height} ";
 
         return verdict switch
         {
@@ -90,6 +140,14 @@ public static class EntryAttachment_Policy
             AttachmentVerdicts.TooLarge =>
                 $"{marker} refused — {path} is over {cap} MB, Telegram's cap for "
                 + (asPicture ? "a photo. Send it with ATTACH: instead (50 MB), or shrink it." : "a document. Split it or summarise it."),
+            AttachmentVerdicts.PictureTooBig =>
+                $"IMAGE refused — {path} is {size}pixels, and Telegram will not accept a photo whose width and height "
+                + $"add up to more than {TelegramFileCaps.MAX_PHOTO_DIMENSION_SUM} (it answers `400 PHOTO_INVALID_DIMENSIONS`). "
+                + $"Scale it down, or send it with `ATTACH: {path}` — a document keeps every pixel and has no dimension limit.",
+            AttachmentVerdicts.PictureTooOblong =>
+                $"IMAGE refused — {path} is {size}pixels, more than {TelegramFileCaps.MAX_PHOTO_RATIO} times longer on one side than the other, "
+                + $"which Telegram will not accept as a photo (`400 PHOTO_INVALID_DIMENSIONS`). "
+                + $"Crop it, or send it with `ATTACH: {path}` — a document has no ratio limit.",
             _ => $"{marker}: {path}",
         };
     }
