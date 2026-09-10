@@ -74,6 +74,21 @@ public static class OwnerQuestion_Contract
     /// </summary>
     static readonly Regex ROW_CODE = new(@"^[A-Z][A-Z0-9-]*-[A-Z]-\d+[a-z]?$", RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// THE UPPER BOUND ON OPTIONS — two to four (owner, brief C/E2). The lower bound is
+    /// <see cref="QuestionFaults.FewerThanTwoOptions"/>, immediately below, so the option-count rule
+    /// has one home even though its two halves are enforced by different means.
+    ///
+    /// <para>
+    /// AND THEY ARE ENFORCED DIFFERENTLY ON PURPOSE. Too FEW is refused here: a question with one
+    /// option is not a choice, and sending it back costs the owner nothing. Too MANY is coached by
+    /// <see cref="OwnerMessageFaults.TooManyOptions"/> after the question has gone out, with every
+    /// button numbered so five are still readable — because refusing a real choice would lose the
+    /// owner a decision they can perfectly well make.
+    /// </para>
+    /// </summary>
+    public const int MAXIMUM_OPTIONS = 4;
+
     /// <summary>Whether the agent was trying to ask at all — one marker present is an attempt.</summary>
     public static bool Is_Attempted(OwnerQuestionDraft draft)
     {

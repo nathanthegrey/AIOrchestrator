@@ -140,6 +140,22 @@ public static class TelegramDeliveryMode_Glyphs
     public const string AWAY = "✈";
 
     /// <summary>
+    /// STATUS SCREENSHOTS ARE ON — a delivery setting, so since 2026-09-10 it lives in the GENERAL
+    /// DASHBOARD's header rather than in the General topic's name, which is the same move the five
+    /// mode glyphs made off the orchestration topics' names.
+    ///
+    /// It was the one glyph point 2 missed: the rule said every mode glyph leaves the name, and this
+    /// is a mode glyph on General's name, written by a second composition site that the rule never
+    /// visited. The dashboard is General's PULSE — the one message the app already keeps current
+    /// there — so its header is where this belongs.
+    ///
+    /// IT MOVED HOUSE FROM `BridgeEngineModel`, where it was a private const, because it now has
+    /// three readers: the dashboard that draws it, the name sync that must no longer draw it, and
+    /// <see cref="Strip_Glyph"/>, which has to be able to take it off a name an older build wrote.
+    /// </summary>
+    public const string STATUS_SCREENSHOTS = "📸";
+
+    /// <summary>
     /// QUIET — this ONE orchestration has stopped asking after 3 unanswered messages. Per topic on
     /// purpose: the owner may be quiet here simply because they are working in another topic.
     /// </summary>
@@ -258,6 +274,7 @@ public static class TelegramDeliveryMode_Glyphs
             || topicName.StartsWith(SILENCED, StringComparison.Ordinal)
             || topicName.StartsWith(PAUSED_FOR_LIMIT, StringComparison.Ordinal)
             || topicName.StartsWith(CLOSED, StringComparison.Ordinal)
+            || topicName.StartsWith(STATUS_SCREENSHOTS, StringComparison.Ordinal)
             || topicName.StartsWith(AWAY, StringComparison.Ordinal)
             || topicName.StartsWith(QUIET, StringComparison.Ordinal)
             || topicName.StartsWith(TERMINAL, StringComparison.Ordinal);
@@ -292,6 +309,9 @@ public static class TelegramDeliveryMode_Glyphs
 
         if (topicName.StartsWith(CLOSED, StringComparison.Ordinal))
             return CLOSED.Length;
+
+        if (topicName.StartsWith(STATUS_SCREENSHOTS, StringComparison.Ordinal))
+            return STATUS_SCREENSHOTS.Length;
 
         if (topicName.StartsWith(SILENCED, StringComparison.Ordinal))
             return SILENCED.Length;

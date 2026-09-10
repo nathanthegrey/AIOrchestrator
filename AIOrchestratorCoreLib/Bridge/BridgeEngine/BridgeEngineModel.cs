@@ -3361,7 +3361,9 @@ internal sealed class BridgeEngineModel(
 
         Load_GeneralDashboardMessageId_Once();
 
-        var text = Telegram.GeneralDashboard_Composer.Compose(Build_ProgressReportText(null));
+        var text = Telegram.GeneralDashboard_Composer.Compose(
+            Build_ProgressReportText(null),
+            _configProvider.Get_Current().TelegramStatusScreenshots);
         var action = Telegram.TopicStatusLine_Decider.Decide(text, _generalDashboardText, _generalDashboardMessageId);
 
         if (action == Telegram.TopicStatusActions.None)
@@ -12862,9 +12864,6 @@ internal sealed class BridgeEngineModel(
     /// <summary>What the General topic is called when nothing is decorating it.</summary>
     const string GENERAL_TOPIC_BASE_NAME = "General";
 
-    /// <summary>The camera that says status screenshots are on, read straight off the topic list.</summary>
-    const string STATUS_SCREENSHOTS_GLYPH = "📸";
-
     /// <summary>
     /// The last General-topic name this process actually pushed. Null until the first push, which is
     /// deliberate: a restart then re-asserts the name once, so a flag edited on disk while the app
@@ -12880,22 +12879,28 @@ internal sealed class BridgeEngineModel(
     DateTime? _generalTopicNameRetryAfterUtc;
 
     /// <summary>
-    /// Puts the camera on the GENERAL topic's name while status screenshots are on, and takes it off
-    /// again (owner, 2026-08-24). The topic list is the one surface visible without opening anything,
-    /// so it answers "is this on?" without them having to remember or ask.
+    /// KEEPS THE GENERAL TOPIC CALLED "General", and nothing else — since 2026-09-10.
     ///
-    /// THE BASE NAME IS ASSUMED TO BE "General", and this WRITES A KNOWN PAIR rather than decorating
-    /// whatever is currently there. Telegram offers no cheap read of the General topic's name, and a
-    /// decorate-in-place that cannot read the previous name is how an emoji ends up applied twice.
-    /// The cost of the assumption is that a General topic the owner renamed by hand gets overwritten.
-    ///
-    /// Guarded by the remembered name, so it is one API call per actual change, not one per tick.
+    /// <para>
+    /// It used to put the camera here while status screenshots were on (owner, 2026-08-24), because
+    /// the topic list is the one surface visible without opening anything. The owner moved it to the
+    /// DASHBOARD's header instead, and the reason is the one that moved the other five mode glyphs
+    /// off the orchestration names: a name change is an `editForumTopic` plus a service message in
+    /// the thread, so flipping a setting announced itself back to the owner who had just flipped it.
+    /// The dashboard is the message General already keeps current, and its header costs a silent edit.
+    /// </para>
+    /// <para>
+    /// THE METHOD STAYS, and it is not dead: it is the MIGRATION. Every existing supergroup has its
+    /// General topic named "📸 General" right now, and this is the only code that can rename it back.
+    /// It also keeps doing the job it always did — re-asserting the name once per process, so a topic
+    /// renamed by hand or by an older build converges. WRITING A KNOWN NAME rather than decorating
+    /// what is there is still the design: Telegram offers no cheap read of General's name, and a
+    /// decorate-in-place that cannot read the previous value is how an emoji gets applied twice.
+    /// </para>
     /// </summary>
     async Task Sync_GeneralTopicName_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
     {
-        var desired = _configProvider.Get_Current().TelegramStatusScreenshots
-            ? $"{STATUS_SCREENSHOTS_GLYPH} {GENERAL_TOPIC_BASE_NAME}"
-            : GENERAL_TOPIC_BASE_NAME;
+        var desired = GENERAL_TOPIC_BASE_NAME;
 
         if (_appliedGeneralTopicName == desired)
             return;

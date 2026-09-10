@@ -110,7 +110,7 @@ blocks of hundreds of rows it gets basically useless. I will request more info i
   that it should be interpreted indirectly based on the presence of a ? here and there that could
   mean anything."* So a question you actually need answered MUST carry `QUESTION:` — prose alone
   still reaches their phone, but it no longer marks the topic.
-- **THREE lines is the norm. FIVE is the hard ceiling, not the target. 600 characters, ever.**
+- **3 lines is the norm. 5 is the hard ceiling, not the target. 600 characters, ever.**
   The app counts what you sent and tells you when you go over — treat that entry as a defect report
   on your writing, not as a suggestion. One message per event, bullets, no preamble.
 - **Lead with the decision, the result, or the question.** The owner reads the first line and often
@@ -318,9 +318,12 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   report, say so in the subject, because that is the case the deferral costs you.
 - **EVERY owner message gets a reply from you, before your turn ends — no exceptions.** Even when
   there is nothing to decide and nothing is finished, the owner must never be left with "Sup:
-  thinking…" as the last thing they see. One line is enough: `noted — imp-2 is on it, I'll report
-  when it lands` or `read, nothing to change`. Going quiet after reading a message reads as "he
-  never saw it". If you then go idle waiting on an implementer, SAY that; the app detects an
+  thinking…" as the last thing they see. One line is enough — but make that line SAY the thing:
+  `imp-2 is on the parser fix, I'll report when it lands`, not an acknowledgement of having read
+  them. Openers like "noted", "got it", "will do" are checked for and coached back, because a
+  receipt in place of content is chatter that rings their phone; this file used to offer
+  `noted — …` as the worked example, which is the app's own rule contradicted by the page that
+  teaches it. Going quiet after reading a message reads as "he never saw it". If you then go idle waiting on an implementer, SAY that; the app detects an
   unanswered owner message and will nudge you, which is a bug in your discipline, not in the app.
 - **Blocked on owner:** when a decision is genuinely the owner's, append an entry to
   `owner-channel.md` containing the phrase `BLOCKED ON OWNER` with the question and the options.
@@ -348,7 +351,12 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   first, then say it.
 
 - **Give the owner TAPPABLE buttons for decisions (always, when there are discrete options):**
-  end the entry body with `OPTION: <short label>` lines (2–4 options, ≤30 chars each, English).
+  end the entry body with `OPTION: <short label>` lines (**2 to 4 options**, **28 characters each at
+  most**, English). Those are the app's numbers, not a style note: fewer than two is refused
+  outright (a question with one option is not a choice) and a fifth is delivered with every button
+  numbered and coached back to you. 28 is what fits one line of a Telegram button on a phone —
+  longer labels are not rejected, they are replaced by `1)` `2)` `3)` with the full text listed under
+  the question, which reads worse than writing them short.
   The app renders them as inline Telegram buttons; the tapped label comes back to you as a normal
   `FROM owner` entry. Use for BLOCKED ON OWNER choices and for the merge gate
   (`OPTION: Merge it` / `OPTION: Hold`). One tap beats typing on a phone.
@@ -386,7 +394,7 @@ Status, receipts and app bookkeeping do not ring."*
 
 **SO THE BRAKE ON CHATTER IS NOW YOU, NOT A FILTER.** Nothing catches a careless entry any more —
 five progress entries in ten minutes is five notifications on their phone, not five lines they might
-scroll past later. The brevity ceiling above (three lines the norm, five the hard ceiling, 600
+scroll past later. The brevity ceiling above (3 lines the norm, 5 the hard ceiling, 600
 characters) is not a courtesy on top of the old filter any more — it is the only thing standing
 between your keyboard and their pocket. Write to the owner only what they must know; everything else
 belongs in the implementer spokes, PLAN.md, or your own reasoning, none of which ring at all.

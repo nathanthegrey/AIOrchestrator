@@ -207,4 +207,65 @@ public class OwnerMessageContractTests
         Assert.Contains(OwnerMessageFaults.TwoQuestions, faults);
         Assert.Contains(OwnerMessageFaults.ProseAfterTheQuestion, faults);
     }
+
+    /// <summary>
+    /// ONE CEILING, and this test is the thing that keeps it one. The two constants were literals in
+    /// two files and had ALREADY drifted — this contract said six lines while Brevity_Policy said
+    /// five — so an entry of exactly six was coached as too long by the surface that measured what
+    /// was mirrored and passed as fine by the surface that checked it beforehand. The supervisor
+    /// could obey whichever it happened to be told.
+    ///
+    /// Asserted as an IDENTITY rather than by value, so nobody can "fix" a future disagreement by
+    /// editing the number here: there is one number, and this says so.
+    /// </summary>
+    [Fact]
+    public void TheCeilingIsBrevityPolicys_NotACopyOfIt()
+    {
+        Assert.Equal(Brevity_Policy.MAX_LINES, OwnerMessage_Contract.MAXIMUM_LINES);
+        Assert.Equal(Brevity_Policy.MAX_CHARACTERS, OwnerMessage_Contract.MAXIMUM_CHARACTERS);
+
+        // And the owner's numbers, so a change to BOTH is still visible as a change.
+        Assert.Equal(5, OwnerMessage_Contract.MAXIMUM_LINES);
+        Assert.Equal(600, OwnerMessage_Contract.MAXIMUM_CHARACTERS);
+    }
+
+    /// <summary>
+    /// THE DRIFT, MADE CONCRETE: six lines is over the ceiling now and was not before. Five is not,
+    /// so the boundary is asserted on both sides and cannot pass by calling everything too long.
+    /// </summary>
+    [Fact]
+    public void SixLinesIsOverTheCeiling_FiveIsNot()
+    {
+        Assert.Contains(OwnerMessageFaults.TooLong, OwnerMessage_Contract.Check("a\nb\nc\nd\ne\nf"));
+        Assert.DoesNotContain(OwnerMessageFaults.TooLong, OwnerMessage_Contract.Check("a\nb\nc\nd\ne"));
+    }
+
+    /// <summary>
+    /// A FIFTH OPTION IS COACHED, NOT REFUSED (owner, brief C/E2). The distinction is the point of
+    /// the fault: too FEW options is refused by OwnerQuestion_Contract, because a question with one
+    /// option is not a choice and sending it back costs nothing. Five options IS a choice — refusing
+    /// it would lose the owner a decision they can make, so the question goes out numbered and the
+    /// supervisor hears about it afterwards.
+    ///
+    /// Both sides: four options raise nothing, so the rule cannot pass by flagging every question.
+    /// </summary>
+    [Fact]
+    public void AFifthOptionIsCoached_AndFourAreFine()
+    {
+        var five = "Pick one.\nQUESTION: which?\nOPTION: a\nOPTION: b\nOPTION: c\nOPTION: d\nOPTION: e";
+        var four = "Pick one.\nQUESTION: which?\nOPTION: a\nOPTION: b\nOPTION: c\nOPTION: d";
+
+        Assert.Contains(OwnerMessageFaults.TooManyOptions, OwnerMessage_Contract.Check(five));
+        Assert.DoesNotContain(OwnerMessageFaults.TooManyOptions, OwnerMessage_Contract.Check(four));
+    }
+
+    /// <summary>
+    /// The coaching line carries the NUMBER, like every other one here — "too many options" without
+    /// saying how many is the rule again, which is what Brevity_Policy's own summary is about.
+    /// </summary>
+    [Fact]
+    public void TheTooManyOptionsCoachingSaysHowMany()
+    {
+        Assert.Contains("4", OwnerMessage_Contract.Describe(OwnerMessageFaults.TooManyOptions));
+    }
 }

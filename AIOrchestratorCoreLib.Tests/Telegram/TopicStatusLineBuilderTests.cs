@@ -169,9 +169,12 @@ public class TopicStatusLineBuilderTests
             null,
             NOW, aMessageIsAlreadyPosted: false);
 
-        // "4 min", not the mock's "4m": the ONE duration formatter this repo has renders it that way,
-        // and item 12 forbids a second one just to shorten a column.
-        Assert.Equal("• imp-1 · committing the marker fix · working · 4 min", line.Split('\n')[1]);
+        // "under 5 min", not "4 min": the duration STEPS to five minutes since 2026-09-10 (owner's
+        // ruling), because a per-minute reading made PULSE's text differ on every tick and the repost
+        // gate compares that text. Rendered by the ONE duration formatter this repo has — item 12
+        // forbids a second one just to shorten a column — with the floor applied before it, so
+        // "1 h 5 min" is still spelled in exactly one place.
+        Assert.Equal("• imp-1 · committing the marker fix · working · under 5 min", line.Split('\n')[1]);
     }
 
     /// <summary>
@@ -335,8 +338,10 @@ public class TopicStatusLineBuilderTests
 
         Assert.Equal(7, lines.Length);
         Assert.Equal("PULSE", lines[0]);
-        Assert.Equal("• imp-1 · committing the marker fix · working · 4 min", lines[1]);
-        Assert.Equal("• rev-2 · reviewing the hooks branch · working · 12 min", lines[2]);
+        // Both durations STEPPED to five minutes (2026-09-10): four minutes is below the first step
+        // and twelve floors to ten. The floor never overstates — the row says less than the truth.
+        Assert.Equal("• imp-1 · committing the marker fix · working · under 5 min", lines[1]);
+        Assert.Equal("• rev-2 · reviewing the hooks branch · working · 10 min", lines[2]);
         Assert.Equal("• rev-3 · standing by", lines[3]);
         Assert.Equal("last · gate cleared on 34e5515", lines[4]);
         Assert.Equal("72/113 merged · 63 %", lines[5]);
@@ -368,7 +373,7 @@ public class TopicStatusLineBuilderTests
             Last(sevenWords),
             NOW, aMessageIsAlreadyPosted: false).Split('\n');
 
-        Assert.Equal("• imp-9 · migrate every supervisor session · working · 4 min", lines[1]);
+        Assert.Equal("• imp-9 · migrate every supervisor session · working · under 5 min", lines[1]);
         Assert.Equal("last · migrate every supervisor session onto worktree", lines[2]);
     }
 
@@ -485,7 +490,7 @@ public class TopicStatusLineBuilderTests
         var line = TopicStatusLine_Builder.Build(
             Progress(1, 4), [Member("solo-1", entries)], null, NOW, aMessageIsAlreadyPosted: false);
 
-        Assert.Equal("• solo-1 · tab shifting fix · working · 4 min", line.Split('\n')[1]);
+        Assert.Equal("• solo-1 · tab shifting fix · working · under 5 min", line.Split('\n')[1]);
         Assert.DoesNotContain("standing by", line);
     }
 
