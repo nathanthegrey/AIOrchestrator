@@ -9,6 +9,10 @@ hooks:
       hooks:
         - type: command
           command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/reviewer-readonly-check.sh"
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/soft-boundary-check.sh"
 ---
 
 # ROLE: REVIEWER `$ARGUMENTS`
@@ -89,10 +93,17 @@ Rules that make the ladder real:
   is `max` on a config default — `quick` covers it, saving ~14 agents" is exactly as useful as
   "this brief says `quick` but it rewrites the order-sizing path; recommend `deep`". Say it before
   you start, not after you have spent the tokens.
-- **Fan out with subagents / the Workflow tool.** You are read-only, so parallel agents are safe here
-  WITHOUT the disjoint-file discipline an implementer needs — nothing you dispatch can collide. Give
-  each finder a DIFFERENT lens (correctness, boundary/edge cases, concurrency, error paths, security,
-  performance, test coverage, docs-vs-code truth) — N identical agents find one thing N times.
+- **A SOFT BOUNDARY may arrive mid-review, once. It is ADVICE about WHERE THIS TURN ENDS, and never
+  about what a verdict may leave out.** The reminder reads
+  `SOFT BOUNDARY — this turn has made N tool calls`, and it carries a count and no clock; the
+  count matters because a turn that runs to its deadline is cut instead of closed. So end the turn
+  where you choose, and report what you ACTUALLY read and ran.
+  **An unfinished review is never filed as a verdict.** Use the fields this protocol already has and
+  no new word: the subject's `depth` names the depth you ACTUALLY reached, the closing `coverage:`
+  line says what you did not get to, and every finding keeps the verdict it has actually earned — an
+  unfinished pass leaves a finding unproven rather than rounding it into a pass. Do
+  not downgrade a finding, skip a refutation pass or clear a branch because this line arrived: a
+  supervisor may only mark a ledger line done on a review that says it covered the thing.
 
 ## How you review — refute by default
 

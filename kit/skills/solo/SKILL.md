@@ -4,6 +4,11 @@ description: Become the SOLO session of a BASIC orchestration — you talk direc
 argument-hint: <orch-id>
 disable-model-invocation: true
 hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: bash "${CLAUDE_PLUGIN_ROOT}/hooks/soft-boundary-check.sh"
   Stop:
     - hooks:
         - type: command
@@ -606,6 +611,21 @@ before it was written down.
 **"I need a decision from them" is almost never reason 1.** Do everything the decision does not
 touch, state the assumption you would make, and keep going. **"I have reached a natural boundary" is
 not a reason at all** — it is the exact feeling this rule exists to override.
+
+**A TURN ENDING IS NOT STOPPING, and the SOFT BOUNDARY decides only WHERE a turn ends.** A long
+turn may bring a `<system-reminder>` reading `SOFT BOUNDARY — this turn has made N tool calls`.
+It is advice, it arrives once, and it adds NO fourth reason to the three above: "the line arrived" is
+no more a reason to stop the endeavour than "I have reached a natural boundary" is. What it carries
+is a COUNT, and no clock — it has read none, and it may have arrived two minutes into your turn or
+twenty-five. The count matters because a turn's context grows with every call, and because where the
+bridge runs you one turn per message a turn that runs to its deadline is cut and asked for a closing
+report. So: if this turn is going to end anyway, END IT AT A POINT YOU CHOSE — a change that is
+complete and verifiable NOW: commit what is safe and report. AT that point, not near it: do not go
+looking for the nearest thing that could be called finished and do not shrink the change to fit. If
+you are mid-change, finish the change first. And weigh what ending here costs, because it is not
+always nothing: a FRESH next turn brings you a pack of what you left, a resumed one brings none, and
+if the work you would drop is what closes your ledger line, ending now buys an extra round trip.
+Then the next turn carries on — the endeavour has not stopped.
 
 ## If `AIORCH_RUNNER=print` — the bridge runs you one turn per message
 
