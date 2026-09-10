@@ -8,6 +8,7 @@ using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using AIOrchestratorCoreLib.Tests.Launching;
 using AIOrchestratorCoreLib.Tests.TestSupport;
+using AIOrchestratorCoreLib.Telegram;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Bridge;
@@ -122,8 +123,12 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
                 $"the owner was never told the orchestration is closed.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
         });
 
-        // NO ✓ — the receipt is the claim this brief is about.
+        // NOT ACKNOWLEDGED — the receipt is the claim this brief is about, in BOTH its spellings.
+        // Since brief D the ✓ is not the receipt, so asserting only its absence would pass
+        // vacuously and a regression that reacted 👀 to a message the bridge refused to route
+        // would go straight through.
         Assert.Equal(0, _telegram.Count_Sent_Containing("✓"));
+        Assert.Empty(_telegram.Reactions);
 
         // AND NOTHING WAS WRITTEN INTO THE DEAD CHANNEL.
         Assert.Equal(before, File.ReadAllText(channelFile));
@@ -145,7 +150,9 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
                 $"the owner was never told the topic is unknown.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
         });
 
+        // Neither spelling of the receipt — see the closed-orchestration case above.
         Assert.Equal(0, _telegram.Count_Sent_Containing("✓"));
+        Assert.Empty(_telegram.Reactions);
     }
 
     /// <summary>
@@ -155,7 +162,7 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task ADocumentWithNoCaption_LandsInMedia_IsNamedInTheChannel_AndIsTicked()
+    public async Task ADocumentWithNoCaption_LandsInMedia_IsNamedInTheChannel_AndIsAcknowledged()
     {
         var engine = Build_Engine();
         var session = _launcher.Start_Orchestration("Repo", _tempRepo);
@@ -176,10 +183,14 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
                 await Wait_Until_Async(() => File.ReadAllText(channelFile).Contains("FILE:", StringComparison.Ordinal), 20_000),
                 $"the document never reached the channel.{Environment.NewLine}{File.ReadAllText(channelFile)}{Environment.NewLine}{_log.Dump()}");
 
-            // ✓ — this one DID arrive, so the receipt is honest.
+            // ACKNOWLEDGED — this one DID arrive, so the receipt is honest. Since brief D that
+            // receipt is a REACTION on the owner's own message, not a ✓ line in the topic; the
+            // property the case was written for is unchanged, only its spelling.
             Assert.True(
-                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("✓") >= 1, 20_000),
+                await Wait_Until_Async(() => _telegram.Reactions.Any(reaction => reaction.Emoji == OwnerReaction_Emoji.RECEIVED), 20_000),
                 $"an owner document that arrived was never acknowledged.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+            Assert.Equal(0, _telegram.Count_Sent_Containing("✓"));
         });
 
         var mediaFolder = Path.Combine(Path.GetDirectoryName(channelFile)!, "media");
@@ -425,6 +436,193 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
                 await Wait_Until_Async(() => _telegram.Count_Sent_Containing("could not download that image") >= 1, 20_000),
                 $"the owner was never told their picture did not arrive.{Environment.NewLine}{_telegram.Dump_Sent()}");
         });
+    }
+
+    /// <summary>
+    /// THE RECEIPT IS A REACTION, AND THERE IS NO MESSAGE — brief D. 👀 the moment the bridge has
+    /// the owner's message, on the owner's OWN bubble.
+    ///
+    /// <para>
+    /// After brief C the ✓ was already silent, but it was still a line in the topic for every line
+    /// the owner wrote. The assertion that matters is therefore the NEGATIVE one: not merely that
+    /// a reaction was set, but that nothing was sent.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AnOwnerMessage_IsAcknowledgedWithAReaction_AndNoMessageIsSent()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        const long OWNER_MESSAGE_ID = 555;
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("look at this", 9401, OWNER_MESSAGE_ID, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Reactions.Count >= 1, 20_000),
+                $"the owner's message was never reacted to.{Environment.NewLine}{_log.Dump()}");
+        });
+
+        Assert.Equal((OWNER_MESSAGE_ID, OwnerReaction_Emoji.RECEIVED), _telegram.Reactions[0]);
+
+        // THE POINT OF THE WHOLE BRIEF: no ✓ line in the topic.
+        Assert.Equal(0, _telegram.Count_Sent_Containing("✓"));
+    }
+
+    /// <summary>
+    /// 👀 BECOMES 👌 WHEN A SESSION PICKS THE MESSAGE UP — the second half of brief D, and the
+    /// half that tells the owner the difference between "the bridge has it" and "someone is acting
+    /// on it". It was unprobed: the reaction went on and never changed.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AReceivedMessage_TurnsFromEyesToOkWhenASessionPicksItUp()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        if (!File.Exists(channelFile))
+            File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
+
+        const long OWNER_MESSAGE_ID = 601;
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("please look at the diff", 9501, OWNER_MESSAGE_ID, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(
+                    () => _telegram.Reactions.Any(reaction => reaction.Emoji == OwnerReaction_Emoji.PICKED_UP),
+                    30_000),
+                "the reaction never became 👌 — the owner is left at 'seen' for a message that was picked up."
+                    + $"{Environment.NewLine}reactions: {string.Join(", ", _telegram.Reactions.Select(r => $"{r.MessageId}:{r.Emoji}"))}"
+                    + $"{Environment.NewLine}{_log.Dump()}");
+        });
+
+        // BOTH marks, in order, on the OWNER'S OWN message — never on a bot message.
+        var mine = _telegram.Reactions.Where(reaction => reaction.MessageId == OWNER_MESSAGE_ID).ToList();
+
+        Assert.Equal(OwnerReaction_Emoji.RECEIVED, mine[0].Emoji);
+        Assert.Equal(OwnerReaction_Emoji.PICKED_UP, mine[^1].Emoji);
+
+        // And still no line in the topic for either of them.
+        Assert.Equal(0, _telegram.Count_Sent_Containing("✓"));
+    }
+
+    /// <summary>
+    /// A REFUSED REACTION FALLS BACK TO THE TICK — never to silence. Telegram answers 400 for a
+    /// message it will not let a bot react to and 429 under load, and an acknowledgement that
+    /// silently did not happen is the owner watching their message vanish.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AReactionTelegramRefuses_FallsBackToTheSilentTick()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        _telegram.Refuse_Reactions("Bad Request: REACTION_INVALID");
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("look at this", 9402, 556, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("✓") >= 1, 20_000),
+                "the reaction was refused and nothing took its place — the owner's message was acknowledged by nothing at all."
+                    + $"{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
+        });
+
+        Assert.Empty(_telegram.Reactions);
+    }
+
+    /// <summary>
+    /// TAPPING THE HOLD TOGGLE ON PULSE MUST NOT DESTROY THE BAR — brief D, and the defect the
+    /// first cut shipped.
+    ///
+    /// <para>
+    /// The toggle reuses the hold payload family, and that handler's job had always been "rewrite
+    /// the message the button was tapped on" — safe while that message was a ✓ receipt that
+    /// existed to be rewritten. On the status line it replaced the whole PULSE text with
+    /// "⏸ holding…" and the four button rows with a single ▶ GO, so /pending, /left, /tail sup,
+    /// /limits, /merge and /close vanished from the topic on one tap. It did not heal, either: the
+    /// status refresh repaints only when its own rendering changes.
+    /// </para>
+    /// <para>
+    /// Asserted on the KEYBOARD, not on the text, because the text is the half that reads plausibly
+    /// while the bar is gone.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TappingTheHoldToggleOnTheStatusLine_LeavesTheCommandBarIntact()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        if (!File.Exists(channelFile))
+            File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            // Let the status line be posted, so there is a real id to tap on.
+            Assert.True(
+                await Wait_Until_Async(() => _store.Get_Session(session.OrchId).StatusLineMessageId != null, 30_000),
+                $"the status line was never posted, so this probe taps nothing.{Environment.NewLine}{_log.Dump()}");
+
+            var statusLineId = _store.Get_Session(session.OrchId).StatusLineMessageId!.Value;
+
+            _telegram.Queue_Updates(Updates_Json(HoldTap_Json(statusLineId, TOPIC_ID, 9601)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Answered_Callbacks >= 1, 20_000),
+                $"the tap was never answered.{Environment.NewLine}{_log.Dump()}");
+
+            // Give the handler every chance to do the damage.
+            await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(10));
+
+            var wrecked = _telegram.ButtonEdits
+                .Where(edit => edit.MessageId == statusLineId && edit.ButtonCount <= 1)
+                .ToList();
+
+            Assert.True(
+                wrecked.Count == 0,
+                "a tap on the PULSE bar rewrote the status line down to a single button — the owner's whole command bar is gone: "
+                    + string.Join(" | ", wrecked.Select(edit => $"{edit.ButtonCount} button(s): {edit.Text}")));
+
+            // THE REPAINT IS DELIBERATELY NOT ASSERTED HERE, and that is a finding rather than an
+            // omission. The obvious assertion — "an edit carrying ▶ GO reaches the status line" —
+            // passes with the render-key fix REMOVED, because a tap also moves the status TEXT and
+            // the ordinary text comparison then repaints the bar as a side effect. Two routes to
+            // one green is what CLAUDE.md decision 20 forbids, and a case that cannot fail for the
+            // reason it claims is worse than no case.
+            //
+            // The render key's own behaviour is pinned in TopicStatusLineRenderKeyTests. What stays
+            // unpinned is the one line in Refresh_TopicStatusLines_Async that consults it, for the
+            // same reason TelegramAttempt_Gate states about its own caller: a button-only change
+            // with the text held constant is not producible from this seam.
+        });
+    }
+
+    static string HoldTap_Json(long tappedMessageId, long threadId, long updateId)
+    {
+        var data = HoldButton_Data.Build(HoldButtonActions.Hold, threadId);
+
+        return $"{{\"update_id\":{updateId},\"callback_query\":{{\"id\":\"cbq-{updateId}\","
+            + $"\"data\":\"{data}\",\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"message\":{{\"message_id\":{tappedMessageId},\"message_thread_id\":{threadId},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}}}}}}}}";
     }
 
     static string Photo_Json(string caption, long updateId, long messageId, long threadId)

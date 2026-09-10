@@ -153,7 +153,7 @@ public class ThePhoneRingsOnlyForTheSupervisorTests : IDisposable
         _telegram.Queue_Updates(Message_Json("how is it going", 6001, 301));
 
         Assert.True(
-            await Wait_Until_Async(() => _telegram.Count_Sent_Containing("✓") >= 1, 20_000),
+            await Wait_Until_Async(() => _telegram.Reactions.Count >= 1, 20_000),
             $"the receipt never arrived.{Environment.NewLine}{_log.Dump()}");
 
         // Give the tick room to do everything else it does per pass.
@@ -171,35 +171,56 @@ public class ThePhoneRingsOnlyForTheSupervisorTests : IDisposable
     }
 
     /// <summary>
-    /// THE RECEIPT IS ✓ AND NOTHING ELSE, silently — no busy sentence at delivery, no second message
-    /// about the same state. The owner counted fifteen identical "mid-task" sentences in one export.
+    /// THE RECEIPT IS ONE REACTION AND NOTHING ELSE — no busy sentence at delivery, no second
+    /// message about the same state. The owner counted fifteen identical "mid-task" sentences in
+    /// one export.
+    ///
+    /// <para>
+    /// The claim is unchanged; its SPELLING moved with brief D. It used to be "exactly one more ✓
+    /// message, and silent"; the receipt is now a reaction on the owner's own bubble, so the
+    /// stronger form is available and is asserted: exactly one more reaction, and NO message at
+    /// all bearing a tick.
+    /// </para>
     /// </summary>
     [Fact]
     [Trait("Speed", "Slow")]
-    public async Task AnOwnerMessage_GetsOneSilentTick_AndNoBusySentence()
+    public async Task AnOwnerMessage_GetsOneSilentReaction_AndNoBusySentence()
     {
         var orchId = await Start_Async();
 
-        // The priming message in Start_Async has already earned its own tick, so the claim is about
-        // the NEXT one: exactly one more, and silent.
-        var ticksBefore = _telegram.Count_Sent_Containing("✓");
+        // The priming message in Start_Async has already earned its own receipt, so the claim is
+        // about the NEXT one: exactly one more.
+        // COUNTED AS RECEIPTS, NOT AS REACTIONS. One message earns TWO reactions over its life —
+        // 👀 when the bridge has it and 👌 when a session picks it up — so counting reactions
+        // counts the pickup as a second receipt, and whether the pickup lands inside this window
+        // is a matter of timing. The claim is about how many times the owner was ACKNOWLEDGED.
+        var receiptsBefore = Count_Receipts();
 
         _telegram.Queue_Updates(Message_Json("here is a thought", 6101, 302));
 
         Assert.True(
-            await Wait_Until_Async(() => _telegram.Count_Sent_Containing("✓") > ticksBefore, 20_000),
+            await Wait_Until_Async(() => Count_Receipts() > receiptsBefore, 20_000),
             $"the receipt never arrived.{Environment.NewLine}{_log.Dump()}");
 
         await Wait_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(15));
 
-        var ticks = _telegram.Sent.Where(sent => sent.Text.Contains('✓', StringComparison.Ordinal)).ToList();
+        Assert.Equal(receiptsBefore + 1, Count_Receipts());
 
-        Assert.Equal(ticksBefore + 1, ticks.Count);
-        Assert.All(ticks, tick => Assert.Equal(TelegramSendSounds.Silent, tick.Sound));
+        // AND NOT AS A MESSAGE: the line in the topic the reaction replaced must not come back.
+        Assert.Empty(_telegram.Sent.Where(sent => sent.Text.Contains('✓', StringComparison.Ordinal)));
 
         // The sentence the owner struck: it may only appear as a LATER EDIT, never as a message.
         Assert.False(_telegram.Has_Sent_Containing("mid-task"), _telegram.Dump_Sent());
         Assert.False(_telegram.Has_Sent_Containing("pick it up when this turn ends"), _telegram.Dump_Sent());
+    }
+
+    /// <summary>
+    /// How many times the owner has been acknowledged — 👀 only. The 👌 that follows is the same
+    /// receipt changing state, not a second one.
+    /// </summary>
+    int Count_Receipts()
+    {
+        return _telegram.Reactions.Count(reaction => reaction.Emoji == AIOrchestratorCoreLib.Telegram.OwnerReaction_Emoji.RECEIVED);
     }
 
     async Task<string> Start_Async()
@@ -379,6 +400,22 @@ internal sealed class SoundRecordingTelegram_Fake : ITelegramApiClient
 
     public Task<string> Get_BotUsername_Async(CancellationToken cancellationToken) => Task.FromResult("test_bot");
     public Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken) => Task.CompletedTask;
+    readonly List<(long MessageId, string? Emoji)> _reactions = [];
+
+    /// <summary>Since brief D the receipt is a reaction, so this is where a receipt is observed.</summary>
+    public IReadOnlyList<(long MessageId, string? Emoji)> Reactions
+    {
+        get { lock (_lock) return [.. _reactions]; }
+    }
+
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            _reactions.Add((messageId, emoji));
+
+        return Task.CompletedTask;
+    }
+
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<byte>());
     public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => Task.FromResult(1L);
     public Task Edit_ForumTopic_Async(long messageThreadId, string newName, CancellationToken cancellationToken) => Task.CompletedTask;

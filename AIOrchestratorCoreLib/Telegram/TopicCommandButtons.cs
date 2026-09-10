@@ -160,6 +160,46 @@ public static class TopicCommandButtons
     }
 
     /// <summary>
+    /// The bar plus THE HOLD TOGGLE — brief D, and the toggle is here because its old home is gone.
+    ///
+    /// <para>
+    /// ⏸ Wait used to ride the ✓ receipt, which landed under whatever the owner had just sent:
+    /// "clicking a button is faster than typing wait", and it was exactly where they were looking.
+    /// Brief D replaces that receipt with a reaction, so there is no message to hang it on any
+    /// more. It moves to the one message that is always present — PULSE — and NOT to a second home
+    /// as well: one toggle in two places is CLAUDE.md decision 12, and the owner ruled the same way
+    /// (2026-09-10). Typed WAIT/GO stay as the shortcut.
+    /// </para>
+    /// <para>
+    /// THE LABEL CARRIES THE COUNT, which is what makes the bar's own repost-on-change rule bring
+    /// it back under the owner's messages precisely while they are holding — the moment the button
+    /// is worth reaching for. It is the same payload family the receipt used
+    /// (<see cref="HoldButton_Data"/>), so the tap handler needs nothing new; only the label and
+    /// which of the two actions it offers change with the state.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<(string Data, string Label)> Build_ForTopic(long messageThreadId, bool isHolding, int heldCount)
+    {
+        var toggle = isHolding
+            ? (HoldButton_Data.Build(HoldButtonActions.Go, messageThreadId), Describe_ReleaseLabel(heldCount))
+            : (HoldButton_Data.Build(HoldButtonActions.Hold, messageThreadId), HoldButton_Data.HOLD_LABEL);
+
+        return [.. Build(TOPIC_BUTTONS, messageThreadId), toggle];
+    }
+
+    /// <summary>
+    /// "▶ GO" while nothing is queued, "⏸ 3 held · ▶ GO" once something is — the owner's own
+    /// wording (2026-09-09). The count is the only thing on the bar that tells them the hold is
+    /// actually catching messages rather than merely switched on.
+    /// </summary>
+    public static string Describe_ReleaseLabel(int heldCount)
+    {
+        return heldCount <= 0
+            ? HoldButton_Data.GO_LABEL
+            : $"⏸ {heldCount.ToString(CultureInfo.InvariantCulture)} held · {HoldButton_Data.GO_LABEL}";
+    }
+
+    /// <summary>
     /// Inline-keyboard buttons for the GENERAL topic, in <see cref="GeneralCommands"/> order.
     ///
     /// It takes the thread id rather than assuming 0, for the same reason

@@ -299,6 +299,9 @@ internal sealed class ScriptedTelegram_Fake : ITelegramApiClient
 
     public Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken) => Task.FromResult("{\"ok\":true,\"result\":[]}");
 
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken) => Task.CompletedTask;
+
+
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<byte>());
 }
 

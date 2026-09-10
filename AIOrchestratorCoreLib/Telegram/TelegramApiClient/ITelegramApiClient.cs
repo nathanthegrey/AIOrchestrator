@@ -171,6 +171,19 @@ public interface ITelegramApiClient
     /// </summary>
     Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Puts ONE reaction on a message, or clears it when <paramref name="emoji"/> is null
+    /// (<c>setMessageReaction</c>, Bot API 7.0+) — the receipt that costs no line in the topic.
+    ///
+    /// <para>
+    /// A bot may set exactly one, and only from a fixed set: see
+    /// <see cref="OwnerReaction_Emoji"/>, which also records that <c>✅</c> is not in it. Telegram
+    /// answers an unreactable message or a disallowed emoji with a 400, so every caller must have a
+    /// fallback — brief D's is the silent ✓ message this replaces.
+    /// </para>
+    /// </summary>
+    Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken);
+
     /// <summary>Downloads a file the owner sent (getFile + file endpoint) — screenshots of bugs, etc.</summary>
     Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken);
 }
