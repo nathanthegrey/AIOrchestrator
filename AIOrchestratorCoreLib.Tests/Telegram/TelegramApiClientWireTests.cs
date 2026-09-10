@@ -118,6 +118,65 @@ public class TelegramApiClientWireTests
     }
 
     /// <summary>
+    /// THE POLL IS METERED NOW, and on the CONTROL bucket — it creates no message in the group, so
+    /// charging it to the twenty-a-minute ceiling would spend the owner's delivery allowance on
+    /// housekeeping. Asserted as "the send allowance is untouched", which is the property that
+    /// matters and the one a future re-classification would break.
+    /// </summary>
+    [Fact]
+    public async Task GetUpdates_SpendsTheControlAllowance_NotTheOwnersDeliveryAllowance()
+    {
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With(HttpStatusCode.OK, """{"ok":true,"result":[]}""");
+
+        var client = TelegramApiClient_Factory.Create_WithTransport(TOKEN, CHAT_ID, budget, transport);
+
+        await client.Get_UpdatesJson_Async(0, 50, CancellationToken.None);
+
+        Assert.Equal(TokenBucket_Gate.DEFAULT_CAPACITY, budget.Read_SendState().Tokens, precision: 1);
+        Assert.Single(transport.Requests);
+    }
+
+    /// <summary>
+    /// A RATE-LIMITED POLL IS RETRIED, honouring Telegram's own number. It used to be the one call
+    /// in this file that went straight to HttpClient — no bucket, no retry_after — so a 429 met the
+    /// inbound loop's own backoff, which knows nothing about how long Telegram asked for.
+    /// </summary>
+    [Fact]
+    public async Task AGetUpdatesThatIsRateLimited_IsRetried_AndTheSecondAttemptIsTheOneThatCounts()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":1}}""");
+        transport.Then_Answer_With(HttpStatusCode.OK, """{"ok":true,"result":[{"update_id":5}]}""");
+
+        var body = await Build_Client(transport).Get_UpdatesJson_Async(0, 50, CancellationToken.None);
+
+        Assert.Contains("\"update_id\":5", body);
+        Assert.Equal(2, transport.Requests.Count);
+    }
+
+    /// <summary>
+    /// Past the CONTROL ceiling the failure goes to the caller — two seconds, not the message
+    /// path's ten. A poll that slept for minutes would hold the inbound loop while the owner's
+    /// taps queued behind it.
+    /// </summary>
+    [Fact]
+    public async Task AGetUpdatesRateLimitedForTooLong_IsHandedBack_NotSleptThrough()
+    {
+        var transport = new RecordingTransport_Fake();
+        transport.Answer_With((HttpStatusCode)429, """{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":600}}""");
+
+        var failure = await Assert.ThrowsAsync<TelegramApiException>(
+            () => Build_Client(transport).Get_UpdatesJson_Async(0, 50, CancellationToken.None));
+
+        Assert.Equal(429, failure.StatusCode);
+        Assert.Equal(600, failure.RetryAfterSeconds);
+        Assert.Single(transport.Requests);
+        Assert.True(TokenBucket_Gate.MAXIMUM_CONTROL_RETRY_WAIT < TimeSpan.FromSeconds(600));
+    }
+
+    /// <summary>
     /// A 429 ON A MESSAGE-CREATING CALL IS HONOURED WITH TELEGRAM'S OWN NUMBER and retried — and
     /// the retry is what the owner's message rides on, so it is worth pinning that it happens at
     /// all rather than trusting the branch.
