@@ -9051,6 +9051,31 @@ internal sealed class BridgeEngineModel(
             {
                 throw;
             }
+            catch (Exception ex) when (Telegram.TelegramError_Table.Classify(400, ex.Message) == Telegram.TelegramErrorCases.TopicGone)
+            {
+                // THE TOPIC IS NOT THERE — TOPIC_ID_INVALID. Terminal for this id: there is nothing to
+                // rename, and no number of retries will make one. So the stored id is FORGOTTEN and
+                // the session is marked as having had its topic deleted, which is the fact that was
+                // missing.
+                //
+                // MEASURED IN PRODUCTION, 2026-09-10 20:56, six of these at start for four CLOSED
+                // orchestrations — and it is a regression I introduced. Stage 8d changed this loop's
+                // skip from "closed" to "closed AND the topic is recorded deleted", so that 🏁 could
+                // ever be drawn. The four topics HAD been deleted, before E1 existed to write the
+                // record — so they carried no TelegramTopicDeletedUtc, stopped being skipped, and were
+                // renamed into nothing. Writing the marker here is what closes that gap for every
+                // session that predates E1: the first attempt learns the truth and the loop skips it
+                // for good.
+                //
+                // AHEAD OF THE NOT-MODIFIED CATCH because both read a 400 and this one is terminal;
+                // behind it, a gone topic would be cached as correctly named and retried at every
+                // revalidation for as long as the app ran.
+                _log.Log_Info(session.OrchId, $"Topic {session.TelegramTopicId} is gone (Telegram: {ex.Message}) — forgetting its id; it will not be renamed again.");
+
+                _store.Mark_TopicDeleted(session.OrchId);
+                _appliedTopicNames.Remove(session.OrchId);
+                _topicNameRetryAfterUtc.Remove(session.OrchId);
+            }
             catch (Exception ex) when (Is_TopicAlreadyNamed(ex))
             {
                 // TOPIC_NOT_MODIFIED means the name is ALREADY what we want — success, not failure.

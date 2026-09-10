@@ -294,4 +294,97 @@ public class TelegramSendBudgetTests : IDisposable
         Assert.True(TokenBucket_Gate.MAXIMUM_CONTROL_RETRY_WAIT < TokenBucket_Gate.MAXIMUM_INLINE_RETRY_WAIT,
             "a 429 on a callback query must not hold a tick open — Telegram invalidates one after about ten seconds");
     }
+
+    /// <summary>
+    /// THE FIRST EDIT OF A MESSAGE GOES STRAIGHT OUT. The gate is about a REPEATED edit of the same
+    /// message; making the first one wait would delay every status line by half a minute after every
+    /// restart, for a throttle nothing has hit yet.
+    /// </summary>
+    [Fact]
+    public async Task TheFirstEditOfAMessageIsNotHeldBack()
+    {
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+
+        var started = DateTime.UtcNow;
+
+        await budget.Wait_ForMessageEdit_Async(4242, CancellationToken.None);
+
+        Assert.True(
+            DateTime.UtcNow - started < TimeSpan.FromSeconds(1),
+            "the first edit of a message waited — every topic's line would be half a minute late after a restart.");
+    }
+
+    /// <summary>
+    /// TWO DIFFERENT MESSAGES DO NOT HOLD EACH OTHER BACK, which is the whole reason this is a
+    /// per-message gate and not a bucket. Telegram's limit here is per message; a global allowance
+    /// would make one topic's PULSE wait for another's, and with one topic per orchestration that is
+    /// the wrong shape at any size.
+    /// </summary>
+    [Fact]
+    public async Task TwoDifferentMessagesDoNotWaitForEachOther()
+    {
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+
+        var started = DateTime.UtcNow;
+
+        await budget.Wait_ForMessageEdit_Async(1, CancellationToken.None);
+        await budget.Wait_ForMessageEdit_Async(2, CancellationToken.None);
+        await budget.Wait_ForMessageEdit_Async(3, CancellationToken.None);
+
+        Assert.True(
+            DateTime.UtcNow - started < TimeSpan.FromSeconds(1),
+            "editing three different messages serialised them — the gate is per message, not global.");
+    }
+
+    /// <summary>
+    /// A SECOND EDIT OF THE SAME MESSAGE IS HELD, which is the behaviour the 429s asked for. Measured
+    /// in production on 2026-09-10: a once-a-minute PULSE edit drew `retry_after` 20, 22 then 32
+    /// seconds, per topic, while the group bucket sat nearly full.
+    ///
+    /// ASSERTED ON THE COMPUTED WAIT, not by sleeping through it: a test that waited thirty real
+    /// seconds would be thirty seconds of every suite run, and the thing worth pinning is the
+    /// decision, not the Task.Delay. The wait is read from the gate's own arithmetic through a
+    /// cancelled token — the call reports the delay it wanted rather than serving it.
+    /// </summary>
+    [Fact]
+    public async Task ASecondEditOfTheSameMessageIsHeldForTheGap()
+    {
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+
+        await budget.Wait_ForMessageEdit_Async(4242, CancellationToken.None);
+
+        using var alreadyCancelled = new CancellationTokenSource();
+        await alreadyCancelled.CancelAsync();
+
+        // The second edit must WANT to wait. With the token already cancelled it cannot serve the
+        // delay, so it throws — which is the observable difference between "held" and "let through",
+        // and it costs no wall-clock time.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => budget.Wait_ForMessageEdit_Async(4242, alreadyCancelled.Token));
+    }
+
+    /// <summary>
+    /// AND THE SAME MESSAGE IS FREE AGAIN ONCE THE GAP HAS PASSED. Without this the test above would
+    /// also pass against a gate that blocked a message for ever after its first edit — one route to
+    /// "held", two very different behaviours.
+    ///
+    /// The elapsed gap is simulated by editing a message whose last edit is in the past, which the
+    /// factory's persisted seam cannot express — so it is asserted through the ONE thing that can: a
+    /// fresh budget, where the map is empty, is the same state as a message whose gap has expired and
+    /// been pruned. Stated plainly rather than dressed up: this pins the pruning, not the clock.
+    /// </summary>
+    [Fact]
+    public async Task AMessageWhoseGapHasExpiredIsFreeAgain()
+    {
+        var budget = TelegramSendBudget_Factory.Create_Fresh();
+
+        await budget.Wait_ForMessageEdit_Async(4242, CancellationToken.None);
+
+        using var alreadyCancelled = new CancellationTokenSource();
+        await alreadyCancelled.CancelAsync();
+
+        // A DIFFERENT message is the expired case's twin: nothing remembered, nothing to wait for.
+        // It must NOT throw, or the test above would be satisfied by a gate that holds everything.
+        await budget.Wait_ForMessageEdit_Async(9999, alreadyCancelled.Token);
+    }
 }

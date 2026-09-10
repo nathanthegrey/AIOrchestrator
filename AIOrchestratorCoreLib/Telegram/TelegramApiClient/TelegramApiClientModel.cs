@@ -287,6 +287,12 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["text"] = text,
         };
 
+        // THE PER-MESSAGE GATE, ahead of the control bucket. Telegram throttles edits of ONE message
+        // far harder than calls to the group — measured 2026-09-10, `retry_after` 20-32s on a
+        // once-a-minute PULSE edit while the group bucket sat nearly full — so this is a dimension no
+        // group-level allowance can express. See TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE.
+        await _budget.Wait_ForMessageEdit_Async(messageId, cancellationToken);
+
         await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
     }
 
@@ -299,6 +305,12 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["text"] = html,
             ["parse_mode"] = "HTML",
         };
+
+        // THE PER-MESSAGE GATE, ahead of the control bucket. Telegram throttles edits of ONE message
+        // far harder than calls to the group — measured 2026-09-10, `retry_after` 20-32s on a
+        // once-a-minute PULSE edit while the group bucket sat nearly full — so this is a dimension no
+        // group-level allowance can express. See TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE.
+        await _budget.Wait_ForMessageEdit_Async(messageId, cancellationToken);
 
         await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
     }
@@ -326,6 +338,12 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["text"] = text,
             ["reply_markup"] = new JsonObject { ["inline_keyboard"] = Build_InlineKeyboard(buttonRows) },
         };
+
+        // THE PER-MESSAGE GATE, ahead of the control bucket. Telegram throttles edits of ONE message
+        // far harder than calls to the group — measured 2026-09-10, `retry_after` 20-32s on a
+        // once-a-minute PULSE edit while the group bucket sat nearly full — so this is a dimension no
+        // group-level allowance can express. See TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE.
+        await _budget.Wait_ForMessageEdit_Async(messageId, cancellationToken);
 
         await Post_Async("editMessageText", payload, cancellationToken, TelegramCallClasses.Control);
     }
@@ -425,6 +443,12 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
             ["chat_id"] = _supergroupChatId,
             ["message_id"] = messageId,
         };
+
+        // THE PER-MESSAGE GATE, ahead of the control bucket. Telegram throttles edits of ONE message
+        // far harder than calls to the group — measured 2026-09-10, `retry_after` 20-32s on a
+        // once-a-minute PULSE edit while the group bucket sat nearly full — so this is a dimension no
+        // group-level allowance can express. See TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE.
+        await _budget.Wait_ForMessageEdit_Async(messageId, cancellationToken);
 
         await Post_Async("editMessageReplyMarkup", payload, cancellationToken, TelegramCallClasses.Control);
     }

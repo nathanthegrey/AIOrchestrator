@@ -21,10 +21,90 @@ internal sealed class TelegramSendBudgetModel : ITelegramSendBudget
     double _controlTokens;
     DateTime _controlRefilledUtc = DateTime.UtcNow;
 
+    /// <summary>
+    /// WHEN EACH MESSAGE WAS LAST EDITED — a per-message gate, because Telegram throttles edits of
+    /// one message far harder than calls to the group (measured 2026-09-10; see
+    /// <see cref="TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE"/>).
+    ///
+    /// <para>
+    /// BOUNDED BY PRUNING, not by a cap on count. The app edits a handful of long-lived messages —
+    /// one PULSE per topic, one dashboard, the receipts — so the natural size is small; what would
+    /// grow it without limit is a long run through many closed topics. An entry older than the gate
+    /// can never hold anything back, so it is dropped when the map is next touched, which keeps this
+    /// bounded by the number of messages edited in the last thirty seconds rather than ever.
+    /// </para>
+    /// </summary>
+    readonly Dictionary<long, DateTime> _lastEditUtcByMessageId = [];
+
     internal TelegramSendBudgetModel(double sendTokens, DateTime sendRefilledUtc)
     {
         _sendTokens = sendTokens;
         _sendRefilledUtc = sendRefilledUtc;
+    }
+
+    public Task Wait_ForMessageEdit_Async(long messageId, CancellationToken cancellationToken)
+    {
+        return Wait_Async(
+            () =>
+            {
+                var now = DateTime.UtcNow;
+                var gap = TokenBucket_Gate.MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE;
+
+                Prune_StaleEdits(now, gap);
+
+                if (!_lastEditUtcByMessageId.TryGetValue(messageId, out var lastEdit))
+                {
+                    // FIRST EDIT OF THIS MESSAGE GOES STRAIGHT OUT. The gate is about a REPEATED edit
+                    // of the same message; making the first one wait would delay every status line by
+                    // half a minute after every restart for nothing.
+                    _lastEditUtcByMessageId[messageId] = now;
+
+                    return TimeSpan.Zero;
+                }
+
+                var elapsed = now - lastEdit;
+
+                if (elapsed >= gap)
+                {
+                    _lastEditUtcByMessageId[messageId] = now;
+
+                    return TimeSpan.Zero;
+                }
+
+                // THE STAMP MOVES TO WHEN THIS EDIT WILL ACTUALLY GO OUT, not to now. Recording `now`
+                // would let a second caller that arrives during the wait compute its own gap from a
+                // moment already spent, and two waiters would both fire at the end of one gap.
+                var wait = gap - elapsed;
+
+                _lastEditUtcByMessageId[messageId] = lastEdit + gap;
+
+                return wait;
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Drops entries that can no longer hold anything back. Called under the lock, from the one
+    /// method that touches the map.
+    /// </summary>
+    void Prune_StaleEdits(DateTime now, TimeSpan gap)
+    {
+        if (_lastEditUtcByMessageId.Count == 0)
+            return;
+
+        List<long>? expired = null;
+
+        foreach (var (messageId, lastEdit) in _lastEditUtcByMessageId)
+        {
+            if (now - lastEdit >= gap)
+                (expired ??= []).Add(messageId);
+        }
+
+        if (expired == null)
+            return;
+
+        foreach (var messageId in expired)
+            _lastEditUtcByMessageId.Remove(messageId);
     }
 
     public Task Wait_ForSend_Async(CancellationToken cancellationToken)

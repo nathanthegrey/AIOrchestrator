@@ -78,6 +78,32 @@ public static class TokenBucket_Gate
     public const double CONTROL_CAPACITY = CONTROL_CALLS_PER_MINUTE / 2;
 
     /// <summary>
+    /// THE MINIMUM GAP BETWEEN TWO EDITS OF THE SAME MESSAGE — thirty seconds, and this number was
+    /// measured rather than chosen.
+    ///
+    /// <para>
+    /// PRODUCTION, 2026-09-10 20:57-20:59, the first three minutes after the deploy: PULSE edited one
+    /// message per topic once a minute, and Telegram answered 429 with `retry_after` 20, then 22,
+    /// then 32 seconds — once a minute, per topic. Nothing was lost (the retry lands) but the pattern
+    /// is a throttle being hit continuously, and the retry_after it hands back is Telegram telling us
+    /// the interval it wants. Thirty seconds is the top of the observed range.
+    /// </para>
+    /// <para>
+    /// WHY IT CANNOT BE THE CONTROL BUCKET. That bucket is sized from the group ceiling — sixty calls
+    /// a minute across the whole supergroup — and it was nowhere near empty while these 429s arrived.
+    /// Telegram limits edits of ONE message far more tightly than calls to the group, so a global
+    /// allowance cannot express the rule however it is tuned: two topics editing once a minute each
+    /// is two calls a minute, which no group-level bucket would ever hold back.
+    /// </para>
+    /// <para>
+    /// IT IS A BELT, NOT THE FIX. The cause was a heartbeat that changed every minute, and that is
+    /// stepped to five minutes at the source. This stops the next surface that decides to edit a
+    /// message in a loop from finding out the same way.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan MINIMUM_GAP_BETWEEN_EDITS_OF_ONE_MESSAGE = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// The longest a 429 may hold a CONTROL call — far shorter than the message one, and the
     /// shortness is the whole point.
     ///
