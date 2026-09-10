@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using AIOrchestratorCoreLib.Channels;
 
 namespace AIOrchestratorCoreLib.Bridge.Decisions;
 
@@ -57,11 +58,16 @@ public sealed record OwnerQuestion(
 /// </summary>
 public static class OwnerQuestion_Contract
 {
-    public const string QUESTION_MARKER = "QUESTION";
-    public const string OPTION_MARKER = "OPTION";
-    public const string RECOMMEND_MARKER = "RECOMMEND";
-    public const string RISK_MARKER = "RISK";
-    public const string ROW_MARKER = "ROW";
+    /// <summary>
+    /// THE BARE WORDS, DERIVED. This class matched `QUESTION` while two others matched `QUESTION:` —
+    /// the exact drift E3 exists to end. They are the one grammar marker with its colon trimmed now,
+    /// so a change moves both spellings at once and neither can be edited alone.
+    /// </summary>
+    public static readonly string QUESTION_MARKER = ChannelGrammar.Bare(ChannelGrammar.QUESTION);
+    public static readonly string OPTION_MARKER = ChannelGrammar.Bare(ChannelGrammar.OPTION);
+    public static readonly string RECOMMEND_MARKER = ChannelGrammar.Bare(ChannelGrammar.RECOMMEND);
+    public static readonly string RISK_MARKER = ChannelGrammar.Bare(ChannelGrammar.RISK);
+    public static readonly string ROW_MARKER = ChannelGrammar.Bare(ChannelGrammar.ROW);
 
     /// <summary>The word that says "this decision belongs to no row", spelled out rather than left blank.</summary>
     public const string NO_ROW = "none";

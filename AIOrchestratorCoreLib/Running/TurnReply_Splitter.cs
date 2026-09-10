@@ -1,3 +1,5 @@
+using AIOrchestratorCoreLib.Channels;
+
 namespace AIOrchestratorCoreLib.Running;
 
 /// <summary>One addressed part of a session's final message. <c>SourceKey</c> is null for text the session addressed to nobody.</summary>
@@ -33,7 +35,10 @@ public readonly record struct ReplyBlock(string? SourceKey, string Text);
 /// </summary>
 public static class TurnReply_Splitter
 {
-    public const string TO_MARKER = "TO:";
+    // FROM THE GRAMMAR, and `static readonly` rather than `const` because of it: the grammar is a
+    // FILE both this app and the bash tool read, so its values arrive at runtime. A `const` would
+    // have to be a literal here, which is the ninth copy E3 removes.
+    public static readonly string TO_MARKER = ChannelGrammar.TO;
 
     /// <summary>Opens and closes a markdown code fence. Text between two of them is quoted, never addressed.</summary>
     const string FENCE = "```";

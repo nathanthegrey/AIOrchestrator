@@ -9,11 +9,14 @@ namespace AIOrchestratorCoreLib.Status;
 /// </summary>
 public static class MemberState_Resolver
 {
-    public const string WRITING_WINDOW_OPEN_MARKER = "WRITING WINDOW OPEN";
-    public const string WRITING_WINDOW_CLOSED_MARKER = "WRITING WINDOW CLOSED";
-    public const string MUTATION_WINDOW_OPEN_MARKER = "MUTATION WINDOW OPEN";
-    public const string MUTATION_WINDOW_CLOSED_MARKER = "MUTATION WINDOW CLOSED";
-    public const string BLOCKED_ON_OWNER_MARKER = "BLOCKED ON OWNER";
+    // FROM THE GRAMMAR, and `static readonly` rather than `const` because of it: the grammar is a
+    // FILE both this app and the bash tool read, so its values arrive at runtime. A `const` would
+    // have to be a literal here, which is the ninth copy E3 removes.
+    public static readonly string WRITING_WINDOW_OPEN_MARKER = ChannelGrammar.WRITING_WINDOW_OPEN;
+    public static readonly string WRITING_WINDOW_CLOSED_MARKER = ChannelGrammar.WRITING_WINDOW_CLOSED;
+    public static readonly string MUTATION_WINDOW_OPEN_MARKER = ChannelGrammar.MUTATION_WINDOW_OPEN;
+    public static readonly string MUTATION_WINDOW_CLOSED_MARKER = ChannelGrammar.MUTATION_WINDOW_CLOSED;
+    public static readonly string BLOCKED_ON_OWNER_MARKER = ChannelGrammar.BLOCKED_ON_OWNER;
 
     /// <summary>
     /// A session asking for a decision it cannot take itself. THE SHARED LITERAL, read by the mirror
@@ -42,16 +45,16 @@ public static class MemberState_Resolver
     /// word (decision 12: never a second copy, and never a broader one).
     /// </para>
     /// </summary>
-    public const string QUESTION_MARKER = "QUESTION:";
+    public static readonly string QUESTION_MARKER = ChannelGrammar.QUESTION;
 
     /// <summary>The second word of the boot subject every member is required to write: "imp-1 online".</summary>
-    public const string BOOT_ANNOUNCEMENT_WORD = "online";
+    public static readonly string BOOT_ANNOUNCEMENT_WORD = ChannelGrammar.BOOT_ANNOUNCEMENT_WORD;
 
     /// <summary>
     /// The member declaring it has nothing owed and nothing running. Protocol vocabulary: the role
     /// commands instruct members to write this exact phrase when they go quiet on purpose.
     /// </summary>
-    public const string STANDING_BY_MARKER = "STANDING BY";
+    public static readonly string STANDING_BY_MARKER = ChannelGrammar.STANDING_BY;
 
     /// <summary>
     /// Every phrase this resolver acts on. Exists so a test can walk the vocabulary instead of a

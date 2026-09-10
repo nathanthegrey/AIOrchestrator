@@ -1,4 +1,5 @@
 using System.Globalization;
+using AIOrchestratorCoreLib.Channels;
 
 namespace AIOrchestratorCoreLib.Bridge.Decisions;
 
@@ -29,8 +30,11 @@ namespace AIOrchestratorCoreLib.Bridge.Decisions;
 /// </summary>
 public static class QuestionDirectives_Parser
 {
-    public const string DEADLINE_MARKER = "DEADLINE";
-    public const string DEFAULT_MARKER = "DEFAULT";
+    // FROM THE GRAMMAR, and `static readonly` rather than `const` because of it: the grammar is a
+    // FILE both this app and the bash tool read, so its values arrive at runtime. A `const` would
+    // have to be a literal here, which is the ninth copy E3 removes.
+    public static readonly string DEADLINE_MARKER = ChannelGrammar.Bare(ChannelGrammar.DEADLINE);
+    public static readonly string DEFAULT_MARKER = ChannelGrammar.Bare(ChannelGrammar.DEFAULT);
 
     /// <summary>
     /// A deadline further out than this is treated as absent. An agent writing "9999h" has not
