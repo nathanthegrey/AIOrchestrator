@@ -58,27 +58,28 @@ public class MemberTrafficRidesOneDigestedTurnTests
         var dispatcher = harness.Create_Dispatcher();
 
         Boot(harness, dispatcher);
+        harness.Spend_FirstContact(dispatcher, ORCH, T0.AddMinutes(1), 1, imp, rev);
 
         // THE WINDOW IS MEASURED FROM THE FIRST HELD ENTRY, so every instant below is relative to this
         // one rather than to the boot. That is the bound the change promises — a report is read at
         // most one window after it is filed — and writing the deadline as "T0 + 5" instead was the
         // first thing this test got wrong.
-        var firstReportAt = T0.AddMinutes(1);
+        var firstReportAt = T0.AddMinutes(2);
 
         Report(harness, imp, ChannelAuthors.Implementer, "REPORT — parser ported");
 
         Assert.False(
-            Ran_AnotherTurn(harness, dispatcher, firstReportAt),
+            Ran_AnotherTurn(harness, dispatcher, firstReportAt, 2),
             "the first member's report woke the supervisor instead of being digested.");
 
         Report(harness, rev, ChannelAuthors.Reviewer, "VERDICT — accepted");
 
         Assert.False(
-            Ran_AnotherTurn(harness, dispatcher, firstReportAt.AddMinutes(3)),
+            Ran_AnotherTurn(harness, dispatcher, firstReportAt.AddMinutes(3), 2),
             "the second report woke the supervisor three minutes into a five-minute window.");
 
         Assert.False(
-            Ran_AnotherTurn(harness, dispatcher, firstReportAt.AddMinutes(4)),
+            Ran_AnotherTurn(harness, dispatcher, firstReportAt.AddMinutes(4), 2),
             "the pair was delivered a minute before the window was out.");
 
         // AND THE SECOND REPORT DID NOT RESTART THE CLOCK. It arrived three minutes in; if the hold
@@ -86,7 +87,7 @@ public class MemberTrafficRidesOneDigestedTurnTests
         // the failure mode SessionTracker.DigestHeldSince exists to prevent, and it is what a crew
         // reporting steadily would have suffered for ever.
         Assert.True(
-            PrintRunnerTestHarness.Drive_Until_At(dispatcher, firstReportAt.AddMinutes(DIGEST_MINUTES), () => Turns(harness) == 2, PrintRunnerTestHarness.GENEROUS),
+            PrintRunnerTestHarness.Drive_Until_At(dispatcher, firstReportAt.AddMinutes(DIGEST_MINUTES), () => Turns(harness) == 3, PrintRunnerTestHarness.GENEROUS),
             "the digest window elapsed and the two reports were never delivered.");
 
         await dispatcher.Stop_Async();
@@ -96,7 +97,7 @@ public class MemberTrafficRidesOneDigestedTurnTests
         // different bug. A cursor with deliveries is what says a channel was handed over.
         var state = harness.Read_State(SessionRoles.Supervisor, ORCH, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID);
 
-        Assert.Equal(2, state.ExecutedTurns.Count);
+        Assert.Equal(3, state.ExecutedTurns.Count);
         Assert.Equal(2, state.Cursors.Count(cursor => cursor.SourceKey != TurnSource_Factory.OWNER_KEY && cursor.Delivered.Count > 0));
     }
 
@@ -122,24 +123,25 @@ public class MemberTrafficRidesOneDigestedTurnTests
         var dispatcher = harness.Create_Dispatcher();
 
         Boot(harness, dispatcher);
+        harness.Spend_FirstContact(dispatcher, ORCH, T0.AddMinutes(1), 1, imp);
 
         Report(harness, imp, ChannelAuthors.Implementer, "REPORT — parser ported");
 
-        var held = T0.AddMinutes(1);
+        var held = T0.AddMinutes(2);
 
-        Assert.False(Ran_AnotherTurn(harness, dispatcher, held), "the member's report was not digested at all.");
+        Assert.False(Ran_AnotherTurn(harness, dispatcher, held, 2), "the member's report was not digested at all.");
 
         Assert.True(ChannelAppender.Append_OwnerEntry(harness.Paths.Get_OwnerChannelFile(ORCH), "how far are we?", DateTime.Now));
 
         Assert.True(
-            PrintRunnerTestHarness.Drive_Until_At(dispatcher, held, () => Turns(harness) == 2, PrintRunnerTestHarness.GENEROUS),
+            PrintRunnerTestHarness.Drive_Until_At(dispatcher, held, () => Turns(harness) == 3, PrintRunnerTestHarness.GENEROUS),
             "the owner's message waited for the digest window: no turn ran at the instant it landed.");
 
         await dispatcher.Stop_Async();
 
         var state = harness.Read_State(SessionRoles.Supervisor, ORCH, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID);
 
-        Assert.Equal(2, state.ExecutedTurns.Count);
+        Assert.Equal(3, state.ExecutedTurns.Count);
         Assert.Equal(2, state.Cursors.Count(cursor => cursor.Delivered.Count > 0));
     }
 
@@ -209,7 +211,7 @@ public class MemberTrafficRidesOneDigestedTurnTests
             DateTime.Now));
 
         Assert.False(
-            Ran_AnotherTurn(harness, dispatcher, T0.AddHours(1)),
+            Ran_AnotherTurn(harness, dispatcher, T0.AddHours(1), 1),
             "the app's own bookkeeping bought the supervisor a turn.");
 
         await dispatcher.Stop_Async();
@@ -239,16 +241,23 @@ public class MemberTrafficRidesOneDigestedTurnTests
     }
 
     /// <summary>
-    /// Whether a turn beyond the boot one started at <paramref name="nowLocal"/>. A turn IN FLIGHT
-    /// counts, not only a finished one: a negative assertion that looked at the executed list alone
-    /// would pass while a turn was busy being wrong.
+    /// Whether a turn beyond <paramref name="turnsSoFar"/> started at <paramref name="nowLocal"/>. A
+    /// turn IN FLIGHT counts, not only a finished one: a negative assertion that looked at the executed
+    /// list alone would pass while a turn was busy being wrong.
+    ///
+    /// <para>
+    /// THE COUNT IS A PARAMETER AND NOT THE CONSTANT 1 IT WAS. Since 2026-09-10 these cases spend each
+    /// spoke's first-contact exemption before they measure anything
+    /// (<c>PrintRunnerTestHarness.Spend_FirstContact</c>), so the baseline is not the boot turn alone —
+    /// and a hard-coded 1 would have made every negative assertion below trivially true.
+    /// </para>
     /// </summary>
-    static bool Ran_AnotherTurn(PrintRunnerTestHarness harness, IPrintTurnDispatcher dispatcher, DateTime nowLocal)
+    static bool Ran_AnotherTurn(PrintRunnerTestHarness harness, IPrintTurnDispatcher dispatcher, DateTime nowLocal, int turnsSoFar)
     {
         return PrintRunnerTestHarness.Drive_Until_At(
             dispatcher,
             nowLocal,
-            () => Turns(harness) > 1 || dispatcher.Is_TurnInFlight(ORCH, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID),
+            () => Turns(harness) > turnsSoFar || dispatcher.Is_TurnInFlight(ORCH, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID),
             TimeSpan.FromSeconds(1));
     }
 }

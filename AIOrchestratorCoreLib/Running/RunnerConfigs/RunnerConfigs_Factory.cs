@@ -21,6 +21,42 @@ public static class RunnerConfigs_Factory
     public static readonly TimeSpan DEFAULT_MEMBER_DIGEST_WINDOW = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// THE CEILING THE DIGEST MAY NOT BE CONFIGURED PAST, because above it the app starts complaining
+    /// about a delay it is itself causing.
+    ///
+    /// <para>
+    /// THE COUPLING, MEASURED BY A REVIEW ON 2026-09-09. <c>BridgeEngineModel</c> tells a supervisor it
+    /// owes a member a verdict once that member's channel has been quiet for
+    /// <c>IMPLEMENTER_NUDGE_MINUTES</c> = 8 (read in that file on 2026-09-09; it is a private
+    /// <c>const int</c> there and this stage did not touch it, so the number is restated here rather
+    /// than referenced — giving that constant a shared home is the fix for the other half, and it is
+    /// reported rather than done). The quiet clock runs from the member's REPORT, so a digest of D
+    /// minutes leaves 8 − D for the supervisor's turn to be released, run and file its verdict. Probed
+    /// at D = 10: at minute 9 the app considered the supervisor 9.6 min late on a verdict for a report
+    /// IT WAS ITSELF HOLDING, and spent that quiet spell's single nudge token on the false alarm — so a
+    /// genuinely stalled supervisor in the same spell got nothing. The nudge is agent-audience and the
+    /// owner never sees it, so decision 15 is not in play; a false alarm that consumes the true one's
+    /// token is a defect on its own.
+    /// </para>
+    /// <para>
+    /// FIVE, WHICH IS ALSO THE DEFAULT, and the equality is the point rather than a coincidence: at
+    /// D = 5 a turn has three minutes to be released, run and answer [estimate — no measurement of
+    /// supervisor turn latency after a digest release exists yet], and there is no larger value that
+    /// leaves it time to answer at all. So the digest can be turned DOWN freely — that is the safe
+    /// direction, toward the behaviour before 2026-09-09 — and turning it UP is refused with a line
+    /// naming the nudge rather than applied silently. Raising it is a change to the PAIR, not to this
+    /// number alone.
+    /// </para>
+    /// <para>
+    /// ENFORCED AT THE CONFIG READER AND NOT IN <see cref="Create"/>, exactly the way the memory-size
+    /// ceiling is. This is a rule about what an OPERATOR may write into <c>config.json</c>: a throw
+    /// here would turn a hand-typed number into an app that will not start, and would also refuse the
+    /// tests that legitimately drive longer windows on an injected clock.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan MAX_MEMBER_DIGEST_WINDOW = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Two minutes of total silence from a living stream process. Long enough that a turn thinking
     /// hard, or running a slow tool, is never mistaken for a hung one — the CLI emits assistant and
     /// hook events throughout a working turn, so real silence means real silence — and short enough
@@ -61,9 +97,12 @@ public static class RunnerConfigs_Factory
             throw new ArgumentException($"silenceLimit must be positive, got {silenceLimit}");
 
         // A NEGATIVE DIGEST IS NOT REFUSED, IT IS OFF. Zero and below both mean "one entry, one turn"
-        // — the behaviour before 2026-09-09 — and the policy reads them that way, so there is nothing
-        // for a validator to protect here and a throw would only turn a hand-typed minus into an app
-        // that will not start.
+        // — the behaviour before 2026-09-09 — and the policy reads them that way (WakeUp_Policy tests
+        // `digestWindow <= TimeSpan.Zero`), so there is nothing for a validator to protect here and a
+        // throw would only turn a hand-typed minus into an app that will not start. REVIEW FINDING,
+        // 2026-09-09: this sentence was true of the factory and FALSE of the config reader, which gave
+        // a negative value the five-minute default back — the longest wait in answer to a request for
+        // none. RunnerConfigs_Json now normalises it to zero, so the two agree.
         return new RunnerConfigsModel(
             roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow,
             memberDigestWindow ?? DEFAULT_MEMBER_DIGEST_WINDOW,

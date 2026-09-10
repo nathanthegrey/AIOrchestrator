@@ -42,15 +42,25 @@ public sealed class PrintRunnerTestHarness : IDisposable
     readonly double _memberDigestMinutes;
 
     /// <param name="memberDigestMinutes">
-    /// The supervisor's wake-up digest (<c>WakeUp_Policy</c>), OFF by default here and five minutes in
-    /// production. Off is deliberate: a test that means to drive a member's report through a
-    /// supervisor keeps saying exactly what it always said, and the digest is driven on injected
-    /// timing by the tests written for it (<c>MemberTrafficRidesOneDigestedTurnTests</c>) plus the
-    /// production default, which <c>RunnerConfigsJsonTests</c> pins. A harness default of five minutes
-    /// would instead make every such test wait out a wall clock, which is the one thing this
-    /// mechanism was required not to need.
+    /// The supervisor's wake-up digest (<c>WakeUp_Policy</c>) — THE PRODUCTION WINDOW by default, so
+    /// the suite observes what ships.
+    ///
+    /// <para>
+    /// IT DEFAULTED TO OFF, AND THAT WAS A REVIEW FINDING OF 2026-09-09: switching every pre-existing
+    /// test to digest-off removed the suite's only coverage of member → supervisor delivery at the
+    /// window production runs on, so the change could not be observed by anything except the four
+    /// cases written for it. A default that turns off the mechanism under test everywhere else is a
+    /// default that certifies the old behaviour.
+    /// </para>
+    /// <para>
+    /// AND IT COSTS NO WALL CLOCK, which was the fear behind the old default. Nothing sleeps through a
+    /// window: a member's FIRST entry is never held (the greeting rule), so a case that appends one
+    /// report and waits behaves as it always did, and the cases that drive a LATER report hand
+    /// <c>Tick</c> a later instant through <see cref="Drive_Until_At"/>. A test that genuinely wants
+    /// the pre-digest behaviour passes <c>0</c> and says why.
+    /// </para>
     /// </param>
-    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript", double memberDigestMinutes = 0)
+    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript", double memberDigestMinutes = 5)
     {
         TempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-print-runner-{Guid.NewGuid():N}");
         RepoPath = Path.Combine(TempRoot, "repo");
@@ -316,6 +326,47 @@ public sealed class PrintRunnerTestHarness : IDisposable
 
         dispatcher.Tick(nowLocal);
         return condition();
+    }
+
+    /// <summary>
+    /// SPENDS EVERY NAMED SPOKE'S FIRST-CONTACT EXEMPTION, so what a digest case measures afterwards is
+    /// the digest and not the greeting rule.
+    ///
+    /// <para>
+    /// A member's FIRST entry is never held (<c>WakeUp_Policy.Is_Digestable</c>): it is the boot
+    /// greeting of a session that exists to be briefed, and holding it cost a whole window of dead time
+    /// per <c>add-implementer</c>. Every entry after that is an ordinary report and is held — which is
+    /// the state a member is in for all but the first minute of its life, and therefore the state a
+    /// case about "a member's report" has to set up. This is that setup: each member says hello, the
+    /// owner writes at the same instant, and the owner's message releases the turn whatever the digest
+    /// thinks, so every spoke ends with one delivery on its cursor.
+    /// </para>
+    /// <para>
+    /// ONE COPY, HERE, because two test classes need it and the wait helpers beside it are already the
+    /// thing this suite was told not to write a fifth of.
+    /// </para>
+    /// </summary>
+    public void Spend_FirstContact(IPrintTurnDispatcher dispatcher, string orchId, DateTime nowLocal, int turnsSoFar, params string[] memberIds)
+    {
+        // IT THROWS RATHER THAN ASSERTS, like everything else in this file: a harness that fails its
+        // own setup is not a case's verdict, and a setup step reported as an assertion failure sends
+        // the next reader to the wrong file.
+        foreach (var memberId in memberIds)
+        {
+            if (!ChannelAppender.Append_SessionEntry(
+                Paths.Get_ImplementerChannelFile(orchId, memberId),
+                MemberKind_Ids.Resolve_Kind(memberId) == MemberKinds.Reviewer ? ChannelAuthors.Reviewer : ChannelAuthors.Implementer,
+                $"{memberId} online",
+                "reporting for duty",
+                DateTime.Now))
+                throw new Exception($"could not append '{memberId}' greeting to its spoke");
+        }
+
+        if (!ChannelAppender.Append_OwnerEntry(Paths.Get_OwnerChannelFile(orchId), "get started", DateTime.Now))
+            throw new Exception($"could not append the owner entry that releases '{orchId}' first-contact traffic");
+
+        if (!Drive_Until_At(dispatcher, nowLocal, () => Read_State(SessionRoles.Supervisor, orchId, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID).ExecutedTurns.Count == turnsSoFar + 1, GENEROUS))
+            throw new Exception("the owner's message did not start a turn, so no spoke's first entry was ever handed over and nothing after this is measuring the digest");
     }
 
     public static readonly TimeSpan GENEROUS = TimeSpan.FromSeconds(60);

@@ -52,9 +52,9 @@ public class RunnerConfigsJsonTests : IDisposable
 
     /// <summary>
     /// THE DIGEST WINDOW THE VPS WILL RUN ON, pinned at the surface the owner edits (spec C4). Five
-    /// minutes is the spec's proposal, and the test harness deliberately does NOT default to it (see
-    /// its <c>memberDigestMinutes</c> parameter) — so this is the only place that says what production
-    /// gets when nobody writes the key.
+    /// minutes is the spec's proposal; this is the place that says what production gets when nobody
+    /// writes the key, and since 2026-09-10 the behavioural harness defaults to the same number, so
+    /// the suite drives what ships rather than a window switched off.
     /// </summary>
     [Fact]
     public void TheMemberDigestWindow_IsFiveMinutesUnlessTheOwnerSaysOtherwise()
@@ -83,6 +83,71 @@ public class RunnerConfigsJsonTests : IDisposable
         Assert.Equal(TimeSpan.Zero, configs.MemberDigestWindow);
     }
 
+    /// <summary>
+    /// AND BELOW ZERO MEANS OFF TOO — the review's LOW of 2026-09-09. A negative value used to restore
+    /// the five-minute default, which contradicted the factory's own docstring three lines away and
+    /// gave an owner who typed a minus sign the OPPOSITE of what they asked for: the longest wait
+    /// instead of none. "Off" and "off" are the same answer; the only place a minus could honestly
+    /// lead is nowhere else.
+    /// </summary>
+    [Fact]
+    public void ANegativeMemberDigest_MeansOffAndNotTheDefaultBack()
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""
+            {"printRunner": { "memberDigestMinutes": -1 }}
+            """) as JsonObject);
+
+        Assert.Equal(TimeSpan.Zero, configs.MemberDigestWindow);
+    }
+
+    /// <summary>
+    /// A DIGEST LONGER THAN THE CEILING IS REFUSED WITH A LINE, NOT APPLIED — the review's MEDIUM of
+    /// 2026-09-09, and the one coupling in this change that bites another component.
+    ///
+    /// <para>
+    /// <c>BridgeEngineModel</c> tells a supervisor it owes a member a verdict once that member's
+    /// channel has been quiet for <c>IMPLEMENTER_NUDGE_MINUTES</c> = 8, and that clock runs from the
+    /// member's REPORT — so a digest of D minutes leaves 8 − D for the turn to be released, run and
+    /// answer. Probed by the review at D = 10: at minute 9 the app called the supervisor 9.6 min late
+    /// on a verdict for a report IT WAS HOLDING, and spent that quiet spell's single nudge token on
+    /// the false alarm, so a genuinely stalled supervisor got nothing.
+    /// </para>
+    /// <para>
+    /// REFUSED THE WAY <c>sessionMemoryMax</c> IS: a rejection line the operator reads and the default
+    /// applied, rather than a throw that stops the app starting over a hand-typed number. Turning the
+    /// digest DOWN is always allowed — that is the direction of today's behaviour.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ADigestAboveTheCeiling_IsRefusedWithALine_AndTheDefaultIsApplied()
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""
+            {"printRunner": { "memberDigestMinutes": 10 }}
+            """) as JsonObject);
+
+        Assert.Equal(RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW, configs.MemberDigestWindow);
+
+        var rejection = Assert.Single(configs.Rejections);
+
+        Assert.Contains(RunnerConfigs_Json.MEMBER_DIGEST_MINUTES_KEY, rejection);
+        Assert.Contains("nudge", rejection);
+    }
+
+    /// <summary>
+    /// AND THE CEILING IS INCLUSIVE, so the value the app itself defaults to is not something the owner
+    /// is refused for writing down.
+    /// </summary>
+    [Fact]
+    public void ADigestAtTheCeiling_IsAccepted()
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""
+            {"printRunner": { "memberDigestMinutes": 5 }}
+            """) as JsonObject);
+
+        Assert.Equal(RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW, configs.MemberDigestWindow);
+        Assert.Empty(configs.Rejections);
+    }
+
     [Fact]
     public void NoConfigAtAll_IsTheSameDefault()
     {
@@ -100,7 +165,7 @@ public class RunnerConfigsJsonTests : IDisposable
                 "general": { "runner": "print", "resume": "fresh" },
                 "supervisor": { "runner": "terminal" }
               },
-              "printRunner": { "maxConcurrentTurns": 4, "maxConcurrentTurnsPerOrchestration": 2, "turnTimeoutMinutes": 0.5, "coalesceSeconds": 1, "memberDigestMinutes": 7 }
+              "printRunner": { "maxConcurrentTurns": 4, "maxConcurrentTurnsPerOrchestration": 2, "turnTimeoutMinutes": 0.5, "coalesceSeconds": 1, "memberDigestMinutes": 4 }
             }
             """) as JsonObject;
 
@@ -116,7 +181,10 @@ public class RunnerConfigsJsonTests : IDisposable
         Assert.Equal(2, configs.MaxConcurrentTurnsPerOrchestration);
         Assert.Equal(TimeSpan.FromSeconds(30), configs.TurnTimeout);
         Assert.Equal(TimeSpan.FromSeconds(1), configs.CoalesceWindow);
-        Assert.Equal(TimeSpan.FromMinutes(7), configs.MemberDigestWindow);
+        // FOUR AND NOT SEVEN, which is what this said until 2026-09-10: seven is now above the ceiling
+        // (RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW) and would be refused, so the case would have
+        // stopped testing "the key is read" and started testing the refusal a case of its own owns.
+        Assert.Equal(TimeSpan.FromMinutes(4), configs.MemberDigestWindow);
     }
 
     [Fact]

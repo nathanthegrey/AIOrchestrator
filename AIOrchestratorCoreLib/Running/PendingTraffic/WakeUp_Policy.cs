@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Formatting;
 using AIOrchestratorCoreLib.Status;
 
 namespace AIOrchestratorCoreLib.Running.PendingTraffic;
@@ -39,6 +40,13 @@ namespace AIOrchestratorCoreLib.Running.PendingTraffic;
 /// exist in this direction — see that field.
 /// </para>
 /// <para>
+/// AND A MEMBER'S FIRST ENTRY IS NOT HELD EITHER — a review finding of 2026-09-09 rather than part of
+/// the original design. That entry is the boot greeting of a member created seconds ago, so holding it
+/// made every <c>add-implementer</c> cost up to one window of dead time before the new member could be
+/// briefed; a member that cannot be briefed is a member doing nothing, which is the opposite of a
+/// saving. See <see cref="Is_Digestable"/>.
+/// </para>
+/// <para>
 /// A POLICY AND NOT AN <c>if</c> IN THE DISPATCHER, for the reason <see cref="CoalesceWindow_Policy"/>
 /// gives: the decision has one line per reason, the reasons are arguable from measurements, and they
 /// have to be testable without a clock, a state file or a session.
@@ -47,23 +55,42 @@ namespace AIOrchestratorCoreLib.Running.PendingTraffic;
 public static class WakeUp_Policy
 {
     /// <summary>
-    /// WHAT A MEMBER WRITES WHEN IT CANNOT GO ON, and therefore what is never digested. Verified in
-    /// the kit on 2026-09-09 rather than assumed:
+    /// WHAT A MEMBER WRITES WHEN IT CANNOT GO ON, and therefore what is never digested. Both entries
+    /// are CONSTANTS OWNED ELSEWHERE rather than spellings of their own (CLAUDE.md decision 12) —
+    /// verified in the kit and in the repo on 2026-09-09 rather than assumed:
     ///
     /// <para>
-    /// <c>BLOCKED ON OWNER</c> is real and is a member's marker — <c>kit/skills/implementer/SKILL.md</c>
-    /// ("Blocked on the owner? … phrase it as <c>BLOCKED ON OWNER</c> plus the question and options")
-    /// and <see cref="MemberState_Resolver.BLOCKED_ON_OWNER_MARKER"/>, which is where the word lives.
+    /// <see cref="MemberState_Resolver.BLOCKED_ON_OWNER_MARKER"/> is real and is a MEMBER's marker —
+    /// <c>kit/skills/implementer/SKILL.md</c> ("Blocked on the owner? … phrase it as
+    /// <c>BLOCKED ON OWNER</c> plus the question and options"), and that field is where the word lives.
     /// A member writing it has stopped and a PERSON is at the end of the chain, so five minutes of
     /// digest would be five minutes of two sessions waiting.
     /// </para>
     /// <para>
-    /// <c>QUESTION</c> is the SUPERVISOR's vocabulary for asking the OWNER
-    /// (<c>kit/skills/supervisor/SKILL.md</c>, and <c>Bridge.Decisions.OwnerQuestion_Contract</c> owns
-    /// the word); the member skills never teach it, because a member's only interlocutor is its
-    /// supervisor. It is honoured anyway, and spelled here rather than referenced because
-    /// <c>Running</c> does not depend on <c>Bridge</c> and must not start to for one word: if a member
-    /// does write it, the entry is a question and waking is both the cheap and the safe direction.
+    /// <see cref="MemberState_Resolver.QUESTION_MARKER"/> is the SUPERVISOR's vocabulary for asking the
+    /// OWNER (<c>kit/skills/supervisor/SKILL.md</c>, and that field is the repo's copy of it); the
+    /// member skills never teach it, because a member's only interlocutor is its supervisor. It is
+    /// honoured anyway — if a member does write it, the entry is a question and waking is both the
+    /// cheap and the safe direction.
+    /// </para>
+    /// <para>
+    /// REVIEW FINDING, 2026-09-09: this was a FOURTH hard-coded spelling of that word, and it was the
+    /// bare <c>QUESTION</c> without the colon the other three carry. The subject half of
+    /// <see cref="MemberState_Resolver.Contains_Marker"/> matches a whole token ANYWHERE and case
+    /// insensitively, so <c>REPORT — the open question about the parser is settled</c> defeated the
+    /// hold, and so did a body bullet mentioning "the question of the retry order". Members discuss
+    /// this vocabulary constantly, so the bare word put the digest's cost back at one wake per report —
+    /// silently, and in the direction that looks like it is working. The colon is what makes the marker
+    /// a DECLARATION rather than a word, and taking the constant is what stops the next copy.
+    /// </para>
+    /// <para>
+    /// THE CONSTANT COMES FROM <c>Bridge</c>, A LAYER THIS ONE DOES NOT OTHERWISE READ, and that price
+    /// is paid deliberately. <c>Bridge</c> depends on <c>Running</c> — <c>BridgeEngineModel</c> is
+    /// constructed with an <see cref="PrintTurnDispatcher.IPrintTurnDispatcher"/> — so this reference
+    /// points back up the way it came; it is legal (one assembly), it is one word, and the alternative
+    /// was a fifth literal. The right home is <see cref="MemberState_Resolver"/>, which already owns
+    /// the other marker and which both layers depend on; moving it there is one line in a file outside
+    /// this stage's set, so it is reported rather than done.
     /// </para>
     /// <para>
     /// TWO MARKERS THE BRIEF NAMED ARE NOT HERE, and their absence is a finding rather than an
@@ -78,7 +105,7 @@ public static class WakeUp_Policy
     public static readonly IReadOnlyList<string> ESCALATION_MARKERS =
     [
         MemberState_Resolver.BLOCKED_ON_OWNER_MARKER,
-        "QUESTION",
+        MemberState_Resolver.QUESTION_MARKER,
     ];
 
     /// <summary>
@@ -88,11 +115,12 @@ public static class WakeUp_Policy
     /// appears and left alone afterwards, or a crew filing a report every minute would push its own
     /// deadline out for ever.
     /// </summary>
-    public static bool Contains_DigestableTraffic(IReadOnlyList<PendingEntry> pending)
+    /// <param name="sourcesNeverDeliveredFrom">See the same parameter on <see cref="Resolve_WakeReason_OrNull"/>.</param>
+    public static bool Contains_DigestableTraffic(IReadOnlyList<PendingEntry> pending, IReadOnlyCollection<string> sourcesNeverDeliveredFrom)
     {
         foreach (var item in pending)
         {
-            if (Is_Digestable(item))
+            if (Is_Digestable(item, sourcesNeverDeliveredFrom))
                 return true;
         }
 
@@ -104,14 +132,35 @@ public static class WakeUp_Policy
     /// bool because it is logged: a supervisor turn that did not happen is invisible, and the one
     /// line saying which rule held it is what makes the digest auditable instead of a shrug.
     /// </summary>
+    /// <param name="sourcesNeverDeliveredFrom">
+    /// The source keys this session has never been handed a single entry from — the first-entry rule
+    /// of <see cref="Is_Digestable"/>. The caller passes a case-insensitive set, the comparer its
+    /// cursor set uses, because a session addresses a channel by a word an agent typed.
+    /// </param>
     /// <param name="digestHeldSince">
     /// When member traffic first became pending for this session — the dispatcher's own stamp, not a
     /// header's (CLAUDE.md decision 12: a channel header's date is agent-written and untrusted).
-    /// NULL means nothing recorded a hold, which is a state this cannot reason from, so it WAKES:
-    /// today's behaviour is the safe direction, and a set held on a stamp nobody wrote would be held
-    /// for ever.
+    /// NULL means nothing recorded a hold, and this then DELIVERS.
+    ///
+    /// <para>
+    /// THAT NULL IS THE RESTART CASE, AND DELIVERING ON IT IS THE DECISION. The stamp lives in the
+    /// dispatcher's tracker, which is per-process, so traffic already sitting in the channels when a
+    /// dispatcher starts has no hold on record — it has already waited an unknown time, and the honest
+    /// answer is to hand it over. The dispatcher therefore writes NO stamp until it has started a turn
+    /// for the session (<c>PrintTurnDispatcherModel.SessionTracker.HasStartedATurn</c>). REVIEW
+    /// FINDING, 2026-09-09: the first tick after a restart used to stamp <c>nowLocal</c> instead, so a
+    /// restart RESTARTED the window on traffic that had already waited — probed, a report filed at T+1
+    /// on a five-minute window went out at T+11, two full windows, once per restart, with 21 daemon
+    /// restarts measured in 44 hours of VPS uptime. A restart now costs one EARLY delivery, which is
+    /// the safe direction and what this comment always claimed it cost.
+    /// </para>
     /// </param>
-    public static string? Resolve_WakeReason_OrNull(IReadOnlyList<PendingEntry> pending, DateTime? digestHeldSince, DateTime nowLocal, TimeSpan digestWindow)
+    public static string? Resolve_WakeReason_OrNull(
+        IReadOnlyList<PendingEntry> pending,
+        IReadOnlyCollection<string> sourcesNeverDeliveredFrom,
+        DateTime? digestHeldSince,
+        DateTime nowLocal,
+        TimeSpan digestWindow)
     {
         // NOTHING PENDING REACHES HERE ONLY AS THE BOOT TURN — the dispatcher returns before this for
         // every other empty set (PrintTurnDispatcherModel.Needs_BootTurn). The greeting it produces is
@@ -137,10 +186,11 @@ public static class WakeUp_Policy
         // ANYTHING THAT IS NOT A MEMBER'S ORDINARY ENTRY WAKES AS IT ALWAYS DID. This is what confines
         // the digest to the supervisor without a role test anywhere: a member's inbound authors are its
         // supervisor and the owner (PrintTurn_Trigger.Is_Inbound), so a brief or a verdict is never
-        // digestable and every other role's timing is untouched.
+        // digestable and every other role's timing is untouched. A member's FIRST entry is in this
+        // class too, for the reason Is_Digestable gives.
         foreach (var item in pending)
         {
-            if (!Is_Digestable(item))
+            if (!Is_Digestable(item, sourcesNeverDeliveredFrom))
                 return $"'{item.Source.Key}' carries traffic the digest does not hold";
         }
 
@@ -159,18 +209,53 @@ public static class WakeUp_Policy
         if (held < TimeSpan.Zero)
             return "the hold stamp is in the future, so the digest cannot be timed";
 
+        // THE REPO'S ONE DURATION FORMATTER, NOT A SECOND ONE. This file cites decision 12 twice and
+        // then carried its own `Describe_Window` anyway, which a review said plainly on 2026-09-09 —
+        // the same class of drift as the duplicated duration wording that once printed "on task under
+        // a minute" for a member that had been working for hours. What the private copy bought was
+        // sub-minute precision, and it is worth nothing here: the window is configured in MINUTES and
+        // refused above five (RunnerConfigs.RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW), so "under
+        // a minute" can only ever describe a test's window or a hold that has barely started — and the
+        // shared formatter's negative guard is the behaviour this needs anyway.
         return held >= digestWindow
-            ? $"the {Describe_Window(digestWindow)} member digest elapsed ({Describe_Window(held)} held)"
+            ? $"the {SessionDuration_Formatter.Describe(digestWindow)} member digest elapsed ({SessionDuration_Formatter.Describe(held)} held)"
             : null;
     }
 
     /// <summary>
     /// An entry the digest may hold: written by a MEMBER — <see cref="ChannelAuthor_Kinds.Is_Member"/>,
-    /// so reviewers and a solo count exactly as implementers do — and carrying none of
-    /// <see cref="ESCALATION_MARKERS"/>.
+    /// so reviewers and a solo count exactly as implementers do — carrying none of
+    /// <see cref="ESCALATION_MARKERS"/>, and NOT arriving from a channel this session has never been
+    /// handed anything from.
+    ///
+    /// <para>
+    /// THE FIRST ENTRY OF A CHANNEL IS A NEW MEMBER SAYING HELLO. A spoke appears when a member is
+    /// created, and <c>PrintTurnDispatcherModel.Read_Sources</c> deliberately starts its cursor EMPTY
+    /// instead of baselining it, with a comment saying why: the boot greeting lands between the spawn
+    /// and the next tick and is the one entry that rule can ever see. Holding it made
+    /// <c>add-implementer</c> cost up to a whole window before the new member could be briefed — dead
+    /// time for a session that exists to work, bought to save a wake-up the supervisor is about to
+    /// spend anyway, since it has to brief the member it just asked for. REVIEW FINDING, 2026-09-09;
+    /// probed red on 2026-09-10.
+    /// </para>
+    /// <para>
+    /// ASKED OF THE CURSOR AND NEVER OF THE ENTRY'S <c>[n]</c>. Decision 12 is explicit that a header's
+    /// index is agent-written and untrusted — <c>option-lab-2</c> carried two <c>[80]</c> entries on
+    /// 2026-08-10 — so "is this entry number one" is not a question the header can answer. "Has this
+    /// session ever been handed anything from this channel" is answered by the durable cursor, which is
+    /// the same record that decides delivery.
+    /// </para>
+    /// <para>
+    /// AND ONLY THE FIRST. The exemption ends the moment the channel has handed something over, so a
+    /// member's second entry is an ordinary report and is held like anybody's — otherwise "a young
+    /// channel" would quietly grow into "every channel".
+    /// </para>
     /// </summary>
-    static bool Is_Digestable(PendingEntry item)
+    static bool Is_Digestable(PendingEntry item, IReadOnlyCollection<string> sourcesNeverDeliveredFrom)
     {
+        if (sourcesNeverDeliveredFrom.Contains(item.Source.Key))
+            return false;
+
         return ChannelAuthor_Kinds.Is_Member(item.Entry.Author) && Find_EscalationMarker_OrNull(item) == null;
     }
 
@@ -195,12 +280,5 @@ public static class WakeUp_Policy
         }
 
         return null;
-    }
-
-    static string Describe_Window(TimeSpan window)
-    {
-        return window.TotalMinutes >= 1
-            ? $"{window.TotalMinutes:0.#} min"
-            : $"{window.TotalSeconds:0.#} s";
     }
 }

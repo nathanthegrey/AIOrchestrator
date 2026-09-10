@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Bridge;
 using AIOrchestratorCoreLib.Channels;
 using AIOrchestratorCoreLib.Channels.ChannelEntry;
 using AIOrchestratorCoreLib.Running;
@@ -38,10 +39,17 @@ public class WakeUpPolicyTests
         return ChannelEntry_Parser.Parse_All($"## [1] FROM {author} — 2026-09-09 10:05 — {subject}\n\n{body}\n")[0];
     }
 
+    /// <summary>
+    /// NO CHANNEL IS ON FIRST CONTACT unless a case says so — the state every source is in for all but
+    /// the first entry of its life, and therefore the one these cases mean when they say "a member's
+    /// report". <see cref="AFirstEntryFromANewChannel_IsNotHeld"/> is the other side.
+    /// </summary>
     static string? Resolve(IReadOnlyList<PendingEntry> pending, DateTime? heldSince, DateTime now)
     {
-        return WakeUp_Policy.Resolve_WakeReason_OrNull(pending, heldSince, now, DIGEST);
+        return WakeUp_Policy.Resolve_WakeReason_OrNull(pending, NO_FIRST_CONTACT, heldSince, now, DIGEST);
     }
+
+    static readonly IReadOnlyCollection<string> NO_FIRST_CONTACT = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// THE OWNER'S LATENCY IS UNTOUCHED — the whole point of the change, and the thing it must not
@@ -136,6 +144,49 @@ public class WakeUpPolicyTests
     }
 
     /// <summary>
+    /// AND A REPORT THAT MERELY MENTIONS A QUESTION IS NOT ASKING ONE — the review's MEDIUM of
+    /// 2026-09-09, and the reason the marker carries its colon.
+    ///
+    /// <para>
+    /// The marker was the bare word <c>QUESTION</c>, and the subject half of
+    /// <see cref="MemberState_Resolver.Contains_Marker"/> matches a whole token ANYWHERE, case
+    /// insensitively. So this exact subject defeated the hold — and members discuss this vocabulary
+    /// constantly, which put the digest's cost back at one wake per report, silently and in the
+    /// direction that looks like it is working.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AReportMentioningTheWordQuestion_IsStillHeld()
+    {
+        Assert.Null(Resolve(
+            [new PendingEntry(IMP, Entry("implementer", "REPORT — the open question about the parser is settled"))],
+            NOW,
+            NOW.AddMinutes(1)));
+
+        Assert.Null(Resolve(
+            [new PendingEntry(IMP, Entry("implementer", "REPORT — parser done", "- the question of the retry order is answered below"))],
+            NOW,
+            NOW.AddMinutes(1)));
+    }
+
+    /// <summary>
+    /// AND THE MARKER IS THE REPO'S, NOT A FOURTH SPELLING OF IT (CLAUDE.md decision 12). The repo
+    /// spelled this vocabulary three times before this stage and every one of those carried the colon;
+    /// a fourth literal here is the drift that decision names, so the list holds the constant itself
+    /// and this case is what notices if somebody re-types it.
+    /// </summary>
+    [Fact]
+    public void TheQuestionMarker_IsTheOneTheRepoAlreadyOwns()
+    {
+        // BOTH names, on purpose: the word has ONE literal (MemberState_Resolver) and the mirror's
+        // own name is now an alias of it, so this case reddens if either drifts from the other.
+        Assert.Contains(MemberState_Resolver.QUESTION_MARKER, WakeUp_Policy.ESCALATION_MARKERS);
+        Assert.Equal(MemberState_Resolver.QUESTION_MARKER, OwnerPush_Policy.QUESTION_MARKER);
+        Assert.Contains(MemberState_Resolver.BLOCKED_ON_OWNER_MARKER, WakeUp_Policy.ESCALATION_MARKERS);
+        Assert.Equal(2, WakeUp_Policy.ESCALATION_MARKERS.Count);
+    }
+
+    /// <summary>
     /// AND A BRIEF THAT QUOTES A MARKER DOES NOT DECLARE ONE. The match is
     /// <see cref="MemberState_Resolver.Contains_Marker"/>'s, which excludes quotation for exactly this
     /// reason — members discuss this vocabulary constantly, and a mention that woke the supervisor
@@ -203,7 +254,7 @@ public class WakeUpPolicyTests
     public void AZeroDigestWindow_DeliversAtOnce()
     {
         Assert.NotNull(WakeUp_Policy.Resolve_WakeReason_OrNull(
-            [new PendingEntry(IMP, Entry("implementer", "REPORT — parser done"))], NOW, NOW, TimeSpan.Zero));
+            [new PendingEntry(IMP, Entry("implementer", "REPORT — parser done"))], NO_FIRST_CONTACT, NOW, NOW, TimeSpan.Zero));
     }
 
     /// <summary>
@@ -245,13 +296,55 @@ public class WakeUpPolicyTests
     [Fact]
     public void OnlyAMembersOrdinaryEntry_StartsTheHold()
     {
-        Assert.True(WakeUp_Policy.Contains_DigestableTraffic([new PendingEntry(IMP, Entry("implementer", "REPORT — parser done"))]));
-        Assert.True(WakeUp_Policy.Contains_DigestableTraffic([new PendingEntry(REV, Entry("reviewer", "VERDICT — accepted"))]));
+        Assert.True(WakeUp_Policy.Contains_DigestableTraffic([new PendingEntry(IMP, Entry("implementer", "REPORT — parser done"))], NO_FIRST_CONTACT));
+        Assert.True(WakeUp_Policy.Contains_DigestableTraffic([new PendingEntry(REV, Entry("reviewer", "VERDICT — accepted"))], NO_FIRST_CONTACT));
 
-        Assert.False(WakeUp_Policy.Contains_DigestableTraffic([new PendingEntry(OWNER, Entry("owner", "restart the crew"))]));
-        Assert.False(WakeUp_Policy.Contains_DigestableTraffic([new PendingEntry(IMP, Entry("supervisor", "BRIEF — port the parser"))]));
-        Assert.False(WakeUp_Policy.Contains_DigestableTraffic([]));
+        Assert.False(WakeUp_Policy.Contains_DigestableTraffic([new PendingEntry(OWNER, Entry("owner", "restart the crew"))], NO_FIRST_CONTACT));
+        Assert.False(WakeUp_Policy.Contains_DigestableTraffic([new PendingEntry(IMP, Entry("supervisor", "BRIEF — port the parser"))], NO_FIRST_CONTACT));
+        Assert.False(WakeUp_Policy.Contains_DigestableTraffic([], NO_FIRST_CONTACT));
         Assert.False(WakeUp_Policy.Contains_DigestableTraffic(
-            [new PendingEntry(IMP, Entry("implementer", $"{MemberState_Resolver.BLOCKED_ON_OWNER_MARKER} — which branch?"))]));
+            [new PendingEntry(IMP, Entry("implementer", $"{MemberState_Resolver.BLOCKED_ON_OWNER_MARKER} — which branch?"))], NO_FIRST_CONTACT));
+    }
+
+    /// <summary>
+    /// A FIRST ENTRY FROM A CHANNEL NOTHING HAS EVER BEEN DELIVERED FROM IS NOT HELD — the greeting of
+    /// a member created seconds ago, which the digest used to cost a whole window of dead time before
+    /// it could be briefed (review finding, 2026-09-09).
+    ///
+    /// <para>
+    /// BOTH QUESTIONS, because the dispatcher asks both and they have to agree: it must not START a
+    /// hold clock for such an entry either, or the next report would inherit a window that began
+    /// before it existed.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AFirstEntryFromANewChannel_IsNotHeld()
+    {
+        IReadOnlyCollection<string> firstContact = new HashSet<string>([IMP.Key], StringComparer.OrdinalIgnoreCase);
+        List<PendingEntry> greeting = [new(IMP, Entry("implementer", "imp-1 online"))];
+
+        Assert.NotNull(WakeUp_Policy.Resolve_WakeReason_OrNull(greeting, firstContact, NOW, NOW, DIGEST));
+        Assert.False(WakeUp_Policy.Contains_DigestableTraffic(greeting, firstContact));
+
+        // AND ONLY THAT CHANNEL. A crew where one member is new must not have the OTHERS' reports
+        // released with it — the exemption is per source, which is what the set is for.
+        List<PendingEntry> otherMembersReport = [new(REV, Entry("reviewer", "VERDICT — accepted"))];
+
+        Assert.Null(WakeUp_Policy.Resolve_WakeReason_OrNull(otherMembersReport, firstContact, NOW, NOW.AddMinutes(1), DIGEST));
+        Assert.True(WakeUp_Policy.Contains_DigestableTraffic(otherMembersReport, firstContact));
+    }
+
+    /// <summary>
+    /// AND THE MATCH ON A SOURCE KEY IS CASE-INSENSITIVE, the same as the cursor set's. A key is a word
+    /// an agent typed, and the two records have to agree on what "the same channel" means or the
+    /// exemption applies to a channel the cursor thinks is a different one.
+    /// </summary>
+    [Fact]
+    public void TheFirstContactSet_MatchesASourceKeyTheWayTheCursorSetDoes()
+    {
+        IReadOnlyCollection<string> firstContact = new HashSet<string>(["IMP-1"], StringComparer.OrdinalIgnoreCase);
+
+        Assert.NotNull(WakeUp_Policy.Resolve_WakeReason_OrNull(
+            [new PendingEntry(IMP, Entry("implementer", "imp-1 online"))], firstContact, NOW, NOW, DIGEST));
     }
 }

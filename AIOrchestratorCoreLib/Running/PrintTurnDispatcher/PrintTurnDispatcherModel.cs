@@ -158,7 +158,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         /// <summary>
         /// WHEN THE MEMBER TRAFFIC NOW WAITING FIRST TURNED UP — the digest's clock
-        /// (<see cref="WakeUp_Policy"/>), null while nothing digestable is pending.
+        /// (<see cref="WakeUp_Policy"/>), null while nothing is being held.
         ///
         /// <para>
         /// IT IS NOT <see cref="PendingSeenAt"/>, AND IT MUST NOT BE. That one restarts every time the
@@ -169,12 +169,52 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         /// them — which bounds the wait at the configured window whatever else lands meanwhile.
         /// </para>
         /// <para>
+        /// AND IT IS SPENT WHERE A TURN STARTS, NOT ON A LATER TICK. REVIEW FINDING, 2026-09-09: the
+        /// clearing used to sit beside the stamping, BELOW <c>Consider_Session</c>'s
+        /// <c>ordered.Count == 0</c> return, on the branch for a set that is non-empty and
+        /// non-digestable — and the tick after a completed turn has an EMPTY set, so it returned above
+        /// that line every single time. The <c>??=</c> then kept the FIRST report's instant for the
+        /// life of the process, every later report read as already past the window, and the digest
+        /// fired exactly ONCE per session per app life: in the steady state the saving it exists for
+        /// was not delivered and nothing said so. Probed red on 2026-09-10 — the second report woke the
+        /// supervisor on the tick it landed. <see cref="Start_Turn"/> is where the pending set is
+        /// actually consumed, and that moment always happens, so the stamp is dropped there.
+        /// </para>
+        /// <para>
         /// IN THE TRACKER AND NOT THE STATE FILE, like the deferral note above and for the same
-        /// reason: a restart costs one early delivery, and this is scheduling rather than the record
-        /// decision 8 is enforced from.
+        /// reason: a restart costs one early delivery (<see cref="HasStartedATurn"/> is what keeps it
+        /// early rather than late), and this is scheduling rather than the record decision 8 is
+        /// enforced from.
         /// </para>
         /// </summary>
         public DateTime? DigestHeldSince;
+
+        /// <summary>
+        /// FALSE UNTIL THIS DISPATCHER HAS STARTED A TURN FOR THIS SESSION — which is the whole of the
+        /// restart question for the digest: did this traffic arrive while I was watching, or was it
+        /// already waiting when I started?
+        ///
+        /// <para>
+        /// Traffic that arrived under observation can be held honestly, because
+        /// <see cref="DigestHeldSince"/> records when it appeared. Traffic already pending before this
+        /// dispatcher had handed anything over has waited an unknown time, so no stamp is written for
+        /// it and <see cref="WakeUp_Policy.Resolve_WakeReason_OrNull"/> delivers it at once. REVIEW
+        /// FINDING, 2026-09-09: without this the first tick after a restart stamped <c>nowLocal</c> on
+        /// traffic that had already waited, so a restart RESTARTED the window — probed, a report filed
+        /// at T+1 on a five-minute window went out at T+11, and 21 daemon restarts were measured in 44
+        /// hours of VPS uptime. One EARLY delivery per session per process is the safe direction; one
+        /// late delivery per restart, unbounded if restarts repeat, is not.
+        /// </para>
+        /// <para>
+        /// IT IS "A TURN STARTED" AND NOT "A TICK HAPPENED", and the difference is the coalesce window:
+        /// a flag set on the first tick would leave the second tick — three seconds later, still the
+        /// same already-waiting traffic — free to stamp a fresh window on it, which is the bug wearing
+        /// a three-second delay. It is also not <see cref="FirstTurnSinceStart"/>, which is cleared only
+        /// when a turn COMPLETES because decision 8's guard depends on that; this one is about the
+        /// moment the entries left, and a turn that started and failed has already spent the exemption.
+        /// </para>
+        /// </summary>
+        public bool HasStartedATurn;
 
         public DateTime? LastFailureAt;
 
@@ -212,7 +252,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// from a stale copy of a file that has since been appended to. <see cref="Advance_Cursors"/> re-reads
     /// deliberately, and this leaves it nothing to re-read from.
     /// </summary>
-    readonly record struct SourceRead(ITurnSource Source, IReadOnlyList<IChannelEntry> Pending);
+    /// <param name="NothingEverDelivered">
+    /// Whether this session's cursor for the source was still EMPTY when it was read — so everything
+    /// pending on it is the first thing that channel has ever handed over. It is the digest's
+    /// first-entry rule (<see cref="WakeUp_Policy.Contains_DigestableTraffic"/>): a spoke appears when
+    /// a member is created, its first entry is that member's boot greeting, and holding a greeting
+    /// costs a whole window before the new member can be briefed. Read from the CURSOR and never from
+    /// the entry's <c>[n]</c>, which is agent-written (CLAUDE.md decision 12).
+    /// </param>
+    readonly record struct SourceRead(ITurnSource Source, IReadOnlyList<IChannelEntry> Pending, bool NothingEverDelivered);
 
     public int InFlightCount
     {
@@ -516,6 +564,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         var ordered = PendingTraffic_Orderer.Order([.. reads.Select(read => (read.Source, read.Pending))]);
 
+        // THE CHANNELS THIS SESSION HAS NEVER BEEN HANDED ANYTHING FROM — the digest's first-entry rule
+        // (SourceRead.NothingEverDelivered). Built with the cursor set's own comparer, because a source
+        // key is a word an agent typed and the two sets have to agree on what "the same channel" means.
+        HashSet<string> firstContactSources = new(reads.Where(read => read.NothingEverDelivered).Select(read => read.Source.Key), SOURCE_KEYS);
+
         // THE BOOT TURN — the one turn that runs with NOTHING pending, and the only exception to
         // "an entry starts a turn".
         //
@@ -542,13 +595,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         }
 
         // THE DIGEST'S CLOCK STARTS ON THE FIRST HELD ENTRY AND IS NOT RESTARTED BY THE NEXT ONE — see
-        // SessionTracker.DigestHeldSince. Cleared as soon as nothing digestable is pending, which is
-        // what a completed turn produces, so the next report starts its own window rather than
-        // inheriting a spent one.
-        if (WakeUp_Policy.Contains_DigestableTraffic(ordered))
+        // SessionTracker.DigestHeldSince, which is also where the CLEARING lives now (Start_Turn) and
+        // why it moved there.
+        //
+        // AND NOTHING IS STAMPED BEFORE THIS DISPATCHER HAS STARTED A TURN FOR THE SESSION. Traffic
+        // already pending then has waited an unknown time — the tracker is per-process — and a null
+        // stamp is what makes the policy deliver it instead of starting a fresh window on it
+        // (SessionTracker.HasStartedATurn).
+        if (tracker.HasStartedATurn && WakeUp_Policy.Contains_DigestableTraffic(ordered, firstContactSources))
             tracker.DigestHeldSince ??= nowLocal;
-        else
-            tracker.DigestHeldSince = null;
 
         // Entries still landing ride the same turn, whichever channel they land on: wait until the set
         // has been unchanged for the window — a SHORTER one when the owner is in it
@@ -603,7 +658,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         // the digest would hold the owner's own way in behind it.
         var wakeReason = Needs_BootTurn(state)
             ? "the session has not taken a turn yet"
-            : WakeUp_Policy.Resolve_WakeReason_OrNull(ordered, tracker.DigestHeldSince, nowLocal, configs.MemberDigestWindow);
+            : WakeUp_Policy.Resolve_WakeReason_OrNull(ordered, firstContactSources, tracker.DigestHeldSince, nowLocal, configs.MemberDigestWindow);
 
         if (wakeReason == null)
             return;
@@ -741,7 +796,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             cursors.Add(cursor);
             Warn_IfEntriesWereArchivedUndelivered(state, source, cursor, entries);
 
-            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, entries, cursor)));
+            reads.Add(new SourceRead(source, PrintTurn_Trigger.Select_Pending(role, entries, cursor), cursor.Delivered.Count == 0));
         }
 
         // A CURSOR IS NEVER DROPPED FOR A SOURCE THAT MERELY DID NOT RESOLVE THIS TICK. It used to be,
@@ -818,6 +873,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         {
             if (_inFlight.ContainsKey(key))
                 return;
+
+            // THE DIGEST'S HOLD IS SPENT HERE, WHERE THE PENDING SET IS CONSUMED — see
+            // SessionTracker.DigestHeldSince and HasStartedATurn. The clearing used to be dropped on a
+            // later tick whose pending set was non-empty and non-digestable, which the tick after a
+            // completed turn is NOT (it is empty, and Consider_Session returns above that line), so the
+            // stamp survived for the life of the process and the digest fired once per session per app
+            // life. This moment, by contrast, always happens: whatever released the traffic, it is
+            // being handed over now, so the next report starts its own window instead of inheriting a
+            // spent one — and this session has now been handed something, so the next hold is honest.
+            tracker.DigestHeldSince = null;
+            tracker.HasStartedATurn = true;
 
             using var suppressed = ExecutionContext.SuppressFlow();
 

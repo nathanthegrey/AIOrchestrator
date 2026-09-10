@@ -15,6 +15,17 @@ public static class MemberState_Resolver
     public const string MUTATION_WINDOW_CLOSED_MARKER = "MUTATION WINDOW CLOSED";
     public const string BLOCKED_ON_OWNER_MARKER = "BLOCKED ON OWNER";
 
+    /// <summary>
+    /// A session asking for a decision it cannot take itself. THE ONE LITERAL for this word in the
+    /// tree: it was spelled four times (twice in <c>Bridge</c>, once bare in the decision contract,
+    /// and a fourth time by the wake-up digest on 2026-09-09, in the broader colon-less form that a
+    /// report merely mentioning "the open question" then defeated). It lives here, beside the rest of
+    /// the channel vocabulary, because both sides need it and neither may own it: the mirror reads it
+    /// to raise buttons on the owner's phone, and the dispatcher reads it to refuse to hold an entry
+    /// that is a member asking for help. Decision 12: never a second copy.
+    /// </summary>
+    public const string QUESTION_MARKER = "QUESTION:";
+
     /// <summary>The second word of the boot subject every member is required to write: "imp-1 online".</summary>
     public const string BOOT_ANNOUNCEMENT_WORD = "online";
 

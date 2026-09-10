@@ -42,11 +42,12 @@ public static class RunnerConfigs_Json
     /// turns, not a thing a spawn does with a session.
     ///
     /// <para>
-    /// READ WITH <c>Read_NonNegativeDouble_OrDefault</c> and not the positive reader, which is the
-    /// whole difference between a setting and an accident: <c>0</c> means the owner turned the digest
-    /// OFF (one entry, one turn — the behaviour before 2026-09-09), and the positive reader would
-    /// have silently given them the 5-minute default back. Same choice
-    /// <see cref="COALESCE_SECONDS_KEY"/> makes, for the same reason.
+    /// READ BY <see cref="Read_MemberDigestWindow_OrDefault"/> AND BY NOTHING GENERIC, which is the
+    /// whole difference between a setting and an accident. <c>0</c> means the owner turned the digest
+    /// OFF (one entry, one turn — the behaviour before 2026-09-09), so the positive reader that governs
+    /// a timeout would have silently given them the 5-minute default back; and the non-negative reader
+    /// that replaced it did the same thing to a NEGATIVE value, which is the review finding of
+    /// 2026-09-09. Below zero also means off, and above the ceiling is refused out loud.
     /// </para>
     /// </summary>
     public const string MEMBER_DIGEST_MINUTES_KEY = "memberDigestMinutes";
@@ -92,7 +93,7 @@ public static class RunnerConfigs_Json
             TimeSpan.FromSeconds(Read_PositiveDouble_OrDefault(limits, STREAM_SILENCE_SECONDS_KEY, defaults.SilenceLimit.TotalSeconds)),
             rejections,
             sessionMemoryMax,
-            TimeSpan.FromMinutes(Read_NonNegativeDouble_OrDefault(limits, MEMBER_DIGEST_MINUTES_KEY, defaults.MemberDigestWindow.TotalMinutes)));
+            Read_MemberDigestWindow_OrDefault(limits, rejections));
     }
 
     /// <summary>Sets both blocks on <paramref name="configRoot"/>, replacing whatever was there.</summary>
@@ -191,6 +192,58 @@ public static class RunnerConfigs_Json
         return RunnerConfigs_Factory.DEFAULT_SESSION_MEMORY_MAX;
     }
 
+    /// <summary>
+    /// THE DIGEST WINDOW, WITH ITS TWO ENDS DECIDED SEPARATELY. Both were review findings of
+    /// 2026-09-09 and both were the generic reader answering a question it was not asked.
+    ///
+    /// <para>
+    /// BELOW ZERO MEANS OFF, not "have the default back". <c>Read_NonNegativeDouble_OrDefault</c>
+    /// collapses "absent", "unreadable" and "negative" into one answer, so an owner who typed
+    /// <c>-1</c> got the LONGEST wait in answer to a request for none — and the factory's own
+    /// docstring three lines from the key said the opposite ("zero and below both mean one entry, one
+    /// turn"). Off and off are the same answer; there is nowhere else a minus sign could honestly
+    /// lead.
+    /// </para>
+    /// <para>
+    /// ABOVE THE CEILING IS REFUSED WITH A LINE THE OPERATOR READS, and the default applied — the
+    /// shape <see cref="Read_SessionMemoryMax_OrDefault"/> already uses, and for the same reason: a
+    /// value silently replaced is a value nobody learns about. The ceiling and the measurement behind
+    /// it are <see cref="RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW"/>; the short version is that
+    /// past it the app tells the supervisor it is late on a verdict for a report the app itself is
+    /// holding, and spends that quiet spell's single nudge token on the false alarm.
+    /// </para>
+    /// <para>
+    /// NOT A THROW, on either end. An app that will not start because of a hand-typed number in
+    /// <c>config.json</c> is a worse failure than a refused setting, and this file's contract is
+    /// tolerant on the way in.
+    /// </para>
+    /// </summary>
+    static TimeSpan Read_MemberDigestWindow_OrDefault(JsonObject? limits, List<string> rejections)
+    {
+        var written = Read_Double_OrNull(limits, MEMBER_DIGEST_MINUTES_KEY);
+
+        if (written == null)
+            return RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW;
+
+        if (written.Value <= 0)
+            return TimeSpan.Zero;
+
+        var asked = TimeSpan.FromMinutes(written.Value);
+
+        if (asked <= RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW)
+            return asked;
+
+        rejections.Add(
+            $"'{LIMITS_KEY}.{MEMBER_DIGEST_MINUTES_KEY}' is {written.Value:0.#}, above the "
+            + $"{RunnerConfigs_Factory.MAX_MEMBER_DIGEST_WINDOW.TotalMinutes:0.#}-minute ceiling: holding a member's "
+            + "report longer than that makes the app nudge the supervisor for a verdict on traffic the app "
+            + "is itself withholding, and the false alarm spends the one nudge that quiet spell has — "
+            + $"refused, the digest stays at {RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW.TotalMinutes:0.#} minutes "
+            + "(0 or less turns it off)");
+
+        return RunnerConfigs_Factory.DEFAULT_MEMBER_DIGEST_WINDOW;
+    }
+
     static string? Read_String_OrNull(JsonObject node, string key)
     {
         try
@@ -217,14 +270,27 @@ public static class RunnerConfigs_Json
 
     static double Read_NonNegativeDouble_OrDefault(JsonObject? node, string key, double fallback)
     {
+        var value = Read_Double_OrNull(node, key);
+        return value != null && value.Value >= 0 ? value.Value : fallback;
+    }
+
+    /// <summary>
+    /// The number as written, or null for absent AND for anything that is not a number — a key whose
+    /// value cannot be read is indistinguishable from an absent one for every caller here, and the
+    /// swallow is the deliberate one this file's header describes: a typo in a hand-edited file must
+    /// not stop the app from starting. It is separate from the range readers above because
+    /// <see cref="Read_MemberDigestWindow_OrDefault"/> has to tell "absent" from "negative", and a
+    /// reader that collapses the two is what made a negative digest mean five minutes.
+    /// </summary>
+    static double? Read_Double_OrNull(JsonObject? node, string key)
+    {
         try
         {
-            var value = node?[key]?.GetValue<double>();
-            return value != null && value.Value >= 0 ? value.Value : fallback;
+            return node?[key]?.GetValue<double>();
         }
         catch
         {
-            return fallback;
+            return null;
         }
     }
 }
