@@ -108,6 +108,28 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     readonly CancellationTokenSource _draining = new();
     readonly Dictionary<string, Task> _inFlight = [];
+
+    /// <summary>
+    /// WHAT EACH IN-FLIGHT TURN IS CARRYING, keyed exactly like <see cref="_inFlight"/> and written and
+    /// removed on the same two lines, so the two cannot disagree about whether a turn is running.
+    ///
+    /// <para>
+    /// IT EXISTS BECAUSE THE CURSOR ANSWERS A DIFFERENT QUESTION. The cursor advances beside
+    /// <see cref="Advance_Cursors"/> — when a turn COMPLETES — so for the whole of a turn's run the
+    /// entries it is delivering still read as pending to anyone reading the state file. That is correct
+    /// for delivery (a turn that fails must not lose them) and wrong for anyone asking "will these ever
+    /// be handed over": measured in production 2026-09-10, that gap made
+    /// <see cref="Bridge.UndeliveredSpokeTraffic_Reporter"/> announce a dropped final report 15 seconds
+    /// before the turn carrying it succeeded.
+    /// </para>
+    /// <para>
+    /// IDENTITIES, NOT INDEXES — <see cref="ChannelEntry_Digest"/>, the same key the cursor is built on
+    /// (CLAUDE.md decision 12: the <c>[n]</c> is agent-written and has duplicated in production).
+    /// </para>
+    /// </summary>
+    readonly Dictionary<string, IReadOnlySet<string>> _delivering = [];
+
+    static readonly IReadOnlySet<string> NOTHING_IN_FLIGHT = new HashSet<string>(StringComparer.Ordinal);
     readonly Dictionary<string, SessionTracker> _trackers = [];
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
     readonly HashSet<string> _warnedStaleRegistrations = [];
@@ -309,13 +331,25 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     public bool Is_TurnInFlight(string orchId, string memberId)
     {
-        // THE SAME KEY Consider_Session builds, and deliberately not a second way of spelling it: two
-        // constructions of one key are two that can drift, and this one decides whether a working
-        // member is described as idle.
-        var key = $"{orchId}/{memberId}";
-
         lock (_lock)
-            return _inFlight.ContainsKey(key);
+            return _inFlight.ContainsKey(Describe_SessionKey(orchId, memberId));
+    }
+
+    public IReadOnlySet<string> Get_DeliveringIdentities(string orchId, string memberId)
+    {
+        lock (_lock)
+            return _delivering.TryGetValue(Describe_SessionKey(orchId, memberId), out var carrying) ? carrying : NOTHING_IN_FLIGHT;
+    }
+
+    /// <summary>
+    /// THE ONE SPELLING OF A SESSION'S KEY. It was five, and the comment that used to sit in
+    /// <see cref="Is_TurnInFlight"/> asked for this in as many words ("two constructions of one key are
+    /// two that can drift, and this one decides whether a working member is described as idle") while
+    /// itself being the second. Collapsed on 2026-09-10, when a sixth was about to be added.
+    /// </summary>
+    static string Describe_SessionKey(string orchId, string memberId)
+    {
+        return $"{orchId}/{memberId}";
     }
 
     public void Tick(DateTime nowLocal)
@@ -336,7 +370,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             // deleted by the launcher at the next spawn; until then, this is the gate.
             if (!Is_StillBridgeDriven(configs, registered.Role))
             {
-                if (_warnedStaleRegistrations.Add($"{registered.OrchId}/{registered.MemberId}"))
+                if (_warnedStaleRegistrations.Add(Describe_SessionKey(registered.OrchId, registered.MemberId)))
                     _log.Log_Warning(registered.OrchId, $"'{registered.MemberId}' has a bridge-driven registration but role '{SessionRole_Names.Get_ConfigKey(registered.Role)}' is now configured runner: {SessionRunner_Names.Get_Word(configs.Get_ForRole(registered.Role).Runner)} — no turns are dispatched for it (the registration is cleared at its next spawn)");
 
                 continue;
@@ -354,7 +388,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 // Unbounded, that is an error line every two seconds for as long as the app runs, which
                 // buries the log it is written into. The stale-registration warning two blocks up already
                 // dedupes for the same reason; this one did not.
-                if (_warnedBrokenSessions.Add($"{registered.OrchId}/{registered.MemberId}"))
+                if (_warnedBrokenSessions.Add(Describe_SessionKey(registered.OrchId, registered.MemberId)))
                     _log.Log_Error(registered.OrchId, $"Print dispatcher: '{registered.MemberId}' could not be considered — it is skipped from now on and this is NOT repeated; fix or delete its {PrintSessionState_Store.STATE_FILE_NAME} and restart the app", ex);
             }
         }
@@ -379,7 +413,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var registered in Discover_RegisteredSessions())
         {
-            var key = $"{registered.OrchId}/{registered.MemberId}";
+            var key = Describe_SessionKey(registered.OrchId, registered.MemberId);
 
             // THE WHOLE OPERATION IS IN THE TRY, NOT JUST THE READ (F7, 2026-09-09). An IO failure in
             // the WRITE used to escape into Resume_AllSessions_Async — which runs it BEFORE any channel
@@ -617,7 +651,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     void Consider_Session(string stateFile, SessionRoles role, string orchId, string memberId, DateTime nowLocal, IRunnerConfigs configs)
     {
-        var key = $"{orchId}/{memberId}";
+        var key = Describe_SessionKey(orchId, memberId);
 
         lock (_lock)
         {
@@ -983,6 +1017,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             // (Note_TrafficDelivered), which is the one moment that means the entries have left.
             using var suppressed = ExecutionContext.SuppressFlow();
 
+            // Recorded from the very entries this turn launches with, so what it is carrying is a fact
+            // rather than a re-read of a file that may have been appended to since.
+            _delivering[key] = pending.Select(item => ChannelEntry_Digest.Compute(item.Entry)).ToHashSet(StringComparer.Ordinal);
+
             _inFlight[key] = Task.Run(() => Execute_Turn_Async(key, stateFile, state, pending, sources, tracker, configs));
         }
     }
@@ -1108,7 +1146,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         finally
         {
             lock (_lock)
+            {
                 _inFlight.Remove(key);
+                _delivering.Remove(key);
+            }
         }
     }
 

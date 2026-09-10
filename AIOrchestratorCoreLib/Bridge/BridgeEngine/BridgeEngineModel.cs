@@ -5104,7 +5104,9 @@ internal sealed class BridgeEngineModel(
         {
             // SAID BEFORE THE SPOKE STOPS BEING A SOURCE — see UndeliveredSpokeTraffic_Reporter for
             // why a line and not a drain, and for what the member digest widened.
-            UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, _log, orchId, memberId);
+            // The dispatcher is asked what the supervisor's turn is carrying RIGHT NOW: without it the
+            // reporter reads a cursor that only advances at turn end and calls a report in flight lost.
+            UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, _log, orchId, memberId, _printTurns.Get_DeliveringIdentities(orchId, Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID));
 
             _store.Close_Member(orchId, memberId);
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, memberId));
