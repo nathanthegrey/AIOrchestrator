@@ -37,13 +37,18 @@ public static class OrchestratorConfig_Factory
         PlanBackendSettings? planBackend = null,
         IGuardrailSettings? guardrails = null,
         IDefaultsSettings? defaults = null,
-        ITelegramProseSettings? telegramProse = null)
+        ITelegramProseSettings? telegramProse = null,
+
+        // A FIFTH OF THE SAME KIND, and it obeys the same three rules: hand-edited in config.json,
+        // no window field, never serialised by Save — so a config rebuilt without it cannot erase
+        // it from disk. Null reads as `poll`, which is what every host did before the key existed.
+        Telegram.TelegramInboundModes? telegramInbound = null)
     {
         return Create(
             repos, supervisorModel, implementerModel, generalSupervisorModel, communicatorModel,
             telegramSupergroupChatId, telegramOwnerUserId, telegramBotToken,
             telegramStatusScreenshots, voiceTranscribeCommand, orchestrationTokenBudget,
-            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse);
+            RunnerConfigs_Factory.Create_Default(), planBackend, guardrails, defaults, telegramProse, telegramInbound);
     }
 
     /// <summary>
@@ -67,7 +72,8 @@ public static class OrchestratorConfig_Factory
         PlanBackendSettings? planBackend = null,
         IGuardrailSettings? guardrails = null,
         IDefaultsSettings? defaults = null,
-        ITelegramProseSettings? telegramProse = null)
+        ITelegramProseSettings? telegramProse = null,
+        Telegram.TelegramInboundModes? telegramInbound = null)
     {
         return new OrchestratorConfigModel(
             repos,
@@ -98,7 +104,12 @@ public static class OrchestratorConfig_Factory
             // AND AGAIN THE SAME RULE. The block decides only the SHAPE of a long entry on the phone,
             // never whether it is delivered, so every caller that predates it gets the shipped
             // shaping rather than a null the mirror would have to test for at the send site.
-            telegramProse ?? TelegramProseSettings_Factory.Create_Default());
+            telegramProse ?? TelegramProseSettings_Factory.Create_Default(),
+
+            // POLLING IS THE DEFAULT, and the direction is chosen rather than inherited: a host that
+            // silently stops polling is a phone that silently stops working, and it cannot report
+            // the reason — it is not polling, so it never sees the 409 that would explain it.
+            telegramInbound ?? Telegram.TelegramInboundModes.Poll);
     }
 
     public static IOrchestratorConfig Create_Empty()
@@ -129,6 +140,7 @@ public static class OrchestratorConfig_Factory
             source.PlanBackend,
             source.Guardrails,
             source.Defaults,
-            source.TelegramProse);
+            source.TelegramProse,
+            source.TelegramInbound);
     }
 }

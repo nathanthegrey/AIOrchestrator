@@ -151,6 +151,13 @@ internal sealed class BridgeEngineModel(
     const int INBOUND_LONG_POLL_SECONDS = 20;
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
     const int INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS = 60000;
+
+    /// <summary>
+    /// HTTP 409 from `getUpdates`: another poller holds this bot token, or a webhook is registered
+    /// against it. One situation with one action, which is why it is not left in the generic
+    /// failure catch — see <c>Note_InboundConflicted_IfNew_Async</c>.
+    /// </summary>
+    const int TELEGRAM_CONFLICT_STATUS = 409;
     const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
 
     /// <summary>Pause before relaunching a bridge loop that ended, so a broken loop cannot spin.</summary>
@@ -769,6 +776,86 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<long, string> _closedQuestionReasons = [];
 
     readonly Queue<long> _closedQuestionOrder = new();
+
+    /// <summary>
+    /// How many handled updates and taps are remembered. One long-poll batch is at most 100 updates,
+    /// so this holds several batches — far more than a replay can ever span, and small enough that
+    /// remembering it costs nothing.
+    /// </summary>
+    const int HANDLED_UPDATE_MEMORY = 512;
+
+    /// <summary>
+    /// THE UPDATES THIS PROCESS HAS ALREADY ACTED ON. `_lastUpdateId` advances once per BATCH, so
+    /// anything that ends a batch early — a crash, or, before this stage, any escaped exception —
+    /// makes Telegram re-serve every update in it. On 2026-09-08 01:24-01:26Z a Windows-only window
+    /// call threw DllNotFoundException on the Linux daemon and one batch was replayed four times.
+    ///
+    /// <para>
+    /// AT MOST ONCE IS THE CHOICE, and it is the owner's side that decides it: a replayed owner
+    /// message is a second copy of their words in the channel and a second answer from the
+    /// supervisor, while an update dropped after a failed handler is one loud Error line naming the
+    /// update. The second is recoverable by asking again; the first corrupts the conversation.
+    /// </para>
+    /// <para>
+    /// IN MEMORY, DELIBERATELY. Persisting it would make the offset and this set two sources of
+    /// truth for the same question across a restart; the offset is already durable, and this set
+    /// exists for the window in which it is not yet.
+    /// </para>
+    /// </summary>
+    readonly HashSet<long> _handledUpdateIds = [];
+
+    readonly Queue<long> _handledUpdateOrder = new();
+
+    /// <summary>
+    /// The same, for TAPS, keyed by <c>callback_query.id</c> rather than the update id — Telegram's
+    /// own identity for the gesture. A tap acted on twice is a decision taken twice, and the
+    /// decisions that reach here include pushes and deploys.
+    /// </summary>
+    readonly HashSet<string> _handledTapIds = [];
+
+    readonly Queue<string> _handledTapOrder = new();
+
+    readonly object _handledLock = new();
+
+    bool Was_UpdateHandled(long updateId)
+    {
+        lock (_handledLock)
+            return _handledUpdateIds.Contains(updateId);
+    }
+
+    void Note_UpdateHandled(long updateId)
+    {
+        lock (_handledLock)
+        {
+            if (!_handledUpdateIds.Add(updateId))
+                return;
+
+            _handledUpdateOrder.Enqueue(updateId);
+
+            while (_handledUpdateOrder.Count > HANDLED_UPDATE_MEMORY)
+                _handledUpdateIds.Remove(_handledUpdateOrder.Dequeue());
+        }
+    }
+
+    bool Was_TapHandled(string callbackQueryId)
+    {
+        lock (_handledLock)
+            return _handledTapIds.Contains(callbackQueryId);
+    }
+
+    void Note_TapHandled(string callbackQueryId)
+    {
+        lock (_handledLock)
+        {
+            if (!_handledTapIds.Add(callbackQueryId))
+                return;
+
+            _handledTapOrder.Enqueue(callbackQueryId);
+
+            while (_handledTapOrder.Count > HANDLED_UPDATE_MEMORY)
+                _handledTapIds.Remove(_handledTapOrder.Dequeue());
+        }
+    }
 
     sealed class AwayTracker
     {
@@ -5773,6 +5860,124 @@ internal sealed class BridgeEngineModel(
     /// 90 s HttpClient timeout raised a TaskCanceledException, and the bare catch returned without
     /// logging a thing, so the log stayed quiet instead of filling with backoff lines.
     /// </summary>
+    /// <summary>
+    /// True while `getUpdates` is being refused with 409. It exists so the owner is told ONCE that
+    /// their phone has stopped being read, and once when it starts again — the failure used to log
+    /// an Error on every retry for as long as it lasted, which is the shape nobody reads.
+    /// </summary>
+    bool _inboundConflicted;
+
+    /// <summary>
+    /// THE ONE-TIME HANDSHAKE, before the first poll: name the bot, and clear any webhook.
+    ///
+    /// <para>
+    /// A WEBHOOK IS INDISTINGUISHABLE FROM A SECOND POLLER — Telegram allows one delivery mechanism
+    /// per token and answers `getUpdates` with the same 409 either way. One left behind by an
+    /// experiment, or by another tool sharing the token, could not be cleared from here at all, so
+    /// the app would have sat in a permanent conflict it was able to fix in one call.
+    /// </para>
+    /// <para>
+    /// `drop_pending_updates: false` — whatever the owner sent while the webhook was in the way is
+    /// still theirs, and dropping it is the silent loss this brief exists to remove.
+    /// </para>
+    /// <para>
+    /// BEST-EFFORT, AND THE LOOP STARTS EITHER WAY. This is a diagnostic and a repair, not a
+    /// precondition: a network blip at startup must not be the reason the bridge never polls.
+    /// </para>
+    /// </summary>
+    async Task Claim_TelegramInbound_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            _botUsername = await client.Get_BotUsername_Async(cancellationToken);
+
+            await client.Delete_Webhook_Async(dropPendingUpdates: false, cancellationToken);
+
+            _log.Log_Info(
+                GLOBAL_ORCH_ID,
+                $"Telegram inbound claimed on {Environment.MachineName} as {Describe_Bot()} — any webhook on this token was cleared, pending updates kept");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"Telegram startup handshake (getMe + deleteWebhook) failed on {Environment.MachineName} — polling anyway: {ex.Message}");
+        }
+    }
+
+    /// <summary>The bot's own name, once `getMe` has answered — used only in what the owner is told.</summary>
+    string _botUsername = "";
+
+    string Describe_Bot()
+    {
+        return string.IsNullOrWhiteSpace(_botUsername) ? "this bot" : $"@{_botUsername}";
+    }
+
+    /// <summary>
+    /// ONE MESSAGE, ONE LOG LINE, PER STATE CHANGE — never per retry. The owner can act on this and
+    /// on nothing else about it: the two hosts are on different machines, so no file either of them
+    /// can write is visible to the other, and the fix is to stop one of them or set
+    /// <c>telegramInbound: off</c> on it. So the message NAMES THIS MACHINE — without it the owner
+    /// reads "another bridge is polling" and cannot tell which of the two is complaining.
+    /// </summary>
+    async Task Note_InboundConflicted_IfNew_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        if (_inboundConflicted)
+            return;
+
+        _inboundConflicted = true;
+
+        _log.Log_Error(
+            GLOBAL_ORCH_ID,
+            $"Telegram getUpdates refused with 409 CONFLICT on {Environment.MachineName} — another poller holds {Describe_Bot()}'s token. Backing off and retrying; this line is not repeated until it changes.",
+            null);
+
+        await Send_DirectReply_BestEffort_Async(
+            client,
+            null,
+            $"⚠️ another bridge is polling {Describe_Bot()} with this token, so I am not reading your messages on "
+            + $"{Environment.MachineName}. Is the Windows app running as well as the server? Stop one of them, or set "
+            + $"\"telegramInbound\": \"{Telegram.TelegramInbound_Modes.OFF_TEXT}\" in that host's config.json — it will still mirror, it just will not read.",
+            cancellationToken);
+    }
+
+    async Task Note_InboundRecovered_IfWasConflicted_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        if (!_inboundConflicted)
+            return;
+
+        _inboundConflicted = false;
+
+        _log.Log_Info(GLOBAL_ORCH_ID, $"Telegram getUpdates is answering again on {Environment.MachineName} — the 409 conflict is over");
+
+        await Send_DirectReply_BestEffort_Async(
+            client, null,
+            $"✅ I am reading your messages again on {Environment.MachineName}.",
+            cancellationToken);
+    }
+
+    /// <summary>Shared by the 409 branch and the generic one, so one backoff cannot drift from the other.</summary>
+    async Task Backoff_Inbound_Async(int backoffMilliseconds, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(backoffMilliseconds, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // The loop's own condition ends it; a cancelled delay is not an error.
+        }
+    }
+
+    static int Next_InboundBackoff(int backoffMilliseconds)
+    {
+        return Math.Min(backoffMilliseconds * 2, INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS);
+    }
+
     async Task Run_InboundLoop_Async(CancellationToken cancellationToken)
     {
         var client = _telegramClient
@@ -5786,15 +5991,35 @@ internal sealed class BridgeEngineModel(
         var ownerUserId = startupConfig.TelegramOwnerUserId
             ?? throw new Exception("Inbound loop started without an owner user id");
 
+        // MIRROR-ONLY IS A HOST DECISION, TAKEN BEFORE THE FIRST POLL. One bot token allows one
+        // poller; two hosts that cannot see each other's supervision root — the app on a desk, the
+        // daemon on a VPS — can only be separated by telling one of them, and this is where it is
+        // told. Entries still reach the phone; nothing is read back on this host.
+        if (startupConfig.TelegramInbound == Telegram.TelegramInboundModes.Off)
+        {
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"telegramInbound is '{Telegram.TelegramInbound_Modes.OFF_TEXT}' on {Environment.MachineName} — this host mirrors to Telegram but does NOT read the owner's messages or taps. Another host is expected to poll.");
+
+            return;
+        }
+
         var backoffMilliseconds = INBOUND_ERROR_BACKOFF_START_MILLISECONDS;
 
         await Register_BotCommands_BestEffort_Async(client, cancellationToken);
+        await Claim_TelegramInbound_BestEffort_Async(client, cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
                 var json = await client.Get_UpdatesJson_Async(_lastUpdateId + 1, INBOUND_LONG_POLL_SECONDS, cancellationToken);
+
+                // SAID ONCE WHEN IT COMES BACK, for the same reason it is said once when it breaks:
+                // the owner was told their phone had stopped being read, so they are told when it
+                // starts again — and not on every poll in between.
+                await Note_InboundRecovered_IfWasConflicted_Async(client, cancellationToken);
+
                 var batch = TelegramUpdates_Parser.Parse_OwnerMessages(json, supergroupChatId, ownerUserId);
 
                 // Bot commands: /dnd acts directly (and must NOT auto-unmute); /summary and
@@ -5805,6 +6030,28 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var message in batch.OwnerMessages)
                 {
+                    // ALREADY DONE ONCE IS NEVER DONE TWICE. `_lastUpdateId` advances at the END of
+                    // the batch, so a crash — or, before this stage, any escaped exception — made
+                    // Telegram re-serve every update in it. On 2026-09-08 01:24-01:26Z a Windows-only
+                    // window call threw DllNotFoundException on the Linux daemon and the same batch
+                    // was replayed four times: four copies of the owner's message, four `/pc` flips.
+                    if (Was_UpdateHandled(message.UpdateId))
+                    {
+                        _log.Log_Info(
+                            Describe_MessageOrch(message),
+                            $"Update {message.UpdateId} was already handled — skipped on replay instead of acting twice");
+
+                        continue;
+                    }
+
+                    // ONE UPDATE CANNOT TAKE THE BATCH DOWN. Everything from here to the end of this
+                    // iteration is this message's own work; a throw is logged against the message
+                    // and the next update is still handled, which is what makes the offset advance
+                    // past all of them at the end.
+                    var isRoutable = false;
+
+                    try
+                    {
                     // Tracked so /clear can remove the owner's own messages too.
                     Remember_TopicMessage(message.MessageThreadId, message.MessageId);
 
@@ -5970,6 +6217,32 @@ internal sealed class BridgeEngineModel(
                     else
                     {
                         routableMessages.Add(message);
+                        isRoutable = true;
+                    }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        // A COMMAND THAT THREW IS NOT RETRIED. Its handler is what failed — a missing
+                        // OS capability, a Telegram call that timed out — and re-serving the update
+                        // runs the same handler against the same world. Said at Error, named by
+                        // update, because a command the owner typed and never got an answer to is a
+                        // thing they will ask about.
+                        _log.Log_Error(
+                            Describe_MessageOrch(message),
+                            $"Handling update {message.UpdateId} failed — this one update is dropped, the rest of the batch continues",
+                            ex);
+                    }
+                    finally
+                    {
+                        // A ROUTABLE MESSAGE IS NOT DONE YET: it is marked below, once it has been
+                        // routed and answered. Everything else — a command, a read-back code, a
+                        // failure — ends here.
+                        if (!isRoutable)
+                            Note_UpdateHandled(message.UpdateId);
                     }
                 }
 
@@ -5980,22 +6253,84 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var message in routableMessages)
                 {
-                    if (await Apply_HoldControlWord_Async(client, message, cancellationToken))
-                        continue;
+                    try
+                    {
+                        if (await Apply_HoldControlWord_Async(client, message, cancellationToken))
+                            continue;
 
-                    await Route_OwnerMessage_Async(message, cancellationToken);
+                        var outcome = await Route_OwnerMessage_Async(message, cancellationToken);
 
-                    // While HELD the phone stays quiet: no per-message tick. The single WAIT
-                    // acknowledgement already said "I have you" and is updated with the count
-                    // instead; the ✓/✓✓ pair comes after GO.
-                    if (Is_TargetHeld(message))
-                        await Update_HoldReceipt_Async(client, message, cancellationToken);
-                    else
-                        await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+                        // THE ✓ MEANS "IT ARRIVED", AND NOTHING ELSE MAY WEAR IT. It used to be sent
+                        // after the routing call whatever the routing did: a message into an unknown
+                        // topic was dropped with a warning and ticked on the same screen, and one
+                        // into a CLOSED orchestration was written into a channel nobody tails and
+                        // ticked the same way. The owner's words for this brief: the bridge must
+                        // never "tell me it was received when it was not".
+                        if (!OwnerRoute_Wording.Deserves_Receipt(outcome))
+                        {
+                            var refusal = OwnerRoute_Wording.Describe_ForOwner_OrNull(outcome);
+
+                            if (refusal != null)
+                                await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, refusal, cancellationToken);
+
+                            continue;
+                        }
+
+                        // While HELD the phone stays quiet: no per-message tick. The single WAIT
+                        // acknowledgement already said "I have you" and is updated with the count
+                        // instead; the ✓/✓✓ pair comes after GO.
+                        if (Is_TargetHeld(message))
+                            await Update_HoldReceipt_Async(client, message, cancellationToken);
+                        else
+                            await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Log_Error(
+                            Describe_MessageOrch(message),
+                            $"Routing update {message.UpdateId} failed — this one message is dropped, the rest of the batch continues",
+                            ex);
+                    }
+                    finally
+                    {
+                        Note_UpdateHandled(message.UpdateId);
+                    }
                 }
 
                 foreach (var tap in batch.CallbackTaps)
-                    await Handle_CallbackTap_Async(client, tap, cancellationToken);
+                {
+                    // BY THE CALLBACK'S OWN ID, not by the update id. Telegram re-serves the whole
+                    // update on a replay, and a tap acted on twice is a decision taken twice — the
+                    // one class of duplicate this system cannot afford, since the decisions that
+                    // reach it include pushes and deploys.
+                    if (Was_TapHandled(tap.CallbackQueryId))
+                    {
+                        _log.Log_Info(GLOBAL_ORCH_ID, $"Callback {tap.CallbackQueryId} was already handled — skipped on replay instead of firing twice");
+                        continue;
+                    }
+
+                    try
+                    {
+                        await Handle_CallbackTap_Async(client, tap, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Log_Error(GLOBAL_ORCH_ID, $"Handling callback {tap.CallbackQueryId} failed — this one tap is dropped, the rest of the batch continues", ex);
+                    }
+                    finally
+                    {
+                        Note_TapHandled(tap.CallbackQueryId);
+                        Note_UpdateHandled(tap.UpdateId);
+                    }
+                }
 
                 foreach (var modeCommand in modeCommands)
                     await Apply_ModeCommand_Async(client, modeCommand.Command, modeCommand.ThreadId, cancellationToken);
@@ -6019,6 +6354,19 @@ internal sealed class BridgeEngineModel(
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return;
+            }
+            catch (Telegram.TelegramApiClient.TelegramApiException conflict) when (conflict.StatusCode == TELEGRAM_CONFLICT_STATUS)
+            {
+                // 409 IS NOT "A FAILURE" — IT IS A NAMED SITUATION with an action attached, and it
+                // read as any other getUpdates error: one Error line per retry, for ever, while the
+                // owner's taps went to whichever host won the race. Telegram returns it when a
+                // SECOND poller holds the token, or when a WEBHOOK is registered against it (the
+                // startup handshake clears that one).
+                await Note_InboundConflicted_IfNew_Async(client, cancellationToken);
+
+                await Backoff_Inbound_Async(backoffMilliseconds, cancellationToken);
+                backoffMilliseconds = Next_InboundBackoff(backoffMilliseconds);
+                continue;
             }
             catch (Exception ex)
             {

@@ -35,6 +35,15 @@ public interface IOrchestratorConfig
     bool TelegramStatusScreenshots { get; }
 
     /// <summary>
+    /// Whether THIS host long-polls Telegram for the owner's messages (<c>telegramInbound</c>:
+    /// <c>poll</c>, the default) or only mirrors outward (<c>off</c>). One bot token allows ONE
+    /// poller; two hosts that cannot see each other's supervision root — the Windows app and the
+    /// VPS daemon — can only be separated by telling one of them, here. See
+    /// <see cref="Telegram.TelegramInboundModes"/> for why the default is to keep polling.
+    /// </summary>
+    Telegram.TelegramInboundModes TelegramInbound { get; }
+
+    /// <summary>
     /// External command that transcribes an owner voice note; {input} is replaced by the audio
     /// file path. Null = voice messages get a "not configured" reply. Example:
     /// "whisper {input} --model small --language it --output_format txt --output_dir -" style CLIs.

@@ -131,6 +131,34 @@ public interface ITelegramApiClient
 
     Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The bot's own username (`getMe`), or the empty string when the response carries none.
+    ///
+    /// <para>
+    /// IT IS CALLED ONCE, AT STARTUP, AND ITS VALUE IS A NAME FOR THE OWNER. When two hosts poll
+    /// one token the collision is reported to them, and "another bridge is polling as @xyz_bot"
+    /// tells them WHICH bot — they have more than one, and the answer decides which host to stop.
+    /// It doubles as the first proof that the token in secrets.json is valid at all.
+    /// </para>
+    /// </summary>
+    Task<string> Get_BotUsername_Async(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Clears any WEBHOOK registered against this token (`deleteWebhook`).
+    ///
+    /// <para>
+    /// A WEBHOOK MAKES `getUpdates` FAIL FOREVER WITH 409 — Telegram allows one delivery mechanism
+    /// per token, so a webhook left behind by an experiment, or by another tool sharing the token,
+    /// looks exactly like a second poller and cannot be fixed from the app without this call.
+    /// </para>
+    /// <para>
+    /// <paramref name="dropPendingUpdates"/> is passed FALSE by the bridge: whatever the owner sent
+    /// while the webhook was in the way is still theirs, and dropping it would be the silent loss
+    /// this brief exists to remove.
+    /// </para>
+    /// </summary>
+    Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken);
+
     /// <summary>Downloads a file the owner sent (getFile + file endpoint) — screenshots of bugs, etc.</summary>
     Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken);
 }

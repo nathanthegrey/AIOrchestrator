@@ -22,7 +22,8 @@ internal sealed class OrchestratorConfigModel(
     PlanBackendSettings? planBackend,
     IGuardrailSettings guardrails,
     IDefaultsSettings defaults,
-    ITelegramProseSettings telegramProse) : IOrchestratorConfig
+    ITelegramProseSettings telegramProse,
+    Telegram.TelegramInboundModes telegramInbound) : IOrchestratorConfig
 {
     public IReadOnlyList<IRepoEntry> Repos { get; } = repos;
     public string? SupervisorModel { get; } = supervisorModel;
@@ -40,6 +41,7 @@ internal sealed class OrchestratorConfigModel(
     public IGuardrailSettings Guardrails { get; } = guardrails;
     public IDefaultsSettings Defaults { get; } = defaults;
     public ITelegramProseSettings TelegramProse { get; } = telegramProse;
+    public Telegram.TelegramInboundModes TelegramInbound { get; } = telegramInbound;
 
     public bool Is_TelegramConfigured()
     {

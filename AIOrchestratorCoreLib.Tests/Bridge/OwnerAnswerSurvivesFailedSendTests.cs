@@ -351,6 +351,12 @@ public class OwnerAnswerSurvivesFailedSendTests : IDisposable
 /// </summary>
 internal sealed class FailableTelegram_Fake : ITelegramApiClient
 {
+
+    // The startup handshake (see ITelegramApiClient): a fake not testing it answers with a name and
+    // a cleared webhook, so the inbound loop starts exactly as it does in production.
+    public Task<string> Get_BotUsername_Async(CancellationToken cancellationToken) => Task.FromResult("test_bot");
+
+    public Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken) => Task.CompletedTask;
     // The typing bubble is not this probe's subject; it creates no message, so it is not recorded.
     public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken)
     {
