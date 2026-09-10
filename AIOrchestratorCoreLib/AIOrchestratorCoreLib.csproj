@@ -41,4 +41,12 @@
     </PropertyGroup>
   </Target>
 
+
+  <ItemGroup>
+    <!-- THE CHANNEL GRAMMAR IS EMBEDDED, not copied: ChannelGrammar reads it as a resource, so a
+         missing grammar is a broken BUILD rather than a runtime surprise on the owner's machine.
+         The same file also ships in the kit (AIOrchestrator.csproj) because kit/bin/channel-append.sh
+         reads it with jq — one file, two readers, and ChannelGrammarTests fails if they differ. -->
+    <EmbeddedResource Include="..\kit\grammar\channel-grammar.json" LogicalName="AIOrchestratorCoreLib.kit.grammar.channel-grammar.json" />
+  </ItemGroup>
 </Project>

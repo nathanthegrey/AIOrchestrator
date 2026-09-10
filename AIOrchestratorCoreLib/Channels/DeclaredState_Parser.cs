@@ -25,7 +25,10 @@ namespace AIOrchestratorCoreLib.Channels;
 /// </summary>
 public static class DeclaredState_Parser
 {
-    public const string MARKER = "STATE:";
+    // FROM THE GRAMMAR, and `static readonly` rather than `const` because of it: the grammar is a
+    // FILE both this app and the bash tool read, so its values arrive at runtime. A `const` would
+    // have to be a literal here, which is the ninth copy E3 removes.
+    public static readonly string MARKER = ChannelGrammar.STATE;
 
     /// <summary>
     /// Beyond this the declaration is a paragraph, and PULSE has one row for it. Cut rather than

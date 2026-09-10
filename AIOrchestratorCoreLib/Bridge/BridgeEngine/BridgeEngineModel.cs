@@ -3700,11 +3700,11 @@ internal sealed class BridgeEngineModel(
             // Special lines in the entry become REAL Telegram artifacts, never raw text:
             // IMAGE: <path> lines upload as photos; OPTION: <label> lines render as inline
             // decision buttons the owner can tap instead of typing.
-            var photoPaths = Extract_MarkerLines(ref text, "IMAGE");
+            var photoPaths = Extract_MarkerLines(ref text, Channels.ChannelGrammar.Bare(Channels.ChannelGrammar.IMAGE));
 
             // ATTACH: <path> lines upload as DOCUMENTS — an HTML mockup, a CSV, a report — under
             // EntryAttachment_Policy's containment, which IMAGE: never had (see the policy's header).
-            var attachmentPaths = Extract_MarkerLines(ref text, "ATTACH");
+            var attachmentPaths = Extract_MarkerLines(ref text, Channels.ChannelGrammar.Bare(Channels.ChannelGrammar.ATTACH));
             // The five lines a question owes the owner. Extracted here, judged by
             // OwnerQuestion_Contract, and forwarded ONLY complete — see Refuse_Question below.
             var optionLabels = Extract_MarkerLines(ref text, OwnerQuestion_Contract.OPTION_MARKER);

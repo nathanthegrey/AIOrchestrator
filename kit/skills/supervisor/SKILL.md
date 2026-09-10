@@ -206,6 +206,45 @@ ago."* A stale name is worse than an id, because an id at least does not claim t
   ```
 
   (Same call with `--channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md"` for the owner.)
+
+  **For anything with a SHAPE — a question, a state declaration, a report, an attachment — pass the
+  typed flags and let the tool compose it.** You then do not write markers at all, and a malformed
+  entry is refused before it reaches the channel instead of being coached after the owner's phone has
+  already carried it:
+
+  ```bash
+  channel-append.sh \
+    --channel "${AIORCH_SUPERVISION_ROOT:-$HOME/.claude/supervision}/$ARGUMENTS/owner-channel.md" \
+    --to owner \
+    --subject "the merge gate" \
+    --question  "merge stage 13 now, or hold for the reaction work?" \
+    --option    "Merge it" \
+    --option    "Hold" \
+    --recommend "Merge — nothing else touches the grammar" \
+    --risk low \
+    --row FIN-D-277
+  ```
+
+  Also `--state "<your one-line state>"` at turn end, `--report "<body>"`, `--attach <path>`
+  (repeatable), and `--type` when you want to be explicit rather than let it be inferred.
+
+  **THE MARKER WORDS ARE NOT SPELLED HERE ANY MORE, AND THAT IS DELIBERATE.** `QUESTION:`, `OPTION:`,
+  `STATE:`, the header shape — the tool writes them, from ONE file it and the app both read
+  (`kit/grammar/channel-grammar.json`). Three pages plus nine code files each carrying their own copy
+  is how the question marker came to be written WITH its colon on one side and matched WITHOUT it on
+  the other, in three files, each looking correct where it sat.
+  **The LIMITS above still stand and you still need them** — 3 lines, 5 the ceiling, 600 characters,
+  2 to 4 options, 28 characters a label — because they govern what you decide to say, which no tool
+  can do for you. The difference is that you no longer type the syntax that carries it, and the tool
+  refuses in the same terms the app would have coached in.
+
+  **A refusal names every fault at once and writes NOTHING.** Fix them all and call it again; there
+  is no half-written entry to clean up.
+
+  **You cannot sign as another role.** The author comes from the session's own identity, and passing
+  `--author <someone else>` is refused with both names in the log. An entry is believed because of
+  the name on it — that is how a model choice once got erased from a brief.
+
   It takes a cross-process lock (a `.lock` DIRECTORY beside the channel — the APP takes the same lock
   from .NET, so you and it interlock), **allocates `n` and stamps the time itself INSIDE that lock**,
   and writes the entry in a single append. It prints the index it used.

@@ -1,4 +1,5 @@
 using AIOrchestratorCoreLib.Status;
+using AIOrchestratorCoreLib.Channels;
 
 namespace AIOrchestratorCoreLib.Bridge;
 
@@ -23,17 +24,20 @@ public static class OwnerPush_Policy
     /// itself lives with the rest of the channel vocabulary (<see cref="MemberState_Resolver.QUESTION_MARKER"/>);
     /// this name stays because this file's readers are about the owner's phone, not about member state.
     /// </summary>
-    public const string QUESTION_MARKER = MemberState_Resolver.QUESTION_MARKER;
-    public const string OPTION_MARKER = "OPTION:";
+    // FROM THE GRAMMAR, and `static readonly` rather than `const` because of it: the grammar is a
+    // FILE both this app and the bash tool read, so its values arrive at runtime. A `const` would
+    // have to be a literal here, which is the ninth copy E3 removes.
+    public static readonly string QUESTION_MARKER = MemberState_Resolver.QUESTION_MARKER;
+    public static readonly string OPTION_MARKER = ChannelGrammar.OPTION;
 
     /// <summary>Work has stopped and only the owner can restart it.</summary>
-    public const string BLOCKED_MARKER = "BLOCKED ON OWNER";
+    public static readonly string BLOCKED_MARKER = ChannelGrammar.BLOCKED_ON_OWNER;
 
     /// <summary>A picture for the owner, uploaded as a photo. See <see cref="Carries_FileForTheOwner"/>.</summary>
-    public const string IMAGE_MARKER = "IMAGE:";
+    public static readonly string IMAGE_MARKER = ChannelGrammar.IMAGE;
 
     /// <summary>A file for the owner, uploaded as a document. See <see cref="Carries_FileForTheOwner"/>.</summary>
-    public const string ATTACH_MARKER = "ATTACH:";
+    public static readonly string ATTACH_MARKER = ChannelGrammar.ATTACH;
 
     /// <summary>
     /// The one-line greeting a session writes as it boots — "supervisor online — …", "solo online
@@ -50,7 +54,7 @@ public static class OwnerPush_Policy
     ///
     /// It cannot become a waterfall: a session writes it exactly once, at boot.
     /// </summary>
-    public const string ONLINE_MARKER = "online";
+    public static readonly string ONLINE_MARKER = ChannelGrammar.BOOT_ANNOUNCEMENT_WORD;
 
     /// <summary>
     /// Matched on the SUBJECT, not the raw text, so the word "online" in a sentence is not a
