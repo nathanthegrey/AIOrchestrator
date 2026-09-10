@@ -470,12 +470,28 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
         return EMPTY_UPDATES;
     }
 
+    string? _timeoutSendsContaining;
+
+    /// <summary>
+    /// Makes a matching send behave like an HttpClient TIMEOUT: a TaskCanceledException raised while
+    /// the caller's token is NOT cancelled. That distinction is the whole point — code that rethrows
+    /// OperationCanceledException unfiltered mistakes it for a shutdown.
+    /// </summary>
+    public void Timeout_Sends_Containing(string fragment)
+    {
+        lock (_lock)
+            _timeoutSendsContaining = fragment;
+    }
+
     long? Record(string text)
     {
         lock (_lock)
         {
             if (_failSendsContaining != null && text.Contains(_failSendsContaining, StringComparison.Ordinal))
                 throw new Exception($"scripted send failure for text containing '{_failSendsContaining}'");
+
+            if (_timeoutSendsContaining != null && text.Contains(_timeoutSendsContaining, StringComparison.Ordinal))
+                throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 90 seconds elapsing.");
 
             _sentTexts.Add(text);
             return _nextMessageId++;
@@ -541,10 +557,19 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             _downloadBytes = bytes;
     }
 
+    Exception? _downloadFailure;
+
+    /// <summary>Makes every download fail — for the probes about what the owner is told when it does.</summary>
+    public void Fail_Downloads_With(Exception failure)
+    {
+        lock (_lock)
+            _downloadFailure = failure;
+    }
+
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken)
     {
         lock (_lock)
-            return Task.FromResult(_downloadBytes);
+            return _downloadFailure == null ? Task.FromResult(_downloadBytes) : Task.FromException<byte[]>(_downloadFailure);
     }
 
     public Task<long> Create_ForumTopic_Async(string topicName, int? iconColor, CancellationToken cancellationToken) => Task.FromResult(1L);

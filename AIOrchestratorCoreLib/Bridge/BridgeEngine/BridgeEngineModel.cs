@@ -10874,7 +10874,17 @@ internal sealed class BridgeEngineModel(
                 messageThreadId,
                 await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, messageThreadId, text, sound, cancellationToken));
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES, which is this file's canonical account (see
+        // Refresh_TopicStatusLines_Async) applied to the one best-effort sender that still had the
+        // bare rethrow. An HttpClient timeout surfaces as a TaskCanceledException with the token
+        // NOT cancelled, so the bare form escalated a failed send into a shutdown.
+        //
+        // IT BECAME LOAD-BEARING WHEN A CALLER STARTED USING THIS FROM INSIDE A CATCH BLOCK (the
+        // failed-photo reply below). There, an escape does not merely abandon the reply: it
+        // abandons the CAPTION too, so the owner's message reaches nobody — and it escapes exactly
+        // when Telegram is already degraded, which is the only time that reply is sent at all. A
+        // "best effort" sender that can take its caller down is not best effort.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -12475,26 +12485,6 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>
-    /// The owner must always learn what became of their message. If the supervisor's turn ends
-    /// without a reply here (it went idle, typically waiting on an implementer), the app says so
-    /// on the receipt AND nudges the supervisor in its channel — which trips its watcher, so a
-    /// real answer follows instead of a receipt frozen on "thinking…".
-    /// </summary>
-    /// <summary>
-    /// The periodic STATUS the SUPERVISOR used to write every ~30 min — about 26 paid turns a day
-    /// (~$44) spent restating what this process can compute for free from PLAN.md, the member
-    /// states and the activity probes. Same cadence, same content, same "only while work is in
-    /// flight" condition, and it runs on the bridge tick, so it adds no session and no idle wake.
-    ///
-    /// THE CADENCE IS THE WALL CLOCK'S, not each orchestration's own. This used to gate on elapsed
-    /// time since THIS orchestration's last push, so every topic carried the phase of whenever it
-    /// first pushed and the owner got a trickle: "when I have many orchestration sessions open I get
-    /// continuously spammed because they are all out of sync". Every topic now fires on the same
-    /// :00/:30 tick. `PeriodicStatusSlot_Planner` owns WHEN — out of this class because it is
-    /// `internal sealed` with no `InternalsVisibleTo`, so a rule decided in here is unreachable from
-    /// the suite; this method keeps only the sending.
-    /// </summary>
     /// <summary>
     /// THE AWAY DIGEST, AND NOTHING ELSE ANY MORE. It was <c>Push_PeriodicStatus_Async</c> when it
     /// pushed a fifteen-line status into every topic every thirty minutes; brief C deleted that
