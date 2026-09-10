@@ -69,7 +69,10 @@ public class CloseImplementerGuardProbeTests : IDisposable
 
     public void Dispose()
     {
-        Directory.Delete(_tempRoot, recursive: true);
+        // Best-effort, not Directory.Delete: on 2026-09-10 this teardown raised
+        // IOException("Directory not empty") on macOS in one run of three and failed a test whose
+        // assertions had all passed. See TempTree for the race and why swallowing it is correct.
+        TempTree.Delete_BestEffort(_tempRoot);
     }
 
     /// <summary>
