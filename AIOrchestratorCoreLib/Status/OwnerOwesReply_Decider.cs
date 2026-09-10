@@ -75,21 +75,6 @@ public static class OwnerOwesReply_Decider
     }
 
     /// <summary>
-    /// A REAL QUESTION IS DECLARED, not inferred. `QUESTION:` and `BLOCKED ON OWNER` are the two
-    /// shapes every role command teaches for "I cannot go on without you", and they are the two the
-    /// owner named.
-    ///
-    /// <para>
-    /// PROSE ENDING IN '?' IS DELIBERATELY NOT ENOUGH here, though
-    /// <see cref="OwnerPush_Policy.Asks_InProse"/> treats it as enough for PUSHING. The two
-    /// decisions are not the same: pushing an ask-shaped line costs one message the owner can
-    /// ignore, while alerting on one costs a ⚠️ every 25 minutes about a rhetorical question. The
-    /// owner's own ruling on the topic glyph (2026-08-25) is the same distinction: *"it's not that
-    /// it should be interpreted indirectly based on the presence of a ? here and there that could
-    /// mean anything."*
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// THE IDENTITY OF A QUESTION: who asked it and what it says, hashed — the key the ⚠️ alert
     /// remembers so it fires once per question (owner, 2026-09-10: "never on the agent-written
     /// `[n]`").
@@ -113,6 +98,21 @@ public static class OwnerOwesReply_Decider
         return ChannelEntry_Digest.Compute($"{questionEntry.Author}\n{questionEntry.Subject}\n{questionEntry.Body}");
     }
 
+    /// <summary>
+    /// A REAL QUESTION IS DECLARED, not inferred. `QUESTION:` and `BLOCKED ON OWNER` are the two
+    /// shapes every role command teaches for "I cannot go on without you", and they are the two the
+    /// owner named.
+    ///
+    /// <para>
+    /// PROSE ENDING IN '?' IS DELIBERATELY NOT ENOUGH here, though
+    /// <see cref="OwnerPush_Policy.Asks_InProse"/> treats it as enough for PUSHING. The two
+    /// decisions are not the same: pushing an ask-shaped line costs one message the owner can
+    /// ignore, while alerting on one costs a ⚠️ every 25 minutes about a rhetorical question. The
+    /// owner's own ruling on the topic glyph (2026-08-25) is the same distinction: *"it's not that
+    /// it should be interpreted indirectly based on the presence of a ? here and there that could
+    /// mean anything."*
+    /// </para>
+    /// </summary>
     public static bool Is_RealQuestion(string rawEntryText)
     {
         if (string.IsNullOrEmpty(rawEntryText))

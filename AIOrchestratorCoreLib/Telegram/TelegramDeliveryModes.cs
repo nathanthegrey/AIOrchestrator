@@ -76,8 +76,10 @@ public static class TelegramDeliveryMode_Glyphs
     /// *"for now it's used only in conversations, not in topic titles, so I won't get confused"*.
     /// The app does write ✅ in message BODIES — an answered question, a passed check — but the
     /// topic-list vocabulary is a separate namespace, and inside it this character is unused.
-    /// Not 🏁, which already means a LEDGER LINE finished (`LedgerTransition_Wording.RECAP_GLYPH`)
-    /// and would put two different finished-somethings in one thread.
+    /// Not 🏁 — which in 2026-08 meant a LEDGER RECAP and since 2026-09-10 means a CLOSED
+    /// orchestration (<see cref="CLOSED"/>). The reason has outlived the constant it named: either
+    /// way, 🏁 and ✅ would be two different finished-somethings in one thread. A line finishing is
+    /// `LedgerTransition_Wording.FINISHED_GLYPH` ✔, and the recap now takes 🎯.
     ///
     /// It REPLACES the mode glyph for the same reason 🧪 does: /done is mute underneath, so drawing
     /// 🔕 ✅ together would state one fact twice.

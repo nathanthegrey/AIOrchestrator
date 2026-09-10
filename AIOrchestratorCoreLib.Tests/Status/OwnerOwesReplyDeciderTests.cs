@@ -82,6 +82,33 @@ public class OwnerOwesReplyDeciderTests
             OwnerOwesReply_Decider.Identify_Question(theSameWordsFromASolo));
     }
 
+    /// <summary>
+    /// THE BODY IS IN THE KEY, and nothing pinned that until a review traced the three assertions
+    /// above against a key with the body deleted: they differ by SUBJECT, by INDEX and by AUTHOR
+    /// respectively, so all three still passed. A one-line change dropping the body was invisible to
+    /// the suite — and it reintroduces the exact collision those assertions claim to prevent, because
+    /// role commands teach fixed subjects and agents reuse them: two different questions from one
+    /// supervisor under one reused subject would share a key, and the second would be silent.
+    ///
+    /// This is the case where EVERYTHING ELSE IS EQUAL — same author, same subject, same index, same
+    /// stamp — so it can only pass for the body.
+    /// </summary>
+    [Fact]
+    public void TwoDifferentQuestionsUnderOneReusedSubjectAreStillTwoQuestions()
+    {
+        var askedAboutTheMigration = ChannelEntry_Factory.Create(
+            7, ChannelAuthors.Supervisor, "2026-09-09 17:00", "a question for you",
+            "QUESTION: proceed with the migration?", "## [7] FROM supervisor\nQUESTION: proceed with the migration?");
+
+        var askedAboutTheRollback = ChannelEntry_Factory.Create(
+            7, ChannelAuthors.Supervisor, "2026-09-09 17:00", "a question for you",
+            "QUESTION: roll back stage 3 instead?", "## [7] FROM supervisor\nQUESTION: roll back stage 3 instead?");
+
+        Assert.NotEqual(
+            OwnerOwesReply_Decider.Identify_Question(askedAboutTheMigration),
+            OwnerOwesReply_Decider.Identify_Question(askedAboutTheRollback));
+    }
+
     [Fact]
     public void ADeclaredQuestionFromTheSupervisor_IsWhatTheOwnerOwes()
     {

@@ -613,7 +613,44 @@ public static class TopicStatusLine_Builder
     /// </summary>
     static string Build_UpdatedLine(DateTime now)
     {
-        return $"updated {TopicStatusWording.Clock(now)}";
+        return $"{HEARTBEAT_PREFIX}{TopicStatusWording.Clock(now)}";
+    }
+
+    /// <summary>How the heartbeat line opens, so a reader can recognise it without re-spelling it.</summary>
+    const string HEARTBEAT_PREFIX = "updated ";
+
+    /// <summary>
+    /// THE LINE WITHOUT ITS HEARTBEAT — for the one caller that must ask "has anything actually
+    /// CHANGED?" rather than "is this text different?".
+    ///
+    /// <para>
+    /// The two questions came apart on 2026-09-10, when the owner ruled that PULSE is re-posted only
+    /// when it is buried AND its content changed. The heartbeat is <see cref="Build_UpdatedLine"/> and
+    /// it carries a wall clock, so PULSE's TEXT differs from the previous one at every minute
+    /// boundary whatever the orchestration is doing — and a repost gated on the raw text would have
+    /// degraded the owner's rule to "buried, then within sixty seconds". The delete-plus-post
+    /// carrying no news would still happen; it would merely be late, which is the worse failure
+    /// because it looks fixed.
+    /// </para>
+    /// <para>
+    /// It strips only the LAST line and only when that line is the heartbeat, rather than filtering
+    /// every line that starts with the prefix: the heartbeat is emitted last and unconditionally, and
+    /// a member whose task began with the word "updated" is not a heartbeat.
+    /// </para>
+    /// </summary>
+    public static string? Strip_Heartbeat(string? statusText)
+    {
+        if (statusText == null)
+            return null;
+
+        var lastBreak = statusText.LastIndexOf('\n');
+
+        if (lastBreak < 0)
+            return statusText.StartsWith(HEARTBEAT_PREFIX, StringComparison.Ordinal) ? "" : statusText;
+
+        return statusText.AsSpan(lastBreak + 1).StartsWith(HEARTBEAT_PREFIX, StringComparison.Ordinal)
+            ? statusText[..lastBreak]
+            : statusText;
     }
 
     /// <summary>

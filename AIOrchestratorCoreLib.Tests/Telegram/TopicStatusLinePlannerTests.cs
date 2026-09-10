@@ -175,7 +175,7 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// PINS THE CALL, not the callee. Replacing Pick_LastSubject_OrNull(...) with a plain null at the
+    /// PINS THE CALL, not the callee. Replacing Pick_LastEvent_OrNull(...) with a plain null at the
     /// planner's own call site left 634 green, because the only two assertions on Plan(...).Text used
     /// an EMPTY roster — where the picker returns null anyway — and every other Plan assertion looks
     /// at .Action.
@@ -265,7 +265,7 @@ public class TopicStatusLinePlannerTests
     /// CONTENT PROBE (d) from Brief C's "Done when": the `last` field is the latest SUPERVISOR
     /// subject, never the first `[>]` ledger line — the old STATUS message's defect ("now: FIN-D-293a
     /// step 6 and step 7" repeated identically for hours after the work merged). PULSE's `last` field
-    /// never reads the ledger at all: it is Pick_LastSubject_OrNull's answer and nothing else, so this
+    /// never reads the ledger at all: it is Pick_LastEvent_OrNull's answer and nothing else, so this
     /// pins that a ledger with a same-named in-progress line cannot leak into it.
     /// </summary>
     [Fact]
@@ -522,6 +522,93 @@ public class TopicStatusLinePlannerTests
     /// `Is_RepostDue` refuses a topic it knows nothing about. This test pins the PAIR — the two blind
     /// spots cover each other, and either one made durable alone would open the storm.
     /// </summary>
+    /// <summary>
+    /// THE HEARTBEAT IS NOT NEWS — and until 2026-09-10 it silently was, which made the owner's whole
+    /// rule ("buried AND its content changed") mean "buried, then within sixty seconds".
+    ///
+    /// <para>
+    /// Field 6 is `updated HH:MM`, emitted unconditionally, so PULSE's raw text differs from the
+    /// previous one at every minute boundary however still the orchestration is. The repost gate
+    /// compares texts, so a quiet buried topic reposted as soon as the wall clock rolled over: the
+    /// delete-plus-post carrying no news still happened, merely late — which is the worse failure,
+    /// because it looks fixed.
+    /// </para>
+    /// <para>
+    /// THE WHOLE SUITE WAS BLIND TO IT because every planner test freezes `NOW` at one constant, so
+    /// the two texts it compares are minted from the same clock. These two are the only ones that
+    /// advance the clock between them, which is the ONLY way the bug is visible. That is the trap
+    /// stage 8b already paid for once, from the other direction — a frozen test clock hiding a
+    /// tailer rule.
+    /// </para>
+    /// <para>
+    /// NO LIVE MEMBER IN THE FIXTURE, DELIBERATELY, and this is the thing to understand before
+    /// changing it. A member row ends in "for how long", which is ALSO derived from `now` — so with a
+    /// member present, advancing the clock changes two lines and the test could not say which one it
+    /// was measuring. A ledger and no members leaves the heartbeat as the only clock-dependent line
+    /// on the surface. (The duration ticking is the same class of problem with a narrower blast
+    /// radius, and it is reported rather than fixed here: whether "5 min instead of 4" is news the
+    /// owner wants their line moved for is theirs to rule on, not mine to assume.)
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheMinuteRollingOverIsNotSomethingNewToSay()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var atOneMinutePast = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+
+        var aMinuteLater = Plan_At(NOW.AddMinutes(1), atOneMinutePast.Text, buried);
+
+        // The text really did change — otherwise this test would pass for the identical-text rule's
+        // reason and prove nothing about the heartbeat.
+        Assert.NotEqual(atOneMinutePast.Text, aMinuteLater.Text);
+
+        // …and it is still not worth moving the message for.
+        Assert.NotEqual(TopicStatusActions.Repost, aMinuteLater.Action);
+    }
+
+    /// <summary>
+    /// AND THE EDIT STILL FIRES for that same clock tick, which is the half that must NOT change: the
+    /// heartbeat exists precisely so a frozen line can be told from a quiet orchestration, and an
+    /// edit notifies nobody. Asserted beside the case above so neither can pass for the other's reason.
+    /// </summary>
+    [Fact]
+    public void TheMinuteRollingOverStillEditsTheLineInPlace()
+    {
+        var buried = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var atOneMinutePast = Plan(members: [], progress: A_Ledger(), existingMessageId: STATUS_ID, newestTopicMessage: buried);
+
+        Assert.Equal(TopicStatusActions.Edit, Plan_At(NOW.AddMinutes(1), atOneMinutePast.Text, buried).Action);
+    }
+
+    /// <summary>One merged line of four, so the surface has substance without a member on it.</summary>
+    static IPlanProgress A_Ledger()
+    {
+        return PlanProgress_Factory.Create(1, 0, 0, 0, 4, null, [], [], [], null, []);
+    }
+
+    /// <summary>
+    /// The same call as <see cref="Plan"/> but with the clock as an argument — the fixture's `Plan`
+    /// hard-codes `NOW`, and the two tests above exist precisely to move it. No members and a ledger,
+    /// so the heartbeat is the only line that reads the clock.
+    /// </summary>
+    static TopicStatusLine_Planner.TopicStatusPlan Plan_At(
+        DateTime now, string? lastWrittenText, TopicStatusLine_Planner.TopicNewestMessage newestTopicMessage)
+    {
+        return TopicStatusLine_Planner.Plan(
+            A_Ledger(),
+            [],
+            now,
+            STATUS_ID,
+            lastWrittenText,
+            TelegramDeliveryModes.Normal,
+            null,
+            BACKOFF,
+            newestTopicMessage,
+            repostIsImpossible: false);
+    }
+
     [Fact]
     public void AfterARestartNothingIsRepostedUntilRealTrafficIsSeen()
     {

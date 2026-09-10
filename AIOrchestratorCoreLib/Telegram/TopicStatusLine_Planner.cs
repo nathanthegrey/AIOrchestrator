@@ -119,7 +119,15 @@ public static class TopicStatusLine_Planner
         // map is in memory too, so `Find_NewestTopicMessage_OrNull` answers null until the app observes
         // real traffic, and `Is_RepostDue` refuses a topic it knows nothing about. The two blind spots
         // cover each other, and the test at the bottom of this file pins the pair.
-        var somethingNewToSay = decided != TopicStatusActions.None;
+        //
+        // AND THE HEARTBEAT IS NOT NEWS. Field 6 is `updated HH:MM`, emitted unconditionally, so
+        // PULSE's raw text differs from the previous one at every minute boundary however still the
+        // orchestration is — which would have degraded the owner's rule to "buried, then within sixty
+        // seconds". The repost asks the substance question through `Strip_Heartbeat`; the EDIT still
+        // compares the raw text, because keeping the clock ticking in place is the heartbeat's whole
+        // job and an edit notifies nobody.
+        var somethingNewToSay = decided != TopicStatusActions.None
+            && TopicStatusLine_Builder.Strip_Heartbeat(text) != TopicStatusLine_Builder.Strip_Heartbeat(lastWrittenText);
 
         // THE LATCH COMES FIRST, and it is a fallback rather than a failure. Telegram REFUSES some
         // deletes permanently — a message past its 48-hour window, or a bot without
@@ -145,9 +153,13 @@ public static class TopicStatusLine_Planner
         // "DND holds only what rings; PULSE and the dashboard keep updating silently". The two modes
         // mean opposite things about content — Deferred KEEPS everything and replays it, because the
         // owner is away and will come back to it; Silenced DROPS it, because they are reading the
-        // same thing live in the terminal and do not want it twice. So a status surface must stay
-        // current under Deferred (their check-in ritual reads it, and a line frozen at the moment
-        // they went away is a line that lies) and must stay out of the way under Silenced.
+        // same thing live in the terminal and do not want it twice.
+        //
+        // WHAT "OUT OF THE WAY UNDER SILENCED" MEANS EXACTLY, because the looser wording contradicted
+        // the code two lines below it: 🔕 refuses to PUT A MESSAGE THERE and refuses to MOVE one. It
+        // does not stop the EDIT — an edit notifies nobody and appears nowhere new, and a line left
+        // frozen for the length of a terminal session would be wrong on the owner's next glance. So
+        // Silenced adds no message to the topic and Deferred keeps its line current AND at the bottom.
         //
         // A BLOCKED REPOST FALLS BACK TO WHAT THE DECIDER SAID rather than to silence: the content
         // still updates in place and only the MOVE waits. Falling back to a blanket Edit instead

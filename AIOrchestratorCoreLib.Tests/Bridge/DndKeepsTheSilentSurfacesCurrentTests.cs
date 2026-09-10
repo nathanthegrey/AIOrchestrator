@@ -100,26 +100,37 @@ public class DndKeepsTheSilentSurfacesCurrentTests : IDisposable
     {
         var orchId = await Start_WithChannelAlreadySeen_Async();
 
-        // THE COUNT BEFORE THE MUTE IS THE BASELINE, and taking it is what makes this probe mean
-        // anything. PULSE is already up by now — the baseline run above posted it — so "has PULSE
-        // been written?" is answered yes by traffic from before DND existed. Only a write that
-        // arrives AFTER the mute is evidence.
-        var pulseWritesBeforeTheMute = _telegram.Count_Sent_Containing("PULSE");
-
+        // THE MUTE ITSELF CHANGES PULSE ONCE, and that one write must not be what this test measures.
+        // Turning DND on puts 🌙 in the header, which is a text change like any other — so the mute
+        // goes on FIRST and the surface is allowed to settle before the baseline is taken. A review
+        // caught the earlier version of this test being carried entirely by that glyph: deleting the
+        // channel append below left it green.
         _engine.Set_TelegramMuted(true);
 
-        // AND THE CONTENT HAS TO CHANGE, or there is nothing for PULSE to say: the decider answers
-        // None to identical text, by design, so a mute over a still orchestration produces no write
-        // however open the gate is. A supervisor entry moves field 4 (`last`), which is exactly the
-        // update the owner's check-in would otherwise be missing.
-        Append_SupervisorEntry(orchId, 2, "migration done", SUPERVISOR_TEXT);
+        await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(3));
+
+        var pulseWritesBeforeTheEvent = _telegram.Count_Sent_Containing("PULSE");
+
+        // AND THE EVENT HAS TO BE ONE PULSE CAN SEE. The decider answers None to identical text, so a
+        // mute over a still orchestration produces no write however open the gate is — and a plain
+        // supervisor entry is NOT visible to this surface: field 4 reads the member SPOKES, never
+        // owner-channel.md. `STATE:` is the one thing a supervisor writes on the owner channel that
+        // PULSE renders (field 2, the declared state), which is why the fixture declares one.
+        Append_SupervisorEntry(
+            orchId, 2, "migration done",
+            $"{SUPERVISOR_TEXT}\nSTATE: waiting for imp-2's review, then I hand you the merge");
 
         var pulseUpdated = await Run_Until_Async(
-            () => _telegram.Count_Sent_Containing("PULSE") > pulseWritesBeforeTheMute, 25_000);
+            () => _telegram.Count_Sent_Containing("PULSE") > pulseWritesBeforeTheEvent, 25_000);
 
         Assert.True(
             pulseUpdated,
-            $"PULSE never updated after DND went on — the owner's check-in reads a line frozen at the moment they left.\n{_telegram.Dump()}");
+            $"PULSE never reported an event that happened during the mute — the owner's check-in reads a line frozen at the moment they left.\n{_telegram.Dump()}");
+
+        // And it says the thing that happened, not merely something.
+        Assert.True(
+            _telegram.Has_Sent_Containing("waiting for imp-2's review"),
+            $"PULSE was rewritten but never carried the state the supervisor declared during the mute.\n{_telegram.Dump()}");
 
         // The other half of the rule, and the half that must NOT change: the words themselves wait.
         Assert.False(
@@ -148,6 +159,10 @@ public class DndKeepsTheSilentSurfacesCurrentTests : IDisposable
 
         await Run_Until_Async(() => false, BridgeTestTiming.Window_ForTicks(3));
 
+        // NOT-EMPTY FIRST, and a review is why. `DoesNotContain(Rings, …)` on its own passes both
+        // because nothing rang and because nothing was SENT — decision 20's second clause, a state
+        // with two routes to it, which pins neither. This makes the guard able to fail.
+        Assert.NotEmpty(_telegram.Sounds_Sent());
         Assert.DoesNotContain(TelegramSendSounds.Rings, _telegram.Sounds_Sent());
     }
 

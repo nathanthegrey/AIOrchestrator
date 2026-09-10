@@ -217,9 +217,16 @@ public class TelegramDeliveryModeGlyphsTests
     /// service message into each of the owner's threads to tell them something they had just done
     /// themselves.
     ///
-    /// SWEPT OVER EVERY COMBINATION rather than spot-checked, because the flags no longer even carry
-    /// delivery state: a regression would arrive as a NEW flag or a new branch, which no fixed
-    /// example would visit.
+    /// SWEPT OVER EVERY COMBINATION OF THE CURRENT FLAGS rather than spot-checked, because a
+    /// regression would arrive as a new BRANCH — a corner of the existing flags that no literal
+    /// example happens to visit — and mutation-testing confirmed exactly that: a glyph emitted only
+    /// for Blocking-plus-all-four-state-flags is caught by this test and by nothing else.
+    ///
+    /// WHAT IT DOES NOT COVER, said plainly because the first version of this summary claimed it did:
+    /// a NEW flag. `All_FlagCombinations` is a hand-written loop over the five members
+    /// `TopicNameFlags` has today, so adding a sixth silently leaves half the space unswept. There is
+    /// no reflection over the record here on purpose — it would be a cleverer test that fails for
+    /// reasons unrelated to the rule — so this is a fact about the guard, not a hole to be hidden.
     /// </summary>
     [Fact]
     public void TheFiveDepartedGlyphsNeverAppearInAName_WhateverTheFlags()
