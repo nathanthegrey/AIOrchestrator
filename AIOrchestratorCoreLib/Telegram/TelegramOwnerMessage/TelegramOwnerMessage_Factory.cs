@@ -19,9 +19,13 @@ public static class TelegramOwnerMessage_Factory
         // builds genuinely typed messages, and a new call site that forgets this argument gets the
         // binding behaviour that has always applied to typed text. Only the three app-composed
         // sites pass true, and they are named in ITelegramOwnerMessage.IsAppComposed.
-        bool isAppComposed = false)
+        bool isAppComposed = false,
+
+        // Trailing and optional like the two above it: every caller that predates documents means
+        // "no document", and only the parser has one to pass.
+        TelegramDocumentRef? document = null)
     {
         return new TelegramOwnerMessageModel(
-            updateId, messageId, chatId, fromUserId, messageThreadId, text, photoFileId, voiceFileId, replyToText, isAppComposed);
+            updateId, messageId, chatId, fromUserId, messageThreadId, text, photoFileId, voiceFileId, replyToText, isAppComposed, document);
     }
 }

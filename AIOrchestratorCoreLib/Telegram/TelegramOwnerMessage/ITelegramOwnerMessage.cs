@@ -23,6 +23,13 @@ public interface ITelegramOwnerMessage
     string? VoiceFileId { get; }
 
     /// <summary>
+    /// The file the owner attached as a DOCUMENT, or null. See <see cref="TelegramDocumentRef"/> —
+    /// until this field existed, a document with no caption produced no owner message at all and
+    /// the offset advanced over it.
+    /// </summary>
+    TelegramDocumentRef? Document { get; }
+
+    /// <summary>
     /// TRUE when the APP composed this message rather than the owner typing it: a tapped option, a
     /// released high-risk read-back, an applied deadline default. The text is real and goes to the
     /// session exactly as a typed message would — what it must never do is act as a TYPED ANSWER to

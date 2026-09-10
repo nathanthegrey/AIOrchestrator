@@ -58,8 +58,50 @@ internal sealed class BridgeEngineModel(
     IEngineStateStore engineStateStore,
     EngineStateSnapshot restoredState,
     IClock clock,
-    IBridgeEngineTiming timing) : IBridgeEngine
+    IBridgeEngineTiming timing,
+    Hosting.HostWindowing.IHostWindowing hostWindowing) : IBridgeEngine
 {
+    /// <summary>
+    /// WHAT THIS HOST CAN DO WITH WINDOWS, asked rather than assumed. The engine used to call
+    /// `WindowFocus.*` — three static classes of unguarded user32/dwmapi/gdi32 P/Invoke — by name,
+    /// so `/show` on the Linux daemon threw DllNotFoundException out of the command dispatch and out
+    /// of the inbound batch with it, and Telegram re-served every update in that batch four times
+    /// (2026-09-08 01:24-01:26Z). See <see cref="Hosting.HostWindowing.IHostWindowing"/>.
+    /// </summary>
+    readonly Hosting.HostWindowing.IHostWindowing _hostWindowing = hostWindowing;
+
+    /// <summary>
+    /// The one line the owner gets for a command this host cannot carry out, and the one log line
+    /// that records it.
+    ///
+    /// <para>
+    /// SAID EVERY TIME TO THE OWNER, LOGGED ONCE PER COMMAND. They typed it, so they are owed an
+    /// answer each time — silence would read as an app that ignored them. The log is the opposite
+    /// case: it is read to find out what this host cannot do, and learns nothing from the tenth copy.
+    /// </para>
+    /// </summary>
+    async Task<bool> Refuse_IfNoWindowing_Async(ITelegramApiClient client, string command, long? messageThreadId, CancellationToken cancellationToken)
+    {
+        if (_hostWindowing.Is_Supported)
+            return false;
+
+        if (_windowingRefusalsLogged.Add(command))
+        {
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"/{command} needs a desktop this host does not have ({Environment.OSVersion.Platform} on {Environment.MachineName}) — refused with one line to the owner. Not logged again for /{command}.");
+        }
+
+        await Send_DirectReply_BestEffort_Async(
+            client, messageThreadId,
+            $"🖥 /{command} is not available on this host yet — it needs the machine whose screen the terminals are on.",
+            cancellationToken);
+
+        return true;
+    }
+
+    readonly HashSet<string> _windowingRefusalsLogged = [];
+
     /// <summary>In-memory inline-button registry cap — taps on evicted buttons get an "expired" toast.</summary>
     const int BUTTON_REGISTRY_CAP = 300;
 
@@ -109,6 +151,13 @@ internal sealed class BridgeEngineModel(
     const int INBOUND_LONG_POLL_SECONDS = 20;
     const int INBOUND_ERROR_BACKOFF_START_MILLISECONDS = 5000;
     const int INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS = 60000;
+
+    /// <summary>
+    /// HTTP 409 from `getUpdates`: another poller holds this bot token, or a webhook is registered
+    /// against it. One situation with one action, which is why it is not left in the generic
+    /// failure catch — see <c>Note_InboundConflicted_IfNew_Async</c>.
+    /// </summary>
+    const int TELEGRAM_CONFLICT_STATUS = 409;
     const int LIMIT_CHECK_INTERVAL_SECONDS = 60;
 
     /// <summary>Pause before relaunching a bridge loop that ended, so a broken loop cannot spin.</summary>
@@ -190,6 +239,23 @@ internal sealed class BridgeEngineModel(
     /// <summary>When a channel's mirror first failed, and when it was last attempted — the retry window.</summary>
     readonly Dictionary<string, DateTime> _mirrorRetryFirstFailureUtc = [];
     readonly Dictionary<string, DateTime> _mirrorRetryLastAttemptUtc = [];
+
+    /// <summary>
+    /// ENTRIES THE MIRROR GAVE UP ON, held until a send to that channel's topic works again.
+    ///
+    /// <para>
+    /// The give-up used to CONFIRM the append it could not deliver — which moves the persisted
+    /// cursor past those entries for ever — and write one Error line into a log on a machine the
+    /// owner never reads. From the phone that is indistinguishable from nothing having happened.
+    /// </para>
+    /// <para>
+    /// IN MEMORY, AND BOUNDED (<see cref="Mirroring.UndeliveredDigest_Builder.MAX_PARKED_ENTRIES"/>).
+    /// The channel FILE remains the record of record — this is the copy that gets carried to the
+    /// phone late, not a second source of truth, so losing it in a restart costs the digest and
+    /// nothing else.
+    /// </para>
+    /// </summary>
+    readonly Dictionary<string, List<(DateTime WhenUtc, string Author, string Subject, string Body)>> _parkedUndelivered = [];
 
     /// <summary>
     /// Every channel whose CONTENTS have been read — by the baseline pass or by either sweep, whichever
@@ -727,6 +793,86 @@ internal sealed class BridgeEngineModel(
     readonly Dictionary<long, string> _closedQuestionReasons = [];
 
     readonly Queue<long> _closedQuestionOrder = new();
+
+    /// <summary>
+    /// How many handled updates and taps are remembered. One long-poll batch is at most 100 updates,
+    /// so this holds several batches — far more than a replay can ever span, and small enough that
+    /// remembering it costs nothing.
+    /// </summary>
+    const int HANDLED_UPDATE_MEMORY = 512;
+
+    /// <summary>
+    /// THE UPDATES THIS PROCESS HAS ALREADY ACTED ON. `_lastUpdateId` advances once per BATCH, so
+    /// anything that ends a batch early — a crash, or, before this stage, any escaped exception —
+    /// makes Telegram re-serve every update in it. On 2026-09-08 01:24-01:26Z a Windows-only window
+    /// call threw DllNotFoundException on the Linux daemon and one batch was replayed four times.
+    ///
+    /// <para>
+    /// AT MOST ONCE IS THE CHOICE, and it is the owner's side that decides it: a replayed owner
+    /// message is a second copy of their words in the channel and a second answer from the
+    /// supervisor, while an update dropped after a failed handler is one loud Error line naming the
+    /// update. The second is recoverable by asking again; the first corrupts the conversation.
+    /// </para>
+    /// <para>
+    /// IN MEMORY, DELIBERATELY. Persisting it would make the offset and this set two sources of
+    /// truth for the same question across a restart; the offset is already durable, and this set
+    /// exists for the window in which it is not yet.
+    /// </para>
+    /// </summary>
+    readonly HashSet<long> _handledUpdateIds = [];
+
+    readonly Queue<long> _handledUpdateOrder = new();
+
+    /// <summary>
+    /// The same, for TAPS, keyed by <c>callback_query.id</c> rather than the update id — Telegram's
+    /// own identity for the gesture. A tap acted on twice is a decision taken twice, and the
+    /// decisions that reach here include pushes and deploys.
+    /// </summary>
+    readonly HashSet<string> _handledTapIds = [];
+
+    readonly Queue<string> _handledTapOrder = new();
+
+    readonly object _handledLock = new();
+
+    bool Was_UpdateHandled(long updateId)
+    {
+        lock (_handledLock)
+            return _handledUpdateIds.Contains(updateId);
+    }
+
+    void Note_UpdateHandled(long updateId)
+    {
+        lock (_handledLock)
+        {
+            if (!_handledUpdateIds.Add(updateId))
+                return;
+
+            _handledUpdateOrder.Enqueue(updateId);
+
+            while (_handledUpdateOrder.Count > HANDLED_UPDATE_MEMORY)
+                _handledUpdateIds.Remove(_handledUpdateOrder.Dequeue());
+        }
+    }
+
+    bool Was_TapHandled(string callbackQueryId)
+    {
+        lock (_handledLock)
+            return _handledTapIds.Contains(callbackQueryId);
+    }
+
+    void Note_TapHandled(string callbackQueryId)
+    {
+        lock (_handledLock)
+        {
+            if (!_handledTapIds.Add(callbackQueryId))
+                return;
+
+            _handledTapOrder.Enqueue(callbackQueryId);
+
+            while (_handledTapOrder.Count > HANDLED_UPDATE_MEMORY)
+                _handledTapIds.Remove(_handledTapOrder.Dequeue());
+        }
+    }
 
     sealed class AwayTracker
     {
@@ -1312,7 +1458,7 @@ internal sealed class BridgeEngineModel(
 
             var delivered = await Mirror_Append_Async(append, cancellationToken);
             Raise_OrchestrationActivity(append.Channel.OrchId);
-            Settle_MirrorAttempt(append, delivered);
+            await Settle_MirrorAttempt_Async(append, delivered, cancellationToken);
         }
 
         await Check_UsageLimits_Async(cancellationToken);
@@ -1359,7 +1505,103 @@ internal sealed class BridgeEngineModel(
     /// Before this, the cursor advanced during the read and a failed send dropped the owner's
     /// messages permanently — the outage of 2026-08-11 lost every entry that met a 502.
     /// </summary>
-    void Settle_MirrorAttempt(ICompletedChannelAppend append, bool delivered)
+    int Count_Parked(string channelFilePath)
+    {
+        return _parkedUndelivered.TryGetValue(channelFilePath, out var parked) ? parked.Count : 0;
+    }
+
+    /// <summary>
+    /// Keeps the entries the mirror could not deliver, in the order the channel recorded them.
+    ///
+    /// <para>
+    /// ONLY WHAT WOULD HAVE BEEN SENT — <c>Select_MirrorableEntries</c>, the mirror's own predicate.
+    /// An entry the mirror deliberately does not push was never owed to the phone.
+    /// </para>
+    /// <para>
+    /// PAST THE CAP IT STOPS AND SAYS SO, once. An outage long enough to fill it is one the channel
+    /// file is the record of; what must not happen is a bridge holding a backlog until it dies.
+    /// </para>
+    /// </summary>
+    void Park_Undelivered(ICompletedChannelAppend append)
+    {
+        if (!_parkedUndelivered.TryGetValue(append.Channel.FilePath, out var parked))
+        {
+            parked = [];
+            _parkedUndelivered[append.Channel.FilePath] = parked;
+        }
+
+        // THE SAME PREDICATE THE MIRROR ITSELF USES, so the digest carries what would have been
+        // sent and nothing else. Parking every entry of the append would pad it with the ones the
+        // phone was never owed — narration the filter suppresses, app entries in a spoke — and
+        // invent deliveries that were never going to happen.
+        foreach (var entry in Select_MirrorableEntries(append))
+        {
+            if (parked.Count >= Mirroring.UndeliveredDigest_Builder.MAX_PARKED_ENTRIES)
+            {
+                _log.Log_Warning(
+                    append.Channel.OrchId,
+                    $"The undelivered backlog for '{Path.GetFileName(append.Channel.FilePath)}' is full at {Mirroring.UndeliveredDigest_Builder.MAX_PARKED_ENTRIES} entries — further entries are in the channel file only");
+
+                return;
+            }
+
+            parked.Add((_clock.UtcNow, entry.Author.ToString(), entry.Subject, entry.Body));
+        }
+    }
+
+    /// <summary>
+    /// ONE DOCUMENT, ON THE FIRST SEND THAT WORKS — never a burst of replayed messages. A catch-up
+    /// that scrolls the owner's phone for a minute is a second failure, not a recovery.
+    ///
+    /// <para>
+    /// CLEARED BEFORE THE SEND, deliberately, and the trade is stated rather than hidden: a digest
+    /// whose own upload fails is lost, while clearing it afterwards would re-send the same document
+    /// on every subsequent successful append until it happened to work — a loop the owner cannot
+    /// stop. The entries are in the channel file either way, and the Error line naming the outage
+    /// is already in the log.
+    /// </para>
+    /// </summary>
+    async Task Deliver_UndeliveredDigest_IfAny_Async(ICompletedChannelAppend append, CancellationToken cancellationToken)
+    {
+        if (!_parkedUndelivered.TryGetValue(append.Channel.FilePath, out var parked) || parked.Count == 0)
+            return;
+
+        _parkedUndelivered.Remove(append.Channel.FilePath);
+
+        var client = _telegramClient;
+
+        if (client == null)
+            return;
+
+        try
+        {
+            var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
+
+            await client.Send_Document_Async(
+                threadId,
+                Mirroring.UndeliveredDigest_Builder.FILE_NAME,
+                Mirroring.UndeliveredDigest_Builder.Build_Content(parked),
+                Mirroring.UndeliveredDigest_Builder.Build_CaptionHtml(parked.Count, parked[0].WhenUtc, parked[^1].WhenUtc),
+                cancellationToken);
+
+            _log.Log_Info(
+                append.Channel.OrchId,
+                $"Delivered the undelivered-entries digest ({parked.Count}) for '{Path.GetFileName(append.Channel.FilePath)}' now that Telegram is answering again");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(
+                append.Channel.OrchId,
+                $"The undelivered-entries digest ({parked.Count}) for '{Path.GetFileName(append.Channel.FilePath)}' could not be uploaded — the entries remain in the channel file",
+                ex);
+        }
+    }
+
+    async Task Settle_MirrorAttempt_Async(ICompletedChannelAppend append, bool delivered, CancellationToken cancellationToken)
     {
         var channelFilePath = append.Channel.FilePath;
 
@@ -1368,26 +1610,39 @@ internal sealed class BridgeEngineModel(
             _mirrorRetryFirstFailureUtc.Remove(channelFilePath);
             _mirrorRetryLastAttemptUtc.Remove(channelFilePath);
             _tailer.Confirm_Append(channelFilePath);
+
+            // THE PHONE IS ANSWERING AGAIN, so what it missed goes out now — once, as a document.
+            await Deliver_UndeliveredDigest_IfAny_Async(append, cancellationToken);
             return;
         }
 
-        _mirrorRetryLastAttemptUtc[channelFilePath] = DateTime.UtcNow;
+        // READ THROUGH THE INJECTED CLOCK, not DateTime.UtcNow. This is a DEADLINE read rather than
+        // a sleep — the distinction IBridgeEngineTiming's own summary draws — so the clock is what
+        // a test steps to reach the give-up, and the window stays the shipped 30 minutes in
+        // production instead of becoming a knob nobody sets.
+        var nowUtc = _clock.UtcNow;
+
+        _mirrorRetryLastAttemptUtc[channelFilePath] = nowUtc;
 
         if (!_mirrorRetryFirstFailureUtc.TryGetValue(channelFilePath, out var firstFailureUtc))
         {
-            firstFailureUtc = DateTime.UtcNow;
+            firstFailureUtc = nowUtc;
             _mirrorRetryFirstFailureUtc[channelFilePath] = firstFailureUtc;
         }
 
-        if (DateTime.UtcNow - firstFailureUtc < TimeSpan.FromMinutes(MIRROR_RETRY_WINDOW_MINUTES))
+        if (nowUtc - firstFailureUtc < TimeSpan.FromMinutes(MIRROR_RETRY_WINDOW_MINUTES))
             return;
 
-        // The window is spent, so this confirm DROPS the entries. Said at Error and naming the
-        // channel, because the alternative — a channel that quietly never mirrors again — is the
-        // exact failure the owner reported: cut off, with no way to know.
+        Park_Undelivered(append);
+
+        // The window is spent, so this confirm lets the cursor move past the entries — but they are
+        // PARKED above, not dropped, and the next send that works carries them as one document.
+        // Said at Error and naming the channel, because the alternative — a channel that quietly
+        // never mirrors again — is the exact failure the owner reported: cut off, with no way to
+        // know.
         _log.Log_Error(
             append.Channel.OrchId,
-            $"Telegram mirror gave up after {MIRROR_RETRY_WINDOW_MINUTES} minutes of retries — entries from '{Path.GetFileName(channelFilePath)}' never reached the phone",
+            $"Telegram mirror gave up after {MIRROR_RETRY_WINDOW_MINUTES} minutes of retries — {Count_Parked(channelFilePath)} entr{(Count_Parked(channelFilePath) == 1 ? "y" : "ies")} from '{Path.GetFileName(channelFilePath)}' are PARKED and will be delivered as a digest when Telegram answers again",
             null);
 
         _mirrorRetryFirstFailureUtc.Remove(channelFilePath);
@@ -5731,6 +5986,124 @@ internal sealed class BridgeEngineModel(
     /// 90 s HttpClient timeout raised a TaskCanceledException, and the bare catch returned without
     /// logging a thing, so the log stayed quiet instead of filling with backoff lines.
     /// </summary>
+    /// <summary>
+    /// True while `getUpdates` is being refused with 409. It exists so the owner is told ONCE that
+    /// their phone has stopped being read, and once when it starts again — the failure used to log
+    /// an Error on every retry for as long as it lasted, which is the shape nobody reads.
+    /// </summary>
+    bool _inboundConflicted;
+
+    /// <summary>
+    /// THE ONE-TIME HANDSHAKE, before the first poll: name the bot, and clear any webhook.
+    ///
+    /// <para>
+    /// A WEBHOOK IS INDISTINGUISHABLE FROM A SECOND POLLER — Telegram allows one delivery mechanism
+    /// per token and answers `getUpdates` with the same 409 either way. One left behind by an
+    /// experiment, or by another tool sharing the token, could not be cleared from here at all, so
+    /// the app would have sat in a permanent conflict it was able to fix in one call.
+    /// </para>
+    /// <para>
+    /// `drop_pending_updates: false` — whatever the owner sent while the webhook was in the way is
+    /// still theirs, and dropping it is the silent loss this brief exists to remove.
+    /// </para>
+    /// <para>
+    /// BEST-EFFORT, AND THE LOOP STARTS EITHER WAY. This is a diagnostic and a repair, not a
+    /// precondition: a network blip at startup must not be the reason the bridge never polls.
+    /// </para>
+    /// </summary>
+    async Task Claim_TelegramInbound_BestEffort_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            _botUsername = await client.Get_BotUsername_Async(cancellationToken);
+
+            await client.Delete_Webhook_Async(dropPendingUpdates: false, cancellationToken);
+
+            _log.Log_Info(
+                GLOBAL_ORCH_ID,
+                $"Telegram inbound claimed on {Environment.MachineName} as {Describe_Bot()} — any webhook on this token was cleared, pending updates kept");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"Telegram startup handshake (getMe + deleteWebhook) failed on {Environment.MachineName} — polling anyway: {ex.Message}");
+        }
+    }
+
+    /// <summary>The bot's own name, once `getMe` has answered — used only in what the owner is told.</summary>
+    string _botUsername = "";
+
+    string Describe_Bot()
+    {
+        return string.IsNullOrWhiteSpace(_botUsername) ? "this bot" : $"@{_botUsername}";
+    }
+
+    /// <summary>
+    /// ONE MESSAGE, ONE LOG LINE, PER STATE CHANGE — never per retry. The owner can act on this and
+    /// on nothing else about it: the two hosts are on different machines, so no file either of them
+    /// can write is visible to the other, and the fix is to stop one of them or set
+    /// <c>telegramInbound: off</c> on it. So the message NAMES THIS MACHINE — without it the owner
+    /// reads "another bridge is polling" and cannot tell which of the two is complaining.
+    /// </summary>
+    async Task Note_InboundConflicted_IfNew_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        if (_inboundConflicted)
+            return;
+
+        _inboundConflicted = true;
+
+        _log.Log_Error(
+            GLOBAL_ORCH_ID,
+            $"Telegram getUpdates refused with 409 CONFLICT on {Environment.MachineName} — another poller holds {Describe_Bot()}'s token. Backing off and retrying; this line is not repeated until it changes.",
+            null);
+
+        await Send_DirectReply_BestEffort_Async(
+            client,
+            null,
+            $"⚠️ another bridge is polling {Describe_Bot()} with this token, so I am not reading your messages on "
+            + $"{Environment.MachineName}. Is the Windows app running as well as the server? Stop one of them, or set "
+            + $"\"telegramInbound\": \"{Telegram.TelegramInbound_Modes.OFF_TEXT}\" in that host's config.json — it will still mirror, it just will not read.",
+            cancellationToken);
+    }
+
+    async Task Note_InboundRecovered_IfWasConflicted_Async(ITelegramApiClient client, CancellationToken cancellationToken)
+    {
+        if (!_inboundConflicted)
+            return;
+
+        _inboundConflicted = false;
+
+        _log.Log_Info(GLOBAL_ORCH_ID, $"Telegram getUpdates is answering again on {Environment.MachineName} — the 409 conflict is over");
+
+        await Send_DirectReply_BestEffort_Async(
+            client, null,
+            $"✅ I am reading your messages again on {Environment.MachineName}.",
+            cancellationToken);
+    }
+
+    /// <summary>Shared by the 409 branch and the generic one, so one backoff cannot drift from the other.</summary>
+    async Task Backoff_Inbound_Async(int backoffMilliseconds, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(backoffMilliseconds, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // The loop's own condition ends it; a cancelled delay is not an error.
+        }
+    }
+
+    static int Next_InboundBackoff(int backoffMilliseconds)
+    {
+        return Math.Min(backoffMilliseconds * 2, INBOUND_ERROR_BACKOFF_MAX_MILLISECONDS);
+    }
+
     async Task Run_InboundLoop_Async(CancellationToken cancellationToken)
     {
         var client = _telegramClient
@@ -5744,15 +6117,35 @@ internal sealed class BridgeEngineModel(
         var ownerUserId = startupConfig.TelegramOwnerUserId
             ?? throw new Exception("Inbound loop started without an owner user id");
 
+        // MIRROR-ONLY IS A HOST DECISION, TAKEN BEFORE THE FIRST POLL. One bot token allows one
+        // poller; two hosts that cannot see each other's supervision root — the app on a desk, the
+        // daemon on a VPS — can only be separated by telling one of them, and this is where it is
+        // told. Entries still reach the phone; nothing is read back on this host.
+        if (startupConfig.TelegramInbound == Telegram.TelegramInboundModes.Off)
+        {
+            _log.Log_Warning(
+                GLOBAL_ORCH_ID,
+                $"telegramInbound is '{Telegram.TelegramInbound_Modes.OFF_TEXT}' on {Environment.MachineName} — this host mirrors to Telegram but does NOT read the owner's messages or taps. Another host is expected to poll.");
+
+            return;
+        }
+
         var backoffMilliseconds = INBOUND_ERROR_BACKOFF_START_MILLISECONDS;
 
         await Register_BotCommands_BestEffort_Async(client, cancellationToken);
+        await Claim_TelegramInbound_BestEffort_Async(client, cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
                 var json = await client.Get_UpdatesJson_Async(_lastUpdateId + 1, INBOUND_LONG_POLL_SECONDS, cancellationToken);
+
+                // SAID ONCE WHEN IT COMES BACK, for the same reason it is said once when it breaks:
+                // the owner was told their phone had stopped being read, so they are told when it
+                // starts again — and not on every poll in between.
+                await Note_InboundRecovered_IfWasConflicted_Async(client, cancellationToken);
+
                 var batch = TelegramUpdates_Parser.Parse_OwnerMessages(json, supergroupChatId, ownerUserId);
 
                 // Bot commands: /dnd acts directly (and must NOT auto-unmute); /summary and
@@ -5763,6 +6156,28 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var message in batch.OwnerMessages)
                 {
+                    // ALREADY DONE ONCE IS NEVER DONE TWICE. `_lastUpdateId` advances at the END of
+                    // the batch, so a crash — or, before this stage, any escaped exception — made
+                    // Telegram re-serve every update in it. On 2026-09-08 01:24-01:26Z a Windows-only
+                    // window call threw DllNotFoundException on the Linux daemon and the same batch
+                    // was replayed four times: four copies of the owner's message, four `/pc` flips.
+                    if (Was_UpdateHandled(message.UpdateId))
+                    {
+                        _log.Log_Info(
+                            Describe_MessageOrch(message),
+                            $"Update {message.UpdateId} was already handled — skipped on replay instead of acting twice");
+
+                        continue;
+                    }
+
+                    // ONE UPDATE CANNOT TAKE THE BATCH DOWN. Everything from here to the end of this
+                    // iteration is this message's own work; a throw is logged against the message
+                    // and the next update is still handled, which is what makes the offset advance
+                    // past all of them at the end.
+                    var isRoutable = false;
+
+                    try
+                    {
                     // Tracked so /clear can remove the owner's own messages too.
                     Remember_TopicMessage(message.MessageThreadId, message.MessageId);
 
@@ -5928,6 +6343,32 @@ internal sealed class BridgeEngineModel(
                     else
                     {
                         routableMessages.Add(message);
+                        isRoutable = true;
+                    }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        // A COMMAND THAT THREW IS NOT RETRIED. Its handler is what failed — a missing
+                        // OS capability, a Telegram call that timed out — and re-serving the update
+                        // runs the same handler against the same world. Said at Error, named by
+                        // update, because a command the owner typed and never got an answer to is a
+                        // thing they will ask about.
+                        _log.Log_Error(
+                            Describe_MessageOrch(message),
+                            $"Handling update {message.UpdateId} failed — this one update is dropped, the rest of the batch continues",
+                            ex);
+                    }
+                    finally
+                    {
+                        // A ROUTABLE MESSAGE IS NOT DONE YET: it is marked below, once it has been
+                        // routed and answered. Everything else — a command, a read-back code, a
+                        // failure — ends here.
+                        if (!isRoutable)
+                            Note_UpdateHandled(message.UpdateId);
                     }
                 }
 
@@ -5938,22 +6379,84 @@ internal sealed class BridgeEngineModel(
 
                 foreach (var message in routableMessages)
                 {
-                    if (await Apply_HoldControlWord_Async(client, message, cancellationToken))
-                        continue;
+                    try
+                    {
+                        if (await Apply_HoldControlWord_Async(client, message, cancellationToken))
+                            continue;
 
-                    await Route_OwnerMessage_Async(message, cancellationToken);
+                        var outcome = await Route_OwnerMessage_Async(message, cancellationToken);
 
-                    // While HELD the phone stays quiet: no per-message tick. The single WAIT
-                    // acknowledgement already said "I have you" and is updated with the count
-                    // instead; the ✓/✓✓ pair comes after GO.
-                    if (Is_TargetHeld(message))
-                        await Update_HoldReceipt_Async(client, message, cancellationToken);
-                    else
-                        await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+                        // THE ✓ MEANS "IT ARRIVED", AND NOTHING ELSE MAY WEAR IT. It used to be sent
+                        // after the routing call whatever the routing did: a message into an unknown
+                        // topic was dropped with a warning and ticked on the same screen, and one
+                        // into a CLOSED orchestration was written into a channel nobody tails and
+                        // ticked the same way. The owner's words for this brief: the bridge must
+                        // never "tell me it was received when it was not".
+                        if (!OwnerRoute_Wording.Deserves_Receipt(outcome))
+                        {
+                            var refusal = OwnerRoute_Wording.Describe_ForOwner_OrNull(outcome);
+
+                            if (refusal != null)
+                                await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, refusal, cancellationToken);
+
+                            continue;
+                        }
+
+                        // While HELD the phone stays quiet: no per-message tick. The single WAIT
+                        // acknowledgement already said "I have you" and is updated with the count
+                        // instead; the ✓/✓✓ pair comes after GO.
+                        if (Is_TargetHeld(message))
+                            await Update_HoldReceipt_Async(client, message, cancellationToken);
+                        else
+                            await Send_ReceivedAck_Async(client, message.MessageThreadId, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Log_Error(
+                            Describe_MessageOrch(message),
+                            $"Routing update {message.UpdateId} failed — this one message is dropped, the rest of the batch continues",
+                            ex);
+                    }
+                    finally
+                    {
+                        Note_UpdateHandled(message.UpdateId);
+                    }
                 }
 
                 foreach (var tap in batch.CallbackTaps)
-                    await Handle_CallbackTap_Async(client, tap, cancellationToken);
+                {
+                    // BY THE CALLBACK'S OWN ID, not by the update id. Telegram re-serves the whole
+                    // update on a replay, and a tap acted on twice is a decision taken twice — the
+                    // one class of duplicate this system cannot afford, since the decisions that
+                    // reach it include pushes and deploys.
+                    if (Was_TapHandled(tap.CallbackQueryId))
+                    {
+                        _log.Log_Info(GLOBAL_ORCH_ID, $"Callback {tap.CallbackQueryId} was already handled — skipped on replay instead of firing twice");
+                        continue;
+                    }
+
+                    try
+                    {
+                        await Handle_CallbackTap_Async(client, tap, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Log_Error(GLOBAL_ORCH_ID, $"Handling callback {tap.CallbackQueryId} failed — this one tap is dropped, the rest of the batch continues", ex);
+                    }
+                    finally
+                    {
+                        Note_TapHandled(tap.CallbackQueryId);
+                        Note_UpdateHandled(tap.UpdateId);
+                    }
+                }
 
                 foreach (var modeCommand in modeCommands)
                     await Apply_ModeCommand_Async(client, modeCommand.Command, modeCommand.ThreadId, cancellationToken);
@@ -5977,6 +6480,19 @@ internal sealed class BridgeEngineModel(
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return;
+            }
+            catch (Telegram.TelegramApiClient.TelegramApiException conflict) when (conflict.StatusCode == TELEGRAM_CONFLICT_STATUS)
+            {
+                // 409 IS NOT "A FAILURE" — IT IS A NAMED SITUATION with an action attached, and it
+                // read as any other getUpdates error: one Error line per retry, for ever, while the
+                // owner's taps went to whichever host won the race. Telegram returns it when a
+                // SECOND poller holds the token, or when a WEBHOOK is registered against it (the
+                // startup handshake clears that one).
+                await Note_InboundConflicted_IfNew_Async(client, cancellationToken);
+
+                await Backoff_Inbound_Async(backoffMilliseconds, cancellationToken);
+                backoffMilliseconds = Next_InboundBackoff(backoffMilliseconds);
+                continue;
             }
             catch (Exception ex)
             {
@@ -6098,8 +6614,13 @@ internal sealed class BridgeEngineModel(
     /// <summary>A command becomes a canned English request for the GENERAL supervisor (thread null = general channel).</summary>
     static ITelegramOwnerMessage Build_GeneralCommandMessage(ITelegramOwnerMessage original, string cannedText)
     {
+        // APP-COMPOSED, like a tap: the owner typed `/summary`, and the SENTENCE that reaches the
+        // general supervisor was written here. Left unmarked, it met the typed-answer binding — so
+        // with one question open in General, asking for a summary filed that canned sentence as the
+        // owner's answer to it. Same defect the tap fix closed (stage 8a), one route further along.
         return TelegramOwnerMessage_Factory.Create(
-            original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, null, cannedText, null, null);
+            original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, null, cannedText, null, null,
+            isAppComposed: true);
     }
 
     /// <summary>
@@ -6698,6 +7219,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Show_SessionWindow_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
+        if (await Refuse_IfNoWindowing_Async(client, "show", messageThreadId, cancellationToken))
+            return;
+
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         if (session == null || session.ClosedUtc != null)
@@ -6706,7 +7230,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+        var window = _hostWindowing.Find_OwnerFacingWindow_OrNull(session);
 
         if (window == null)
         {
@@ -6716,7 +7240,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        if (WindowFocus.TerminalWindow_Focuser.Try_Focus_ByTitleFragment(window))
+        if (_hostWindowing.Try_Focus(window))
         {
             _log.Log_Info(session.OrchId, $"/show — brought '{window}' to the front");
             return;
@@ -6753,6 +7277,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Send_SessionScreenshot_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
+        if (await Refuse_IfNoWindowing_Async(client, "screen", messageThreadId, cancellationToken))
+            return;
+
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         if (session == null || session.ClosedUtc != null)
@@ -6761,7 +7288,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+        var window = _hostWindowing.Find_OwnerFacingWindow_OrNull(session);
 
         if (window == null)
         {
@@ -6777,7 +7304,7 @@ internal sealed class BridgeEngineModel(
         // the file itself says when it was taken when the owner goes looking later.
         var imagePath = Path.Combine(mediaFolder, $"screen-{DateTime.Now:yyyyMMdd-HHmmss}.png");
 
-        var failureReason = await WindowFocus.TerminalWindow_Capturer.Try_CaptureSessionWindow_Async(window, imagePath, cancellationToken);
+        var failureReason = await _hostWindowing.Try_Capture_Async(window, imagePath, cancellationToken);
 
         if (failureReason != null)
         {
@@ -6813,6 +7340,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Organize_SessionWindows_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
+        if (await Refuse_IfNoWindowing_Async(client, "organize", messageThreadId, cancellationToken))
+            return;
+
         var session = messageThreadId == null ? null : _store.Find_ByTelegramTopicId_OrNull(messageThreadId.Value);
 
         if (session == null || session.ClosedUtc != null)
@@ -6821,7 +7351,7 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        var placed = WindowFocus.SessionWindows_Organizer.Organize(session);
+        var placed = _hostWindowing.Organize(session);
 
         _log.Log_Info(session.OrchId, $"/organize — tiled {placed} terminal(s)");
 
@@ -6851,6 +7381,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     async Task Organize_MainWindows_Async(ITelegramApiClient client, long? messageThreadId, CancellationToken cancellationToken)
     {
+        if (await Refuse_IfNoWindowing_Async(client, "organize_mains", messageThreadId, cancellationToken))
+            return;
+
         List<Sessions.OrchestrationSession.IOrchestrationSession> open = [];
 
         foreach (var session in _store.Load_All())
@@ -6859,7 +7392,7 @@ internal sealed class BridgeEngineModel(
                 open.Add(session);
         }
 
-        var placed = WindowFocus.SessionWindows_Organizer.Organize_MainWindows(open);
+        var placed = _hostWindowing.Organize_MainWindows(open);
 
         _log.Log_Info(GLOBAL_ORCH_ID, $"/organize_mains — tiled {placed} main terminal(s) across {open.Count} open orchestration(s)");
 
@@ -10943,7 +11476,21 @@ internal sealed class BridgeEngineModel(
         return Resolve_LogScope_ForTopic(message.MessageThreadId);
     }
 
-    async Task Route_OwnerMessage_Async(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
+    /// <summary>
+    /// IT REPORTS WHAT BECAME OF THE MESSAGE, because the caller sends the ✓ and the ✓ is a claim.
+    /// This returned void, so `Send_ReceivedAck_Async` ran after it whatever it had done — a message
+    /// into an unknown topic was dropped with a warning and ticked anyway, and one into a closed
+    /// orchestration was written into a channel nobody tails and ticked the same way.
+    ///
+    /// <para>
+    /// THE CLOSED CHECK IS HERE AND NOT IN THE STORE, deliberately. `Find_ByTelegramTopicId_OrNull`
+    /// has some thirty call sites — reports, glyph sweeps, `/clear`, the close flow itself — and
+    /// several of them legitimately want a session that is closed. This is the one place that WRITES
+    /// the owner's words into a channel file, so it is the one place the question "is anyone still
+    /// reading this?" belongs.
+    /// </para>
+    /// </summary>
+    async Task<OwnerRouteOutcomes> Route_OwnerMessage_Async(Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message, CancellationToken cancellationToken)
     {
         string orchId;
         string channelFile;
@@ -10960,7 +11507,20 @@ internal sealed class BridgeEngineModel(
             if (session == null)
             {
                 _log.Log_Warning(GLOBAL_ORCH_ID, $"Owner message in unknown topic {message.MessageThreadId} ignored: {message.Text}");
-                return;
+                return OwnerRouteOutcomes.UnknownTopic;
+            }
+
+            // A CLOSED ORCHESTRATION'S CHANNEL IS AN ARCHIVE. Its tailers are stopped and its
+            // terminals are gone, so an append here is a write nobody will ever read — and the
+            // topic can outlive the close, because the delete that should remove it is
+            // fire-and-forget (brief E1). The owner is told instead.
+            if (session.ClosedUtc != null)
+            {
+                _log.Log_Warning(
+                    session.OrchId,
+                    $"Owner message arrived in the topic of a CLOSED orchestration (closed {session.ClosedUtc:yyyy-MM-dd HH:mm}Z) — not appended, and the owner was told");
+
+                return OwnerRouteOutcomes.ClosedOrchestration;
             }
 
             orchId = session.OrchId;
@@ -10975,15 +11535,20 @@ internal sealed class BridgeEngineModel(
         {
             var voiceText = await Build_VoiceEntryText_OrNull_Async(message, channelFile, orchId, cancellationToken);
 
-            // Not configured or failed — the owner already got a direct reply; nothing to route.
+            // Not configured or failed — the owner already got a direct reply; nothing to route,
+            // and NO ✓ either: a tick under "voice failed — please type it" says the opposite.
             if (voiceText == null)
-                return;
+                return OwnerRouteOutcomes.AnsweredDirectly;
 
             segmentText = voiceText;
         }
         else if (message.PhotoFileId != null)
         {
             segmentText = await Build_PhotoEntryText_Async(message, channelFile, orchId, cancellationToken);
+        }
+        else if (message.Document != null)
+        {
+            segmentText = await Build_DocumentEntryText_Async(message, channelFile, orchId, cancellationToken);
         }
         else
         {
@@ -11035,6 +11600,8 @@ internal sealed class BridgeEngineModel(
 
         _ownerDeliveryBuffer.Add_Segment(channelFile, segmentText, DateTime.UtcNow);
         _log.Log_Info(orchId, "Owner message buffered (aggregation window running)");
+
+        return OwnerRouteOutcomes.Routed;
     }
 
     async Task Flush_OwnerDeliveries_Async(CancellationToken cancellationToken)
@@ -11626,7 +12193,7 @@ internal sealed class BridgeEngineModel(
         if (Is_OwnerAtThePc())
             return string.Empty;
 
-        var window = WindowFocus.SessionWindows_Organizer.Find_OwnerFacingWindow_OrNull(session);
+        var window = _hostWindowing.Find_OwnerFacingWindow_OrNull(session);
 
         if (window == null)
             return string.Empty;
@@ -11639,7 +12206,7 @@ internal sealed class BridgeEngineModel(
 
         var imagePath = Path.Combine(directory, "media", $"status-{DateTime.Now:yyyyMMdd-HHmm}.png");
 
-        var failureReason = await WindowFocus.TerminalWindow_Capturer.Try_CaptureSessionWindow_Async(window, imagePath, cancellationToken);
+        var failureReason = await _hostWindowing.Try_Capture_Async(window, imagePath, cancellationToken);
 
         if (failureReason == null)
             return $"\nIMAGE: {imagePath}";
@@ -13260,6 +13827,127 @@ internal sealed class BridgeEngineModel(
             await Send_DirectReply_BestEffort_Async(client, message.MessageThreadId, "🎙 voice message failed — please type it", cancellationToken);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Telegram's own ceiling for what a BOT may download — 20 MB. It is not a policy choice, which
+    /// is why it is stated as a fact and not as a setting: past it the download call fails, so the
+    /// only useful thing to do is say so before spending it.
+    /// </summary>
+    const long OWNER_DOCUMENT_MAX_BYTES = 20L * 1024 * 1024;
+
+    /// <summary>
+    /// A FILE THE OWNER ATTACHED, SAVED BESIDE THE CHANNEL AND NAMED IN IT.
+    ///
+    /// <para>
+    /// Documents were dropped in silence: the parser knew text, photo and voice, so a file with no
+    /// caption produced no owner message at all and the offset advanced over it. A file WITH a
+    /// caption was worse — the caption arrived as an ordinary message, so the owner watched their
+    /// words land and had every reason to think the file had landed too.
+    /// </para>
+    /// <para>
+    /// IT NEVER SWALLOWS THE OWNER'S WORDS, which is why this returns text rather than null the way
+    /// the voice path does. A caption is a message in its own right: whatever happens to the bytes,
+    /// what they wrote reaches the session, and the entry says plainly whether the file came with
+    /// it. When the file did NOT arrive the owner is also told directly, because a note in a channel
+    /// they do not read is not an answer.
+    /// </para>
+    /// <para>
+    /// THE NAME IS SANITISED, NOT TRUSTED — see <see cref="OwnerFileName_Sanitizer"/>: it comes from
+    /// the sending device, and joining it to a folder unchecked is how a write lands outside that
+    /// folder.
+    /// </para>
+    /// </summary>
+    async Task<string> Build_DocumentEntryText_Async(
+        Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message,
+        string channelFile,
+        string orchId,
+        CancellationToken cancellationToken)
+    {
+        var document = message.Document
+            ?? throw new Exception("Build_DocumentEntryText_Async called without a document");
+
+        var describedName = string.IsNullOrWhiteSpace(document.FileName) ? "a file" : document.FileName;
+        var caption = message.Text.Length == 0 ? $"(sent {describedName}, no caption)" : message.Text;
+
+        // REFUSED BEFORE IT IS FETCHED when Telegram already told us how big it is. Spending the
+        // download to discover a limit that was declared in the update is a slow way to fail.
+        if (document.SizeBytes != null && document.SizeBytes > OWNER_DOCUMENT_MAX_BYTES)
+        {
+            await Refuse_OversizedDocument_Async(message, describedName, document.SizeBytes.Value, cancellationToken);
+
+            return $"{caption}\n\n(The owner attached {describedName}, {Describe_Megabytes(document.SizeBytes.Value)} — over the 20 MB limit, so it was NOT downloaded. They were told to share a path instead.)";
+        }
+
+        try
+        {
+            var client = _telegramClient
+                ?? throw new Exception("Document message arrived without a Telegram client");
+
+            var bytes = await client.Download_File_Async(document.FileId, cancellationToken);
+
+            // AND CHECKED AGAIN AFTER THE FACT, because `file_size` is optional in the update: a
+            // document that declared nothing is only measurable once it is here.
+            if (bytes.LongLength > OWNER_DOCUMENT_MAX_BYTES)
+            {
+                await Refuse_OversizedDocument_Async(message, describedName, bytes.LongLength, cancellationToken);
+
+                return $"{caption}\n\n(The owner attached {describedName}, {Describe_Megabytes(bytes.LongLength)} — over the 20 MB limit, so it was discarded. They were told to share a path instead.)";
+            }
+
+            var mediaFolder = Path.Combine(Path.GetDirectoryName(channelFile)
+                ?? throw new Exception($"Channel file '{channelFile}' has no parent folder"), "media");
+            Directory.CreateDirectory(mediaFolder);
+
+            var safeName = Telegram.OwnerFileName_Sanitizer.Sanitize(document.FileName, $"tg-doc-{message.UpdateId}");
+            var filePath = Path.Combine(mediaFolder, $"tg-doc-{message.UpdateId}-{safeName}");
+
+            await File.WriteAllBytesAsync(filePath, bytes, cancellationToken);
+
+            _log.Log_Info(orchId, $"Owner document downloaded to {filePath} ({bytes.LongLength} bytes)");
+
+            return $"{caption}\n\nFILE: {filePath}\n(The owner sent this file — Read it to inspect it.)";
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Log_Error(orchId, $"Owner document download failed for '{describedName}'", ex);
+
+            await Send_DirectReply_BestEffort_Async(
+                _telegramClient!, message.MessageThreadId,
+                $"📎 I could not download {describedName} — your message went through, the file did not. Send it again, or put it somewhere I can read and tell me the path.",
+                cancellationToken);
+
+            return $"{caption}\n\n(The owner attached {describedName} but downloading it FAILED: {ex.Message})";
+        }
+    }
+
+    async Task Refuse_OversizedDocument_Async(
+        Telegram.TelegramOwnerMessage.ITelegramOwnerMessage message,
+        string describedName,
+        long sizeBytes,
+        CancellationToken cancellationToken)
+    {
+        _log.Log_Warning(
+            Describe_MessageOrch(message),
+            $"Owner document '{describedName}' is {sizeBytes} bytes — over the {OWNER_DOCUMENT_MAX_BYTES}-byte Telegram download limit; refused with a reply");
+
+        if (_telegramClient == null)
+            return;
+
+        await Send_DirectReply_BestEffort_Async(
+            _telegramClient, message.MessageThreadId,
+            $"📎 {describedName} is {Describe_Megabytes(sizeBytes)} — Telegram only lets me download files up to 20 MB. "
+            + "Your message went through; the file did not. Put it somewhere I can read and tell me the path.",
+            cancellationToken);
+    }
+
+    static string Describe_Megabytes(long sizeBytes)
+    {
+        return $"{sizeBytes / (double)(1024 * 1024):0.#} MB";
     }
 
     async Task<string> Build_PhotoEntryText_Async(

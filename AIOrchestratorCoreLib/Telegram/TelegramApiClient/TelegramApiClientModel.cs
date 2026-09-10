@@ -514,6 +514,21 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         return body;
     }
 
+    public async Task<string> Get_BotUsername_Async(CancellationToken cancellationToken)
+    {
+        var resultJson = await Post_Async("getMe", new JsonObject(), cancellationToken);
+
+        var root = JsonNode.Parse(resultJson) as JsonObject
+            ?? throw new Exception($"getMe returned non-object JSON: {resultJson}");
+
+        return root["result"]?["username"]?.GetValue<string>() ?? "";
+    }
+
+    public async Task Delete_Webhook_Async(bool dropPendingUpdates, CancellationToken cancellationToken)
+    {
+        await Post_Async("deleteWebhook", new JsonObject { ["drop_pending_updates"] = dropPendingUpdates }, cancellationToken);
+    }
+
     public async Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken)
     {
         var payload = new JsonObject

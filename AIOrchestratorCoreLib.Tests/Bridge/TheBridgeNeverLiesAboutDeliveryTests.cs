@@ -1,0 +1,398 @@
+using AIOrchestratorCoreLib.Bridge.BridgeEngine;
+using AIOrchestratorCoreLib.Bridge.EngineState;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
+using AIOrchestratorCoreLib.Hosting.HostWindowing;
+using AIOrchestratorCoreLib.Launching.OrchestrationLauncher;
+using AIOrchestratorCoreLib.Mirroring;
+using AIOrchestratorCoreLib.Sessions.OrchestrationSessionStore;
+using AIOrchestratorCoreLib.SupervisionPaths;
+using AIOrchestratorCoreLib.Tests.Launching;
+using AIOrchestratorCoreLib.Tests.TestSupport;
+using Xunit;
+
+namespace AIOrchestratorCoreLib.Tests.Bridge;
+
+/// <summary>
+/// THE OWNER IS NEVER TOLD SOMETHING ARRIVED WHEN IT DID NOT — their own words for this brief.
+///
+/// <para>
+/// Four ways the bridge used to say "✓" over nothing, or say nothing at all:
+/// an unknown topic (dropped with a warning, ticked anyway); a CLOSED orchestration (written into a
+/// channel whose tailers are stopped, ticked anyway); a DOCUMENT (never parsed — a file with no
+/// caption produced no owner message at all); and thirty minutes of failing sends (the append
+/// CONFIRMED, the entries gone, one Error line on a machine the owner does not read).
+/// </para>
+/// <para>
+/// Plus the fifth, which is not about a receipt but about the same honesty: a command this host
+/// cannot carry out is refused in one line instead of throwing a Windows P/Invoke into the inbound
+/// loop, where it took a whole batch of the owner's messages down with it (2026-09-08).
+/// </para>
+/// </summary>
+public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
+{
+    const long SUPERGROUP_CHAT_ID = -1002233445566;
+    const long OWNER_USER_ID = 555000111;
+    const long TOPIC_ID = 9191;
+    const long UNKNOWN_TOPIC_ID = 424242;
+
+    readonly string _tempRoot;
+    readonly string _tempRepo;
+    readonly ISupervisionPaths _paths;
+    readonly IOrchestrationSessionStore _store;
+    readonly IOrchestrationLauncher _launcher;
+    readonly IOrchestratorConfigProvider _configProvider;
+    readonly IEngineStateStore _engineState = EngineStateStore_Factory.Create_InMemory();
+    readonly RecordingLog_Fake _log = new();
+    readonly ScriptedInbound_Fake _telegram = new();
+    readonly FixedClock_Fake _clock = new(DateTime.UtcNow);
+
+    CancellationTokenSource? _runCancellation;
+    Task? _runLoop;
+
+    public TheBridgeNeverLiesAboutDeliveryTests()
+    {
+        _tempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-honest-delivery-{Guid.NewGuid():N}");
+        _tempRepo = Path.Combine(_tempRoot, "repo");
+        Directory.CreateDirectory(_tempRepo);
+
+        _paths = SupervisionPaths_Factory.Create(_tempRoot);
+        Directory.CreateDirectory(_paths.RequestsFolder);
+
+        File.WriteAllText(
+            _paths.ConfigFile,
+            $"{{\"repos\":[],\"telegramSupergroupChatId\":{SUPERGROUP_CHAT_ID},"
+            + $"\"telegramOwnerUserId\":{OWNER_USER_ID}}}");
+
+        File.WriteAllText(_paths.SecretsFile, "{\"telegramBotToken\":\"test-token\"}");
+
+        _store = OrchestrationSessionStore_Factory.Create(_paths);
+        _configProvider = OrchestratorConfigProvider_Factory.Create(_paths);
+        _launcher = OrchestrationLauncher_Factory.Create(_paths, _configProvider, _store, new RecordingSpawner_Fake(), _log);
+    }
+
+    public void Dispose()
+    {
+        if (_runCancellation != null && _runLoop != null)
+        {
+            Stop_Async(_runCancellation, _runLoop).GetAwaiter().GetResult();
+            _runCancellation.Dispose();
+        }
+
+        try
+        {
+            Directory.Delete(_tempRoot, recursive: true);
+        }
+        catch (IOException)
+        {
+            // A temp folder that will not delete is not a test result.
+        }
+
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// A CLOSED ORCHESTRATION'S CHANNEL IS AN ARCHIVE: its tailers are stopped and its terminals are
+    /// gone, so an append there is a write nobody will read. The topic can outlive the close because
+    /// the delete that should remove it is fire-and-forget (brief E1), which is how the owner can
+    /// still be looking at it.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AMessageIntoAClosedOrchestrationsTopic_IsNotTicked_NotAppended_AndExplained()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        if (!File.Exists(channelFile))
+            File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
+
+        var before = File.ReadAllText(channelFile);
+
+        _store.Close_Orchestration(session.OrchId);
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("are we still on this?", 9001, 201, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("this orchestration is closed") == 1, 20_000),
+                $"the owner was never told the orchestration is closed.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
+        });
+
+        // NO ✓ — the receipt is the claim this brief is about.
+        Assert.Equal(0, _telegram.Count_Sent_Containing("✓"));
+
+        // AND NOTHING WAS WRITTEN INTO THE DEAD CHANNEL.
+        Assert.Equal(before, File.ReadAllText(channelFile));
+        Assert.DoesNotContain("are we still on this?", File.ReadAllText(channelFile), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AMessageIntoATopicNobodyOwns_IsNotTicked_AndExplained()
+    {
+        var engine = Build_Engine();
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("hello?", 9101, 202, UNKNOWN_TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("belongs to no orchestration") == 1, 20_000),
+                $"the owner was never told the topic is unknown.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
+        });
+
+        Assert.Equal(0, _telegram.Count_Sent_Containing("✓"));
+    }
+
+    /// <summary>
+    /// A DOCUMENT WITH NO CAPTION used to produce NOTHING: the parser knew text, photo, voice and
+    /// callback, so the whole update parsed to null and the offset advanced over it. The owner had
+    /// sent a file and the bridge had never heard of it.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ADocumentWithNoCaption_LandsInMedia_IsNamedInTheChannel_AndIsTicked()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        if (!File.Exists(channelFile))
+            File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
+
+        _telegram.Set_DownloadBytes(System.Text.Encoding.UTF8.GetBytes("id,name\n1,first\n"));
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Document_Json("rows.csv", "text/csv", 42, 9201, 203, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => File.ReadAllText(channelFile).Contains("FILE:", StringComparison.Ordinal), 20_000),
+                $"the document never reached the channel.{Environment.NewLine}{File.ReadAllText(channelFile)}{Environment.NewLine}{_log.Dump()}");
+
+            // ✓ — this one DID arrive, so the receipt is honest.
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("✓") >= 1, 20_000),
+                $"an owner document that arrived was never acknowledged.{Environment.NewLine}{_telegram.Dump_Sent()}");
+        });
+
+        var mediaFolder = Path.Combine(Path.GetDirectoryName(channelFile)!, "media");
+        var saved = Directory.GetFiles(mediaFolder, "tg-doc-*");
+
+        var savedFile = Assert.Single(saved);
+        Assert.Contains("rows.csv", savedFile, StringComparison.Ordinal);
+        Assert.Equal("id,name\n1,first\n", File.ReadAllText(savedFile));
+
+        var channel = File.ReadAllText(channelFile);
+        Assert.Contains(savedFile, channel, StringComparison.Ordinal);
+        Assert.Contains("no caption", channel, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PAST THE RETRY WINDOW THE ENTRIES ARE PARKED, NOT DROPPED, and the first send that works
+    /// carries them as ONE document — never as the burst that replaying them as messages would be.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task EntriesTheMirrorGaveUpOn_ArriveAsOneDigestWhenTelegramAnswersAgain()
+    {
+        var engine = Build_Engine(retryBackoffSeconds: 1);
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        if (!File.Exists(channelFile))
+            File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
+
+        // Every send of the supervisor's words fails — the outage.
+        _telegram.Fail_Sends_Containing("BLOCKED ON OWNER");
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("what is happening", 9301, 204, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _log.Has_Info_Containing("Owner message buffered"), 15_000),
+                $"the engine never made its first pass.{Environment.NewLine}{_log.Dump()}");
+
+            Append_Supervisor(session.OrchId, 3, "BLOCKED ON OWNER — the migration needs your word before it runs.");
+            Append_Supervisor(session.OrchId, 4, "A second entry, so the one above it is not the trailing entry.");
+
+            Assert.True(
+                await Wait_Until_Async(() => _log.Has_Line_Containing("Telegram mirror send failed"), 20_000),
+                $"the mirror never even tried.{Environment.NewLine}{_log.Dump()}");
+
+            // Past the window: the clock is what the give-up reads.
+            _clock.Advance(TimeSpan.FromMinutes(31));
+
+            Assert.True(
+                await Wait_Until_Async(() => _log.Has_Line_Containing("are PARKED"), 25_000),
+                $"the give-up never parked the entries.{Environment.NewLine}{_log.Dump()}");
+
+            // Telegram answers again, and something new comes through.
+            _telegram.Fail_Sends_Containing("nothing will ever contain this");
+
+            Append_Supervisor(session.OrchId, 5, "BLOCKED ON OWNER — still waiting on you.");
+            Append_Supervisor(session.OrchId, 6, "And one more, to terminate the entry above.");
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Documents.Count >= 1, 25_000),
+                $"the parked entries were never delivered as a digest.{Environment.NewLine}{_log.Dump()}");
+        });
+
+        var digest = Assert.Single(_telegram.Documents);
+        Assert.Equal(UndeliveredDigest_Builder.FILE_NAME, digest.FileName);
+        Assert.Contains("did not reach you", digest.Caption, StringComparison.Ordinal);
+        Assert.Contains("the migration needs your word", System.Text.Encoding.UTF8.GetString(digest.Content), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A COMMAND THIS HOST CANNOT CARRY OUT IS REFUSED IN ONE LINE. `/show` reached three static
+    /// classes of unguarded user32/dwmapi/gdi32 P/Invoke; on the Linux daemon it threw
+    /// DllNotFoundException out of the command dispatch and out of the whole inbound batch, and
+    /// Telegram re-served every update in that batch four times (2026-09-08 01:24-01:26Z).
+    ///
+    /// <para>
+    /// THE HOST IS INJECTED, not detected, so this probe means the same thing on every machine the
+    /// suite runs on — including a Windows one, where a detected capability would make it vacuous.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ACommandThisHostCannotDo_IsRefusedInOneLine_AndThrowsNothing()
+    {
+        var engine = Build_Engine(HostWindowing_Factory.Create_Unsupported());
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Message_Json("/show", 9401, 205, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("not available on this host yet") == 1, 20_000),
+                $"the owner was never told the command is unavailable.{Environment.NewLine}{_telegram.Dump_Sent()}{Environment.NewLine}{_log.Dump()}");
+
+            // A second /show is answered again — they typed it, so they are owed an answer — while
+            // the LOG says it once, because the tenth copy teaches a reader nothing.
+            _telegram.Queue_Updates(Updates_Json(Message_Json("/show", 9402, 206, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("not available on this host yet") == 2, 20_000),
+                $"the second /show went unanswered.{Environment.NewLine}{_telegram.Dump_Sent()}");
+        });
+
+        Assert.Equal(1, Count_Occurrences(_log.Dump(), "needs a desktop this host does not have"));
+
+        // AND NOTHING THREW into the loop: no failure line for either update.
+        Assert.DoesNotContain("Handling update 9401 failed", _log.Dump(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Handling update 9402 failed", _log.Dump(), StringComparison.Ordinal);
+        Assert.DoesNotContain("DllNotFound", _log.Dump(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <paramref name="retryBackoffSeconds"/> is named by the give-up test only. The give-up is
+    /// reached on the SECOND failed attempt, and Fast() keeps the shipped 30-second pause between
+    /// attempts — so with the default the second attempt never happens inside a test's lifetime and
+    /// the probe would time out having proved nothing about parking.
+    /// </summary>
+    IBridgeEngine Build_Engine(IHostWindowing? hostWindowing = null, int? retryBackoffSeconds = null)
+    {
+        return BridgeEngine_Factory.Create_WithDecisionState(
+            _paths, _configProvider, _store, _launcher, _log, _telegram,
+            _engineState, _clock,
+            retryBackoffSeconds == null ? BridgeTestTiming.Fast() : BridgeTestTiming.Fast_WithRetryBackoff(retryBackoffSeconds.Value),
+            hostWindowing);
+    }
+
+    async Task Run_WhileAsync(IBridgeEngine engine, Func<Task> body)
+    {
+        _runCancellation = new CancellationTokenSource();
+        _runLoop = engine.Run_Async(_runCancellation.Token);
+
+        try
+        {
+            await body();
+        }
+        finally
+        {
+            await Stop_Async(_runCancellation, _runLoop);
+            _runCancellation.Dispose();
+            _runCancellation = null;
+            _runLoop = null;
+        }
+    }
+
+    void Append_Supervisor(string orchId, int entryNumber, string body)
+    {
+        File.AppendAllText(
+            _paths.Get_OwnerChannelFile(orchId),
+            $"\n## [{entryNumber}] FROM supervisor — {DateTime.Now:yyyy-MM-dd HH:mm} — a note\n{body}\n");
+    }
+
+    static string Updates_Json(string update) => "{\"ok\":true,\"result\":[" + update + "]}";
+
+    static string Message_Json(string text, long updateId, long messageId, long threadId)
+    {
+        return $"{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
+            + $"\"message_thread_id\":{threadId},\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\"}}}}";
+    }
+
+    static string Document_Json(string fileName, string mimeType, long size, long updateId, long messageId, long threadId)
+    {
+        return $"{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
+            + $"\"message_thread_id\":{threadId},\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},"
+            + $"\"document\":{{\"file_id\":\"doc-{updateId}\",\"file_name\":\"{fileName}\","
+            + $"\"mime_type\":\"{mimeType}\",\"file_size\":{size}}}}}}}";
+    }
+
+    static int Count_Occurrences(string text, string fragment)
+    {
+        var count = 0;
+        var at = text.IndexOf(fragment, StringComparison.Ordinal);
+
+        while (at >= 0)
+        {
+            count++;
+            at = text.IndexOf(fragment, at + fragment.Length, StringComparison.Ordinal);
+        }
+
+        return count;
+    }
+
+    static async Task<bool> Wait_Until_Async(Func<bool> condition, int maxMilliseconds)
+    {
+        for (var waited = 0; waited < maxMilliseconds; waited += 100)
+        {
+            if (condition())
+                return true;
+
+            await Task.Delay(100);
+        }
+
+        return condition();
+    }
+
+    static async Task Stop_Async(CancellationTokenSource cancellation, Task loop)
+    {
+        await cancellation.CancelAsync();
+
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+            // The only way these loops end.
+        }
+    }
+}

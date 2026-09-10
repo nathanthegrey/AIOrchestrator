@@ -42,7 +42,11 @@ public static class OrchestratorConfig_Loader
             Parse_PlanBackend_OrNull(configRoot),
             Parse_Guardrails(configRoot),
             DefaultsSettings_Json.Parse(configRoot),
-            TelegramProseSettings_Json.Parse(configRoot));
+            TelegramProseSettings_Json.Parse(configRoot),
+
+            // `telegramInbound`: "poll" (default) or "off". Hand-edited, never written back by Save
+            // below — the same contract as the four blocks above it.
+            Telegram.TelegramInbound_Modes.Parse_OrPoll(Get_String_OrNull(configRoot, "telegramInbound")));
     }
 
     /// <summary>

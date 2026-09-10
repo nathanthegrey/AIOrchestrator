@@ -116,9 +116,13 @@ public static class TelegramUpdates_Parser
 
         var photoFileId = Get_LargestPhotoFileId_OrNull(message);
         var voiceFileId = (message["voice"] as JsonObject)?["file_id"]?.GetValue<string>();
+        var document = Get_Document_OrNull(message);
         var text = Get_TextOrCaption_OrNull(message);
 
-        if (text == null && photoFileId == null && voiceFileId == null)
+        // A DOCUMENT IS A MESSAGE, WITH OR WITHOUT WORDS. Left out of this test, a file sent with no
+        // caption made the whole update parse to nothing: no owner message, no log line, and the
+        // offset moved on. The owner had sent a file and the bridge had never heard of it.
+        if (text == null && photoFileId == null && voiceFileId == null && document == null)
             return null;
 
         if (message["chat"] is not JsonObject chat)
@@ -149,7 +153,38 @@ public static class TelegramUpdates_Parser
             text ?? string.Empty,
             photoFileId,
             voiceFileId,
-            Get_ReplyToText_OrNull(message, threadId));
+            Get_ReplyToText_OrNull(message, threadId),
+            document: document);
+    }
+
+    /// <summary>
+    /// The document's own handle, name, type and declared size.
+    ///
+    /// <para>
+    /// FLAT, UNLIKE A PHOTO. A photo arrives as an ARRAY of sizes and the largest is the last entry
+    /// (<see cref="Get_LargestPhotoFileId_OrNull"/>); a document has one `file_id` directly on the
+    /// object, like a voice note. Nothing about the photo shape transfers.
+    /// </para>
+    /// </summary>
+    static TelegramOwnerMessage.TelegramDocumentRef? Get_Document_OrNull(JsonObject message)
+    {
+        if (message["document"] is not JsonObject document)
+            return null;
+
+        var fileId = document["file_id"]?.GetValue<string>();
+
+        // A document object with no file_id is nothing anyone can download. Treated as absent
+        // rather than as an empty document, so the caller's null check is the only test needed.
+        if (string.IsNullOrWhiteSpace(fileId))
+            return null;
+
+        return new TelegramOwnerMessage.TelegramDocumentRef
+        {
+            FileId = fileId,
+            FileName = document["file_name"]?.GetValue<string>(),
+            MimeType = document["mime_type"]?.GetValue<string>(),
+            SizeBytes = document["file_size"] == null ? null : document["file_size"]!.GetValue<long>(),
+        };
     }
 
     /// <summary>
