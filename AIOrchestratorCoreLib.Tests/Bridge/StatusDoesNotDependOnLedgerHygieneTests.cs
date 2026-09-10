@@ -56,7 +56,7 @@ public class StatusDoesNotDependOnLedgerHygieneTests
     [Fact]
     public void TheOnlyThingThatStillPostsAStatusEntry_IsTheAwayDigest()
     {
-        var body = Extract_Method("async Task Push_PeriodicStatus_Async");
+        var body = Extract_Method("async Task Push_AwayDigests_Async");
 
         var posts = body.Split("Post_StatusEntry(").Length - 1;
 

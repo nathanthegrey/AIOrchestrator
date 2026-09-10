@@ -6,7 +6,7 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// <para>
 /// WHY ONE PLACE. Telegram allows roughly twenty messages a minute to a group, and this app edits
 /// topic names every tick, posts a status line per orchestration, mirrors channel appends and
-/// answers commands. Handling the limit per feature is how it was handled: <see cref="TopicNameSync_Gate"/>
+/// answers commands. Handling the limit per feature is how it was handled: <see cref="TelegramAttempt_Gate"/>
 /// classifies a 429 into an unknown outcome and backs that ONE caller off, the busy-supervisor
 /// narration reads the same 429 and does the opposite thing, and every other send has no opinion at
 /// all. The result is that a burst from any one of them spends the allowance of all the others,

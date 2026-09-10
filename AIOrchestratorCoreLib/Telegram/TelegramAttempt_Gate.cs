@@ -30,12 +30,13 @@ namespace AIOrchestratorCoreLib.Telegram;
 /// caller decides whether to SUPPRESS RETRIES. The classification is single on purpose and the actions
 /// are deliberately not.
 ///
-/// The class name is therefore narrower than its contents: the classifier is about Telegram transport
-/// failures generally, not about topic names. Naming it for its first caller is a real wart and a rename
-/// is available to any reviewer who wants one; it was left because the ruling was to share the rule, not
-/// to move it.
+/// THE NAME NOW MATCHES THE CONTENTS. It was `TopicNameSync_Gate` — named for its FIRST caller —
+/// while the classifier is about Telegram transport failures generally and is used by the
+/// busy-supervisor narration and the topic-delete decider too. Its own summary called that "a real
+/// wart" and left the rename to a reviewer who wanted one; this is that rename (2026-09-10), and
+/// nothing about the rules moved with it.
 /// </summary>
-public static class TopicNameSync_Gate
+public static class TelegramAttempt_Gate
 {
     /// <summary>
     /// WHAT A FAILED ATTEMPT TOLD US. A transport failure never says the name is gone or applied — it

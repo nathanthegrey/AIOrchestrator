@@ -7,7 +7,7 @@ namespace AIOrchestratorCoreLib.Time.Clock;
 /// DELIBERATELY NARROW, AND DELIBERATELY NOT ADOPTED EVERYWHERE. This engine reads
 /// <c>DateTime.UtcNow</c> at well over a hundred sites and converting them would be a rewrite of the
 /// file, not a change to it. Every pure decider in this repo already takes <c>nowUtc</c> as a
-/// parameter — <see cref="Telegram.TopicNameSync_Gate.Is_AttemptDue"/> is the pattern — and that
+/// parameter — <see cref="Telegram.TelegramAttempt_Gate.Is_AttemptDue"/> is the pattern — and that
 /// remains the idiom for anything testable in isolation.
 /// </para>
 /// <para>

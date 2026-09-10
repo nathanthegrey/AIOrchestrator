@@ -67,7 +67,7 @@ public static class DispatchPause_Gate
 
     /// <summary>
     /// Whether a stored pause is still in force. <c>&gt;=</c> so it lifts AT its instant, not one
-    /// tick after — the rule <see cref="Telegram.TopicNameSync_Gate.Is_AttemptDue"/> states.
+    /// tick after — the rule <see cref="Telegram.TelegramAttempt_Gate.Is_AttemptDue"/> states.
     /// </summary>
     public static bool Is_Paused(DateTime? pausedUntilUtc, DateTime nowUtc)
     {

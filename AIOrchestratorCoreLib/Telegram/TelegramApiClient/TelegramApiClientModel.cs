@@ -619,19 +619,79 @@ internal sealed class TelegramApiClientModel : ITelegramApiClient
         return payload;
     }
 
+    /// <summary>
+    /// THE POLL PAYS ITS WAY LIKE EVERY OTHER CALL. It used to be the one method in this file that
+    /// went straight to <see cref="HttpClient"/>: no bucket, no 429 handling, no shared throw site.
+    ///
+    /// <para>
+    /// It was easy to miss because a long poll is low volume — one call per <c>timeoutSeconds</c>
+    /// while things are quiet. It is not low volume when it FAILS: every error path in the inbound
+    /// loop retries with a backoff that starts small, so a Telegram-side 429 met an unmetered
+    /// caller hammering the same endpoint, and the only brake was the loop's own backoff, which
+    /// knows nothing about <c>retry_after</c>. Metered on the CONTROL bucket rather than the
+    /// message one: this creates no message in the group, so charging it to the twenty-a-minute
+    /// ceiling would spend the owner's delivery allowance on housekeeping.
+    /// </para>
+    /// <para>
+    /// The bucket is taken BEFORE the long poll begins and not held across it — a token buys the
+    /// right to start a poll, and the twenty seconds it then spends waiting
+    /// (<c>BridgeEngineModel.INBOUND_LONG_POLL_SECONDS</c>) are Telegram's, not ours.
+    /// </para>
+    /// <para>
+    /// WHAT THE INLINE RETRY ACTUALLY COVERS, stated narrowly because the first version of this
+    /// comment claimed more than the code does: only a <c>retry_after</c> of two seconds or less
+    /// (<see cref="TokenBucket_Gate.MAXIMUM_CONTROL_RETRY_WAIT"/>). That is the burst case. A real
+    /// Telegram flood wait — anything longer — is thrown to the inbound loop exactly as before,
+    /// and that loop still backs off on its own ladder without reading <c>retry_after</c>. So this
+    /// buys the short case and leaves the long one where it was; it does not make the bridge
+    /// <c>retry_after</c>-aware, and saying otherwise would be a comment the code cannot cash.
+    /// </para>
+    /// </summary>
     public async Task<string> Get_UpdatesJson_Async(long offset, int timeoutSeconds, CancellationToken cancellationToken)
     {
         // allowed_updates = ["message","callback_query"] — without callback_query, inline-button
         // taps would never reach the bridge.
         var url = $"{Build_MethodUrl("getUpdates")}?offset={offset}&timeout={timeoutSeconds}&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D";
 
-        var response = await _httpClient.GetAsync(url, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        // ONE TOKEN PER LOGICAL POLL, TAKEN OUTSIDE THE RETRY LOOP. Inside it, a 429'd poll would
+        // spend up to three tokens for one poll — on a bucket that refills one every two seconds
+        // and that the mirror's edits are already competing for. The retry is Telegram asking us
+        // to wait, not a second poll: charging it again would make the rate limit cost the owner's
+        // inbound latency twice over.
+        await Wait_ForBudget_Async(TelegramCallClasses.Control, cancellationToken);
 
-        if (!response.IsSuccessStatusCode)
-            throw new TelegramApiException((int)response.StatusCode, $"getUpdates failed with HTTP {(int)response.StatusCode}: {body}");
+        for (var attempt = 0; ; attempt++)
+        {
+            var response = await _httpClient.GetAsync(url, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
-        return body;
+            if (response.IsSuccessStatusCode)
+                return body;
+
+            var statusCode = (int)response.StatusCode;
+            var retryAfterSeconds = Read_RetryAfterSeconds_OrNull(body);
+
+            if (statusCode == 429 && attempt < RATE_LIMIT_RETRIES)
+            {
+                var wait = TokenBucket_Gate.Read_RetryAfter(retryAfterSeconds);
+
+                // A 429 with no retry_after still has to cost something, or the retry is immediate
+                // and lands on the same wall.
+                if (wait <= TimeSpan.Zero)
+                    wait = TimeSpan.FromSeconds(TokenBucket_Gate.DEFAULT_REFILL_SECONDS / TokenBucket_Gate.CONTROL_CAPACITY);
+
+                if (wait <= TokenBucket_Gate.MAXIMUM_CONTROL_RETRY_WAIT)
+                {
+                    await Task.Delay(wait, cancellationToken);
+                    continue;
+                }
+            }
+
+            // UNCHANGED FOR EVERY OTHER STATUS, and that matters: the inbound loop reads 409 by its
+            // code to name the two-pollers situation (brief B), and the wording of this message is
+            // what the log has always carried.
+            throw new TelegramApiException(statusCode, $"getUpdates failed with HTTP {statusCode}: {body}", retryAfterSeconds);
+        }
     }
 
     public async Task<string> Get_BotUsername_Async(CancellationToken cancellationToken)

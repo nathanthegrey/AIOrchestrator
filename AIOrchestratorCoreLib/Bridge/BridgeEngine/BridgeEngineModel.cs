@@ -570,9 +570,6 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<string, DateTime> _quietSinceUtc = [];
 
-    /// <summary>Which stale-in-progress SET was last reported, so a fix to one line still leaves the rest heard.</summary>
-    readonly Dictionary<string, string> _reportedStaleInProgress = [];
-    readonly Dictionary<string, (string Line, DateTime SentUtc)> _lastHandoffLineByOrchId = [];
     readonly Lock _stateLock = new();
     readonly IBridgeEngineTiming _timing = timing;
     readonly IOwnerDeliveryBuffer _ownerDeliveryBuffer = OwnerDeliveryBuffer_Factory.Create(timing.OwnerAggregationSeconds);
@@ -969,15 +966,8 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<string, string> _lastAwayDigestByOrchId = [];
 
-    /// <summary>
-    /// Per orchestration: the ledger figures as of the last periodic status the owner ACTUALLY
-    /// received — the baseline its successor's deltas are measured against.
-    ///
-    /// Recorded only after a confirmed post, for the reason the away digest documents: a baseline
-    /// taken from a message that was never delivered makes the NEXT message understate the change,
-    /// and understating it is the very failure deltas were added to fix.
-    /// </summary>
-    readonly Dictionary<string, Planning.PlanProgressSnapshot> _lastPostedProgressByOrchId = [];
+    /// <summary>Which stale-in-progress SET was last reported, so a fix to one line still leaves the rest heard.</summary>
+    readonly Dictionary<string, string> _reportedStaleInProgress = [];
 
     /// <summary>The owner's last message in ANY topic — presence anywhere counts everywhere.</summary>
     DateTime _lastOwnerMessageUtc = DateTime.UtcNow;
@@ -1553,7 +1543,7 @@ internal sealed class BridgeEngineModel(
         await Check_ChannelShapes_Async(cancellationToken);
         Expire_StaleAwaitingAnswerFlags();
         await Check_AwayMode_Async(cancellationToken);
-        await Push_PeriodicStatus_Async(cancellationToken);
+        await Push_AwayDigests_Async(cancellationToken);
         await Push_GeneralDashboard_Async(cancellationToken);
 
         // Cheap: guarded by a remembered name, so it is an API call only when the desired name
@@ -8693,7 +8683,7 @@ internal sealed class BridgeEngineModel(
     /// </remarks>
     static bool Is_TopicAlreadyNamed(Exception exception)
     {
-        return TopicNameSync_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.Applied;
+        return TelegramAttempt_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.Applied;
     }
 
     async Task Sync_TopicNames_BestEffort_Async(CancellationToken cancellationToken)
@@ -8810,7 +8800,7 @@ internal sealed class BridgeEngineModel(
             // recording it as applied did, and not for two seconds, which is what recording nothing did.
             var retryAfter = _topicNameRetryAfterUtc.TryGetValue(session.OrchId, out var stamp) ? stamp : (DateTime?)null;
 
-            if (!TopicNameSync_Gate.Is_AttemptDue(retryAfter, DateTime.UtcNow))
+            if (!TelegramAttempt_Gate.Is_AttemptDue(retryAfter, DateTime.UtcNow))
                 continue;
 
             try
@@ -8855,7 +8845,7 @@ internal sealed class BridgeEngineModel(
                 // the code records success. Decision 11 makes that glyph the owner-visible truth of a
                 // passing state, so the stale name is not cosmetic.
                 //
-                // THE THREE BUCKETS, decided in TopicNameSync_Gate where the suite can reach them. An
+                // THE THREE BUCKETS, decided in TelegramAttempt_Gate where the suite can reach them. An
                 // earlier version of this used `ex is not OperationCanceledException`, which is the
                 // two-bucket test rev-6 proved insufficient for the identical decision one method away —
                 // same class, two predicates, one commit. The predicate is now one predicate, and it
@@ -8880,8 +8870,8 @@ internal sealed class BridgeEngineModel(
                 // changes, and the guard above does exactly that — but the map is not honest about what
                 // it holds. Closing that wants a third memo keyed on the refused name, which is not
                 // taken here because nothing observable depends on it.
-                if (TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown)
-                    _topicNameRetryAfterUtc[session.OrchId] = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, _timing.MirrorRetryBackoffSeconds);
+                if (TelegramAttempt_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown)
+                    _topicNameRetryAfterUtc[session.OrchId] = TelegramAttempt_Gate.Build_RetryAfterUtc(DateTime.UtcNow, _timing.MirrorRetryBackoffSeconds);
                 else
                     _appliedTopicNames[session.OrchId] = wantedName;
 
@@ -10884,7 +10874,17 @@ internal sealed class BridgeEngineModel(
                 messageThreadId,
                 await TelegramProse_Sender.Send_Async(client, _log, GLOBAL_ORCH_ID, messageThreadId, text, sound, cancellationToken));
         }
-        catch (OperationCanceledException)
+        // FILTERED — THE TOKEN DECIDES, which is this file's canonical account (see
+        // Refresh_TopicStatusLines_Async) applied to the one best-effort sender that still had the
+        // bare rethrow. An HttpClient timeout surfaces as a TaskCanceledException with the token
+        // NOT cancelled, so the bare form escalated a failed send into a shutdown.
+        //
+        // IT BECAME LOAD-BEARING WHEN A CALLER STARTED USING THIS FROM INSIDE A CATCH BLOCK (the
+        // failed-photo reply below). There, an escape does not merely abandon the reply: it
+        // abandons the CAPTION too, so the owner's message reaches nobody — and it escapes exactly
+        // when Telegram is already degraded, which is the only time that reply is sent at all. A
+        // "best effort" sender that can take its caller down is not best effort.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -12290,57 +12290,7 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    /// <summary>
-    /// Several messages sent minutes apart close separate aggregation windows, and repeating the
-    /// SAME handoff line after each ✓✓ is pure noise (the owner saw three identical "thinking…"
-    /// lines in a row). Repeat it only when the state actually changed, or after a long gap when
-    /// it has become informative again.
-    /// </summary>
-    bool Should_SendHandoffLine(string orchId, string handoffLine)
-    {
-        const int REPEAT_AFTER_MINUTES = 5;
 
-        if (_lastHandoffLineByOrchId.TryGetValue(orchId, out var last)
-            && last.Line == handoffLine
-            && (DateTime.UtcNow - last.SentUtc).TotalMinutes < REPEAT_AFTER_MINUTES)
-        {
-            return false;
-        }
-
-        _lastHandoffLineByOrchId[orchId] = (handoffLine, DateTime.UtcNow);
-        return true;
-    }
-
-    /// <summary>
-    /// What happens to the message the owner just sent, in words — and only when words are needed.
-    /// A recipient that is free to pick it up gets NO line: the typing bubble already says so. A
-    /// session already mid-turn cannot pick it up, and saying so (with who will cover the wait) is
-    /// the whole point of having a communicator, because a bubble cannot say WHY.
-    /// </summary>
-    string? Build_BusyHandoffLine_OrNull(string orchId)
-    {
-        // The SESSION THAT TALKS TO THE OWNER, never "the supervisor": in a basic orchestration that
-        // is the solo, and reading the empty supervisor slot made a working solo look idle.
-        var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
-
-        if (!Is_Working(
-                Running.SessionRoles.Supervisor, orchId,
-                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsageFile))
-            return null;
-
-        var speaker = Describe_Speaker(orchId);
-
-        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
-            return $"{speaker}: busy — will read this the moment the current turn ends";
-
-        // Say WHAT it is doing, not just that it is busy — read straight off its transcript, which
-        // is where the communicator used to read it, minus the session and the turn it cost.
-        var activity = SupervisorActivity_Describer.Describe_OrNull(supervisorUsageFile);
-
-        return activity == null
-            ? $"{speaker}: busy mid-task — they'll pick this up when the current turn ends"
-            : $"{speaker}: busy — {activity} — they'll pick this up when the current turn ends";
-    }
 
     /// <summary>
     /// The owner's "is it doing anything?" answered the way every chat app answers it — with the
@@ -12536,26 +12486,18 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// The owner must always learn what became of their message. If the supervisor's turn ends
-    /// without a reply here (it went idle, typically waiting on an implementer), the app says so
-    /// on the receipt AND nudges the supervisor in its channel — which trips its watcher, so a
-    /// real answer follows instead of a receipt frozen on "thinking…".
+    /// THE AWAY DIGEST, AND NOTHING ELSE ANY MORE. It was <c>Push_PeriodicStatus_Async</c> when it
+    /// pushed a fifteen-line status into every topic every thirty minutes; brief C deleted that
+    /// (owner, 2026-09-09 — one status surface per topic, and it is PULSE) and left the method
+    /// named for the thing it no longer does, with a bare <c>continue</c> where the status used to
+    /// be. What survives is the AWAY digest, which is not a cadence: it fires only while the owner
+    /// is away and only when its content has changed.
+    /// <para>
+    /// The half-hourly SLOT still governs it — that is why the slot planner is still here — but a
+    /// slot boundary is now permission to consider sending, not a reason to send.
+    /// </para>
     /// </summary>
-    /// <summary>
-    /// The periodic STATUS the SUPERVISOR used to write every ~30 min — about 26 paid turns a day
-    /// (~$44) spent restating what this process can compute for free from PLAN.md, the member
-    /// states and the activity probes. Same cadence, same content, same "only while work is in
-    /// flight" condition, and it runs on the bridge tick, so it adds no session and no idle wake.
-    ///
-    /// THE CADENCE IS THE WALL CLOCK'S, not each orchestration's own. This used to gate on elapsed
-    /// time since THIS orchestration's last push, so every topic carried the phase of whenever it
-    /// first pushed and the owner got a trickle: "when I have many orchestration sessions open I get
-    /// continuously spammed because they are all out of sync". Every topic now fires on the same
-    /// :00/:30 tick. `PeriodicStatusSlot_Planner` owns WHEN — out of this class because it is
-    /// `internal sealed` with no `InternalsVisibleTo`, so a rule decided in here is unreachable from
-    /// the suite; this method keeps only the sending.
-    /// </summary>
-    async Task Push_PeriodicStatus_Async(CancellationToken cancellationToken)
+    async Task Push_AwayDigests_Async(CancellationToken cancellationToken)
     {
         if (_telegramClient == null)
             return;
@@ -12642,9 +12584,10 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// The picture of the session's terminal that rides the periodic status (owner, 2026-08-24), so
-    /// the half-hourly update SHOWS what is happening as well as saying it. Returns the IMAGE: line
-    /// to append, or an empty string when there is nothing to show.
+    /// The picture of the session's terminal that rides the AWAY DIGEST (owner, 2026-08-24), so the
+    /// update SHOWS what is happening as well as saying it. Returns the IMAGE: line to append, or
+    /// an empty string when there is nothing to show. (It said "the periodic status" until brief C
+    /// removed that; the digest is the only thing left that carries a picture.)
     ///
     /// THE QUEUEING THE OWNER ASKED FOR IS NOT HERE — it is in <see cref="WindowFocus.TerminalWindow_Capturer"/>,
     /// which serialises every capture process-wide. This sweep is sequential already; the reason the
@@ -12738,7 +12681,7 @@ internal sealed class BridgeEngineModel(
         if (_appliedGeneralTopicName == desired)
             return;
 
-        if (!TopicNameSync_Gate.Is_AttemptDue(_generalTopicNameRetryAfterUtc, DateTime.UtcNow))
+        if (!TelegramAttempt_Gate.Is_AttemptDue(_generalTopicNameRetryAfterUtc, DateTime.UtcNow))
             return;
 
         try
@@ -12773,8 +12716,8 @@ internal sealed class BridgeEngineModel(
             // is retried when the wanted name CHANGES rather than on the next tick. Writing the memo on
             // a refusal is the same honest-behaviour/dishonest-map trade documented at the sibling site:
             // an invalid name will not become valid by being sent again two seconds later.
-            if (TopicNameSync_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.OutcomeUnknown)
-                _generalTopicNameRetryAfterUtc = TopicNameSync_Gate.Build_RetryAfterUtc(DateTime.UtcNow, _timing.MirrorRetryBackoffSeconds);
+            if (TelegramAttempt_Gate.Classify_Failure(exception) == TopicNameAttemptOutcomes.OutcomeUnknown)
+                _generalTopicNameRetryAfterUtc = TelegramAttempt_Gate.Build_RetryAfterUtc(DateTime.UtcNow, _timing.MirrorRetryBackoffSeconds);
             else
                 _appliedGeneralTopicName = desired;
 
@@ -13490,7 +13433,7 @@ internal sealed class BridgeEngineModel(
     /// <returns>Whether the entry was actually written — see the note at the append.</returns>
     bool Post_StatusEntry(string orchId, string text, OwnerPresenceModes presence)
     {
-        // Suppressed WITHOUT spending the slot during a meeting (see Push_PeriodicStatus_Async), so
+        // Suppressed WITHOUT spending the slot during a meeting (see Push_AwayDigests_Async), so
         // the first tick after the owner leaves terminal mode posts a fresh status — which IS the
         // "what waited while we talked" summary, built by the formatter that already exists.
         //
@@ -13706,7 +13649,7 @@ internal sealed class BridgeEngineModel(
             //
             // CLASSIFIED THROUGH THE ONE PLACE THAT DECIDES IT, and this line is why. rev-9's F1 was
             // "one class, two predicates, in one commit"; the first fix lifted the topic-name copy into
-            // TopicNameSync_Gate and left this one written out inline. They then AGREED, which is not
+            // TelegramAttempt_Gate and left this one written out inline. They then AGREED, which is not
             // the same as being one rule — decision 12's "all agreeing today and none joined to the
             // others" is exactly two copies that match until one of them is edited. Worse here than the
             // general case: the lifted copy is pinned by seven controls and this one is not asserted by
@@ -13717,7 +13660,7 @@ internal sealed class BridgeEngineModel(
             // same question, and collapsing them to make the sharing tidier would trade one defect for
             // another.
             var couldNotReachTelegram =
-                TopicNameSync_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown;
+                TelegramAttempt_Gate.Classify_Failure(ex) == TopicNameAttemptOutcomes.OutcomeUnknown;
 
             // THE LIMIT THAT USED TO BE STATED HERE IS CLOSED. A 429 and every 5xx were
             // indistinguishable from a genuine "the message is gone" 400, because the client threw a
@@ -14409,6 +14352,18 @@ internal sealed class BridgeEngineModel(
         catch (Exception ex)
         {
             _log.Log_Error(orchId, "Owner image download failed", ex);
+
+            // AND THE OWNER IS TOLD, in one line, exactly as the document path tells them. The two
+            // paths were asymmetric for no reason anyone chose: a failed DOCUMENT got a reply, a
+            // failed PHOTO got a log line and a sentence in the channel — which the AGENT reads and
+            // the owner never does. So the owner watched a picture leave their phone, saw the ✓✓,
+            // and the session it was meant for silently never had it. That is the silent-drop shape
+            // this file has paid for twice (2026-09-07 mockups, 2026-09-08 IMAGE_PROCESS_FAILED).
+            await Send_DirectReply_BestEffort_Async(
+                _telegramClient!, message.MessageThreadId,
+                "🖼 I could not download that image — your message went through, the picture did not. Send it again, or put it somewhere I can read and tell me the path.",
+                cancellationToken);
+
             return $"{caption}\n\n(The owner sent an image but downloading it FAILED: {ex.Message})";
         }
     }

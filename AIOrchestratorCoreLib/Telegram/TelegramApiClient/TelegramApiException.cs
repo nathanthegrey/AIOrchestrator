@@ -50,7 +50,7 @@ public sealed class TelegramApiException : Exception
     /// THIS IS NOT THE STRING PARSING THIS TYPE FORBIDS. The rule above is about reading a status
     /// back out of an ENGLISH message written for a human — a sentence nothing stops changing.
     /// <c>retry_after</c> is a documented machine-readable field of the response body, in the same
-    /// class as <c>TOPIC_NOT_MODIFIED</c>, which <see cref="TopicNameSync_Gate"/> already matches on
+    /// class as <c>TOPIC_NOT_MODIFIED</c>, which <see cref="TelegramAttempt_Gate"/> already matches on
     /// for exactly the same reason: it is the only place the fact is expressed at all.
     /// </para>
     /// </summary>

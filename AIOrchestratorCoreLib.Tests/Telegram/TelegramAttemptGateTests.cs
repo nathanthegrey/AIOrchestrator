@@ -14,7 +14,7 @@ namespace AIOrchestratorCoreLib.Tests.Telegram;
 /// cannot be: the engine is `internal sealed` with no `InternalsVisibleTo`. A green run here says the
 /// rules are right, not that they are wired up.
 /// </summary>
-public class TopicNameSyncGateTests
+public class TelegramAttemptGateTests
 {
     static readonly DateTime NOW = new(2026, 8, 14, 16, 0, 0, DateTimeKind.Utc);
 
@@ -28,7 +28,7 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.OutcomeUnknown,
-            TopicNameSync_Gate.Classify_Failure(new TaskCanceledException("simulated HttpClient timeout")));
+            TelegramAttempt_Gate.Classify_Failure(new TaskCanceledException("simulated HttpClient timeout")));
     }
 
     /// <summary>
@@ -41,7 +41,7 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.OutcomeUnknown,
-            TopicNameSync_Gate.Classify_Failure(new HttpRequestException("connection refused")));
+            TelegramAttempt_Gate.Classify_Failure(new HttpRequestException("connection refused")));
     }
 
     /// <summary>
@@ -53,7 +53,7 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.Rejected,
-            TopicNameSync_Gate.Classify_Failure(new Exception("Telegram 'editForumTopic' failed with HTTP 400: bad request")));
+            TelegramAttempt_Gate.Classify_Failure(new Exception("Telegram 'editForumTopic' failed with HTTP 400: bad request")));
     }
 
     /// <summary>
@@ -66,7 +66,7 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.OutcomeUnknown,
-            TopicNameSync_Gate.Classify_Failure(new TelegramApiException(429, "Too Many Requests")));
+            TelegramAttempt_Gate.Classify_Failure(new TelegramApiException(429, "Too Many Requests")));
     }
 
     /// <summary>Telegram failing on its own side says nothing about whether the edit took effect.</summary>
@@ -75,7 +75,7 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.OutcomeUnknown,
-            TopicNameSync_Gate.Classify_Failure(new TelegramApiException(503, "Service Unavailable")));
+            TelegramAttempt_Gate.Classify_Failure(new TelegramApiException(503, "Service Unavailable")));
     }
 
     /// <summary>
@@ -89,7 +89,7 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.Rejected,
-            TopicNameSync_Gate.Classify_Failure(new TelegramApiException(400, "Bad Request: TOPIC_NAME_INVALID")));
+            TelegramAttempt_Gate.Classify_Failure(new TelegramApiException(400, "Bad Request: TOPIC_NAME_INVALID")));
     }
 
     /// <summary>
@@ -107,7 +107,7 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.Applied,
-            TopicNameSync_Gate.Classify_Failure(new TelegramApiException(
+            TelegramAttempt_Gate.Classify_Failure(new TelegramApiException(
                 400,
                 "Telegram 'editGeneralForumTopic' failed with HTTP 400: {\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: TOPIC_NOT_MODIFIED\"}")));
     }
@@ -123,7 +123,7 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.Applied,
-            TopicNameSync_Gate.Classify_Failure(new Exception("Bad Request: TOPIC_NOT_MODIFIED")));
+            TelegramAttempt_Gate.Classify_Failure(new Exception("Bad Request: TOPIC_NOT_MODIFIED")));
     }
 
     /// <summary>
@@ -139,14 +139,14 @@ public class TopicNameSyncGateTests
     {
         Assert.Equal(
             TopicNameAttemptOutcomes.OutcomeUnknown,
-            TopicNameSync_Gate.Classify_Failure(new HttpRequestException("connection reset — TOPIC_NOT_MODIFIED")));
+            TelegramAttempt_Gate.Classify_Failure(new HttpRequestException("connection reset — TOPIC_NOT_MODIFIED")));
     }
 
     /// <summary>Nothing holding it back is the ordinary case and must not need a stamp to proceed.</summary>
     [Fact]
     public void WithNoStampAnAttemptIsAlwaysDue()
     {
-        Assert.True(TopicNameSync_Gate.Is_AttemptDue(null, NOW));
+        Assert.True(TelegramAttempt_Gate.Is_AttemptDue(null, NOW));
     }
 
     /// <summary>
@@ -156,9 +156,9 @@ public class TopicNameSyncGateTests
     [Fact]
     public void InsideTheWindowAnAttemptIsNotDue()
     {
-        var retryAfter = TopicNameSync_Gate.Build_RetryAfterUtc(NOW, 30);
+        var retryAfter = TelegramAttempt_Gate.Build_RetryAfterUtc(NOW, 30);
 
-        Assert.False(TopicNameSync_Gate.Is_AttemptDue(retryAfter, NOW.AddSeconds(29)));
+        Assert.False(TelegramAttempt_Gate.Is_AttemptDue(retryAfter, NOW.AddSeconds(29)));
     }
 
     /// <summary>
@@ -169,9 +169,9 @@ public class TopicNameSyncGateTests
     [Fact]
     public void OnceTheWindowHasPassedTheAttemptIsDueAgain()
     {
-        var retryAfter = TopicNameSync_Gate.Build_RetryAfterUtc(NOW, 30);
+        var retryAfter = TelegramAttempt_Gate.Build_RetryAfterUtc(NOW, 30);
 
-        Assert.True(TopicNameSync_Gate.Is_AttemptDue(retryAfter, NOW.AddSeconds(31)));
+        Assert.True(TelegramAttempt_Gate.Is_AttemptDue(retryAfter, NOW.AddSeconds(31)));
     }
 
     /// <summary>
@@ -182,8 +182,8 @@ public class TopicNameSyncGateTests
     [Fact]
     public void AtTheDeadlineItselfTheAttemptIsDue()
     {
-        var retryAfter = TopicNameSync_Gate.Build_RetryAfterUtc(NOW, 30);
+        var retryAfter = TelegramAttempt_Gate.Build_RetryAfterUtc(NOW, 30);
 
-        Assert.True(TopicNameSync_Gate.Is_AttemptDue(retryAfter, NOW.AddSeconds(30)));
+        Assert.True(TelegramAttempt_Gate.Is_AttemptDue(retryAfter, NOW.AddSeconds(30)));
     }
 }

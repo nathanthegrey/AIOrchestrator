@@ -346,6 +346,96 @@ public class TheBridgeNeverLiesAboutDeliveryTests : IDisposable
             + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\"}}}}";
     }
 
+    /// <summary>
+    /// A FAILED PHOTO TELLS THE OWNER — AND TELLING THEM MUST NOT COST THEM THE MESSAGE.
+    ///
+    /// <para>
+    /// The photo path used to fail silently as far as the owner was concerned: the log got a line
+    /// and the CHANNEL got a sentence, which the agent reads and the owner never does. So they
+    /// watched a picture leave their phone, saw the ✓, and the session it was meant for never had
+    /// it. The document path had told them all along; the asymmetry was nobody's decision.
+    /// </para>
+    /// <para>
+    /// THE SECOND HALF IS THE ONE THAT NEEDS A PROBE. That reply is sent from INSIDE the catch
+    /// block, and it is sent precisely when Telegram is already degraded — so if the reply itself
+    /// times out and the sender rethrows it as a shutdown, the exception escapes the whole photo
+    /// handler and the CAPTION never reaches the channel either. The fix (filtering the rethrow on
+    /// the token, this file's canonical rule) is invisible to every other test: reverting it leaves
+    /// the suite green. So the timeout is injected here deliberately — an HttpClient timeout is a
+    /// TaskCanceledException raised while the token is NOT cancelled, which is exactly the shape
+    /// that used to be mistaken for a shutdown.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task APhotoThatFailsToDownload_TellsTheOwner_AndStillReachesTheChannelIfThatReplyTimesOut()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        if (!File.Exists(channelFile))
+            File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
+
+        _telegram.Fail_Downloads_With(new Exception("Telegram file download failed with HTTP 400"));
+
+        // The reply the fix introduced is the one that times out. If its rethrow is unfiltered,
+        // this kills the caption with it.
+        _telegram.Timeout_Sends_Containing("could not download that image");
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Photo_Json("look at this", 9301, 301, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => File.ReadAllText(channelFile).Contains("look at this", StringComparison.Ordinal), 20_000),
+                "the owner's caption never reached the channel — the failed-photo reply took the whole message down with it."
+                    + $"{Environment.NewLine}{File.ReadAllText(channelFile)}{Environment.NewLine}{_log.Dump()}");
+        });
+
+        var channel = File.ReadAllText(channelFile);
+
+        Assert.Contains("downloading it FAILED", channel, StringComparison.Ordinal);
+        Assert.DoesNotContain("IMAGE:", channel, StringComparison.Ordinal);
+    }
+
+    /// <summary>The same, with the reply going through: the owner is told in one line.</summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task APhotoThatFailsToDownload_IsSaidToTheOwner_NotOnlyToTheAgent()
+    {
+        var engine = Build_Engine();
+        var session = _launcher.Start_Orchestration("Repo", _tempRepo);
+        _store.Set_TelegramTopicId(session.OrchId, TOPIC_ID);
+
+        var channelFile = _paths.Get_OwnerChannelFile(session.OrchId);
+
+        if (!File.Exists(channelFile))
+            File.WriteAllText(channelFile, "# OWNER CHANNEL\n\n---\n");
+
+        _telegram.Fail_Downloads_With(new Exception("Telegram file download failed with HTTP 400"));
+
+        await Run_WhileAsync(engine, async () =>
+        {
+            _telegram.Queue_Updates(Updates_Json(Photo_Json("look at this", 9302, 302, TOPIC_ID)));
+
+            Assert.True(
+                await Wait_Until_Async(() => _telegram.Count_Sent_Containing("could not download that image") >= 1, 20_000),
+                $"the owner was never told their picture did not arrive.{Environment.NewLine}{_telegram.Dump_Sent()}");
+        });
+    }
+
+    static string Photo_Json(string caption, long updateId, long messageId, long threadId)
+    {
+        return $"{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
+            + $"\"message_thread_id\":{threadId},\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"caption\":\"{caption}\","
+            + $"\"photo\":[{{\"file_id\":\"photo-{updateId}\",\"width\":90,\"height\":90}},"
+            + $"{{\"file_id\":\"photo-{updateId}-big\",\"width\":900,\"height\":900}}]}}}}";
+    }
+
     static string Document_Json(string fileName, string mimeType, long size, long updateId, long messageId, long threadId)
     {
         return $"{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
