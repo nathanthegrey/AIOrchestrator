@@ -63,7 +63,73 @@ of these, say so in the owner's channel first and I will drop it.**
   was the .NET host (§1, `stage/4e`). And `--max-budget-usd` not capping spend is real but harmless for
   the closing turn, whose real bound is the derived timeout.
 
-## 5. What is measured, and how to measure it yourself
+## 4b. Parked, with where it went instead — 2026-09-10
+
+- **Collapsing the `QUESTION:` literals** (two survive in `Bridge/`): **delivered by E3**, not by this
+  line. The E3 author folded it in as a requirement on 2026-09-10 (`ff24382`): writer and every
+  recogniser — entry parser, digest, state pack, legacy-marker path — read one `ChannelGrammar`
+  constant, with a grep test forbidding a marker literal anywhere else. Parked here with that pointer;
+  doing it separately now would be work E3 has to undo.
+- **The role-bound author** and **selecting the brief by declared type instead of the subject's first
+  word**: same commit, same reason. Nothing in this line's current work depends on E3, which starts
+  only after brief C is in production.
+- **A held report dying with its member**: logged since `98d4184` (`UndeliveredSpokeTraffic_Reporter`),
+  which is a record of a loss rather than a guarantee. Whether a close should WAIT for unread traffic
+  instead of reporting it is the owner's decision, not a defect.
+- **`IMPLEMENTER_NUDGE_MINUTES` has no shared home**, so the digest ceiling restates `8` in prose; and
+  the config-refusal line would be better read at daemon startup than on the dispatcher's first tick.
+  Both small, both in files this line does not own.
+
+## 5. What this line hands to E3 (typed channel entries) — 2026-09-10
+
+E3 replaces hand-written marker prose with a validating CLI, and its stated aim — *"the marker grammar
+appears in ONE place (the tool), not in three skills"* — is the same aim as this line's smaller
+consolidation of the `QUESTION:` literal. Sent to the E3 author by the owner on 2026-09-10; recorded
+here because a chat message is not the record. Two requirements and two absorptions, each with the
+measurement behind it.
+
+**Requirement 1 — one place to WRITE is not one place to KNOW.** The transition rule keeps the bridge
+parsing today's prose, and since 2026-09-10 the wake-up digest reads the same vocabulary (a member
+declaring `BLOCKED ON OWNER` or asking a question is never held). So there are two roles by
+construction: whoever writes and whoever recognises. "One place" must therefore mean **the tool and
+the matcher read the same constant**, not two spellings that resemble each other. The failure is not
+hypothetical: on 2026-09-10 the word was spelled four times in this tree — `Bridge/OwnerPush_Policy`,
+`Bridge/OwnerMessage_Contract` (private), `Bridge/Decisions/OwnerQuestion_Contract` (bare, no colon)
+and a fourth added by the digest itself, in the colon-less form, which a report merely mentioning
+"the open question" then defeated. Two of the four were collapsed onto `Status/MemberState_Resolver`;
+two survive, and the bare one is the interesting one — its consumer appends the colon, so collapsing
+it is a judgement about where the colon lives, not a substitution.
+
+**Requirement 2 — the tool is the moment the author stops being a claim.** `kit/bin/channel-append.sh
+--author <word>` takes any word, with no check against `AIORCH_ROLE`, and the implementer protocol
+tells members to call exactly that helper. Proven on 2026-09-10: a member signed `supervisor` with one
+documented command. This is why the model-per-task mechanism was deleted rather than fixed — it
+granted a privilege on the strength of that signature. When the tool becomes the only sanctioned
+writer it can refuse an author that does not match the session's role: one line inside work already
+planned, against a package of its own later. (Bridge-written entries are already safe: the app
+neutralises header lines echoed inside a body — `PrintTurnEntry_Splitter` — so the open door is the
+terminal-mode helper.)
+
+**Absorption 1 — a declared type is a better key than a guessed word.** The state pack finds a
+member's brief by looking for the last supervisor entry whose subject OPENS with a task marker
+(`BRIEF`, `REVIEW`, `FINDINGS`…) and, failing that, the longest recent supervisor entry. That is a
+guess about prose. If entries carry a type (`--question`, `--report`, `--state`), `Brief_Finder` reads
+the type instead, and the failure it is exposed to today — a brief quoted inside a report becoming
+*the* brief in the next pack — disappears with no further work.
+
+**Absorption 2 — the index is already the tool's; the timestamp is the new part.** `channel-append.sh`
+computes and prints the index today, so that half is not new. The timestamp is, and it is the field
+CLAUDE.md decision 12 records as untrusted (a supervisor stamped `01:34` on an entry written at
+`15:20` the day before). Worth saying out loud in E3's own done-when, because a tool that computes the
+index and still takes a model's timestamp closes the smaller of the two holes.
+
+**One thing E3 should NOT inherit from this line.** The digest's escalation vocabulary is matched
+through `MemberState_Resolver.Contains_Marker` (whole token, decoration stripped, quotation refused),
+while `OwnerPush_Policy.Carries_Question` is a raw `Contains`. Sharing a constant between them makes
+one rule look like it governs two matchers. If E3 unifies the vocabulary, it should say which matcher
+is canonical — or the next reader will assume both behave the same, which they do not.
+
+## 6. What is measured, and how to measure it yourself
 
 `tools/token-gate/` (read-only, metadata only — `usage`, timestamps, model, tool names; never message
 text). `gate_turns.py` compares calls per turn / first-call context / tokens per turn across the
