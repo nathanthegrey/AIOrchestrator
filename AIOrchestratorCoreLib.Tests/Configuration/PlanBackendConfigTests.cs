@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Configuration;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Planning.PlanBackend;
 using AIOrchestratorCoreLib.SupervisionPaths;
 using Xunit;
 
@@ -117,5 +118,28 @@ public class PlanBackendConfigTests : IDisposable
             [], null, null, null, null, null, null, null, null, null, null, null, null, settings);
 
         Assert.Equal(settings, OrchestratorConfig_Factory.Create_WithStatusScreenshots(config, true).PlanBackend);
+    }
+
+    /// <summary>
+    /// A KIND THE OWNER MISTYPED AS A NUMBER STAYS LOUD. The 2026-09-10 tolerance fix in
+    /// <c>Get_String_OrNull</c> turned <c>{"kind": 42}</c> into null, and a null kind read as "no
+    /// planBackend configured" — so the loader never saw a settings object and its own promise (an
+    /// unrecognised kind is a FAILED load, never a silent downgrade to PLAN.md) could not be kept.
+    /// Found by the re-review of that fix, on the day it was written.
+    /// </summary>
+    [Fact]
+    public void AKindOfTheWrongType_ReachesTheLoaderAsAWordItRefuses_RatherThanReadingAsUnconfigured()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"planBackend":{"kind":42}}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.NotNull(config.PlanBackend);
+        Assert.Equal("42", config.PlanBackend!.Value.Kind);
+
+        var loaded = PlanBackend_Loader.Load(config.PlanBackend.Value);
+
+        Assert.NotNull(loaded.Error);
+        Assert.Contains("42", loaded.Error!);
     }
 }
