@@ -942,7 +942,8 @@ decisione 12 del file di istruzioni). Il resto di questo lavoro — far scrivere
 strumento che controlla prima di scrivere, così la grammatica dei marcatori vive in una costante letta da
 chi scrive e da chi legge — è deciso e sta nella sezione 7.
 
-**Dove.** `stage/8e-durations-and-the-general-header`.
+**Dove.** `stage/8e-durations-and-the-general-header`; `stage/14` (il conteggio delle righe ignora le righe-marcatore —
+prima ogni domanda ben formata, sei marcatori per costruzione, veniva ammonita come troppo lunga).
 
 ### Le voci di canale si scrivono con uno strumento che controlla prima, e la grammatica ha una casa sola
 
@@ -969,14 +970,16 @@ esattamente come prima: la transizione è per costruzione, e un test fissa che u
 lo sbaglio costava una decisione. Spostare il controllo **prima** della scrittura elimina la classe di
 errore, non il singolo caso; tenere la grammatica in un file letto da chi scrive e da chi legge elimina la
 deriva fra le copie (le decisioni 12 e 13 del file di istruzioni sono la storia di quella deriva). Il
-prezzo: lo strumento dipende da `jq`, che il kit già richiedeva; e le sessioni vive con il manuale vecchio
+prezzo: lo strumento dipende da `jq`, che il kit già richiedeva (ora lo verificano entrambi gli installatori, e
+lo strumento rifiuta in una riga se manca, senza scrivere nulla); e le sessioni vive con il manuale vecchio
 continuano a scrivere a mano finché non vengono riavviate con il kit nuovo — per questo la lettura delle
 due forme resta.
 
 **Cosa cambia per chi lo usa.** Niente sul telefono. Cambia per gli agenti: non «scrivi questa
 intestazione», ma «chiama lo strumento».
 
-**Dove.** `stage/13`.
+**Dove.** `stage/13`, `stage/14` (i manuali non contengono più nessun modello da copiare a mano: ogni campo è una
+flag dello strumento, `--deadline` e `--default` compresi).
 
 ---
 
