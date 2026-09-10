@@ -4,13 +4,14 @@ Questo file racconta a chi non ha seguito giorno per giorno **che cosa abbiamo c
 e per quale ragione**. Racconta idee e decisioni, non codice: chi vuole il dettaglio tecnico ha i
 messaggi di commit e le spec in `docs/superpowers/specs/`.
 
-Base: `ours/integration` sopra `master`. Al 2026-09-10 sono **152 commit** raggruppati in **50 rami
-`stage/*`** fusi, ognuno tenuto integrabile su `master` per conto proprio. Tutto quello che c'è qui fino
+Base: `ours/integration` sopra `master`. Alla sera del 2026-09-10 sono **189 commit** in rami
+`stage/*` fusi, ognuno tenuto integrabile su `master` per conto proprio. Tutto quello che c'è qui fino
 alla sezione 5 è girato in produzione sul server dal 2026-09-09; il blocco Telegram (rami `8a`–`8e`,
-`9a`, `9b`, `11`, `12`, `13`) è fuso e va in produzione il 2026-09-10. Suite: **3259 test, 9
-saltati**, verde in seriale a macchina quieta; in parallelo sotto carico ha ancora circa un rosso a
-corsa nella famiglia dei test a tempo reale (misurato il 10/9, due corse, due test diversi, entrambi
-verdi da soli) — è il primo debito aperto della sezione 7.
+`9a`, `9b`, `11`, `12`, `13`) è in produzione dalle 20:56 del 2026-09-10; i rami `15`–`20` (sera del
+10/9) sono fusi e **aspettano un solo riavvio** (sezione 7). Suite: **3307 test, 9 saltati**
+(3298 verdi sul ramo fuso, `c5deae8`); in parallelo sotto carico ha ancora circa un rosso a corsa
+nella famiglia dei test a tempo reale (misurato il 10/9; nelle quattro corse della sera zero) — è il
+primo debito aperto della sezione 7.
 
 ---
 
@@ -1178,7 +1179,18 @@ risolvibile da sola» che tre sonde pinnano. Scelta del proprietario, la variant
 ## 7. Che cosa stiamo facendo adesso
 
 Questa sezione è l'unica che parla al futuro, quindi invecchia in fretta: **aggiornata al
-2026-09-10, pomeriggio**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
+2026-09-10, sera**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
+
+**Sei rami fusi e non ancora in produzione — un solo riavvio, quando i batch in corso hanno finito
+(decisione del proprietario, 2026-09-10 sera).** `stage/15` (la PULSE ogni cinque minuti, il freno
+per messaggio), `16` (il supervisore non fa la fila; il tocco ritenta; la PULSE rispetta il suo freno;
+le domande superate), `18` (la cartella scratch del revisore) e `19` (il rapporto finale non viene
+mai superato in silenzio; il runner print passa a `stream-json`). Deploy: `bash ~/aiorch-vps/03-aiorch.sh`
+sul server (binario **e** kit nello stesso passo). Due misure la sera dopo: i 429 nel journal
+(`journalctl -u aiorchestrator --since … | grep -c "HTTP 429"` — erano 382 in 56 minuti) e che un turno
+implementer produca la sua voce con il trasporto nuovo: i test «dal vivo» pinnano ancora
+`--output-format json`, quindi la prima prova vera del lettore `stream-json` sul runner print è il deploy
+stesso. Le sonde, i controlli per mutazione e i parcheggi sono nei piani `2026-09-10-stage-16…20`.
 
 **Il blocco Telegram va in produzione oggi.** Binario **e** kit nello stesso passo: le istruzioni del
 supervisore sono cambiate (ri-fa la domanda dopo «Let's talk», dichiara il suo stato a fine turno per
