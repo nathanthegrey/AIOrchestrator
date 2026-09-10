@@ -97,8 +97,8 @@ public static class OrchestratorConfig_Factory
     {
         return new OrchestratorConfigModel(
             repos,
-            supervisorModel ?? DEFAULT_SUPERVISOR_MODEL,
-            implementerModel ?? DEFAULT_IMPLEMENTER_MODEL,
+            First_StatedModel([supervisorModel], DEFAULT_SUPERVISOR_MODEL),
+            First_StatedModel([implementerModel], DEFAULT_IMPLEMENTER_MODEL),
 
             // THE LADDER IS THE COMPATIBILITY PROMISE, and it is resolved HERE so that
             // IOrchestratorConfig.ReviewerModel is the EFFECTIVE answer and no reader has to
@@ -106,10 +106,13 @@ public static class OrchestratorConfig_Factory
             // now", which was implementerModel — including the case that matters, an owner who had
             // set implementerModel by hand and never heard of this key. Only when neither is set
             // does the shipped default apply, and it is opus, which is what the reviewer already ran.
-            reviewerModel ?? implementerModel ?? DEFAULT_REVIEWER_MODEL,
-            soloModel ?? implementerModel ?? DEFAULT_SOLO_MODEL,
-            generalSupervisorModel ?? DEFAULT_GENERAL_SUPERVISOR_MODEL,
-            communicatorModel ?? DEFAULT_COMMUNICATOR_MODEL,
+            // Through First_StatedModel like every other rung: an empty or whitespace reviewerModel
+            // must be absent too, or it slips past implementerModel and the reviewer spawns with no
+            // --model flag at all (proven 2026-09-10, see WithAnEmptyReviewerModel_... below).
+            First_StatedModel([reviewerModel, implementerModel], DEFAULT_REVIEWER_MODEL),
+            First_StatedModel([soloModel, implementerModel], DEFAULT_SOLO_MODEL),
+            First_StatedModel([generalSupervisorModel], DEFAULT_GENERAL_SUPERVISOR_MODEL),
+            First_StatedModel([communicatorModel], DEFAULT_COMMUNICATOR_MODEL),
             telegramSupergroupChatId,
             telegramOwnerUserId,
             telegramBotToken,
@@ -134,6 +137,48 @@ public static class OrchestratorConfig_Factory
             // never whether it is delivered, so every caller that predates it gets the shipped
             // shaping rather than a null the mirror would have to test for at the send site.
             telegramProse ?? TelegramProseSettings_Factory.Create_Default());
+    }
+
+    /// <summary>
+    /// THE LADDER'S ONE COALESCE — the first rung the owner actually stated, or the shipped default.
+    /// Every per-role model in this file resolves through it, so "what counts as the owner having
+    /// said nothing" has a single answer for all six roles rather than one per call site (CLAUDE.md
+    /// decision 12's rule about formatters, applied to a ladder).
+    ///
+    /// <para>
+    /// AN EMPTY OR WHITESPACE VALUE IS ABSENT, and it takes a method to say so because <c>??</c>
+    /// cannot. Proven 2026-09-10: <c>{"implementerModel":"sonnet","reviewerModel":""}</c> handed the
+    /// reviewer the empty string, which <c>??</c> passed straight through — and both spawn-command
+    /// builders add <c>--model</c> only when the value is not whitespace, so the reviewer was
+    /// launched with NO model flag at all: the CLI's own default, neither the ladder's answer nor
+    /// this file's, and no line anywhere saying so. An empty key is a cleared field or a leftover,
+    /// never a model. The whitespace is trimmed for the same reason a blank value is dropped: what
+    /// survives here goes on a command line.
+    /// </para>
+    /// <para>
+    /// THE WORD ITSELF IS NOT VALIDATED, and that is a decision rather than an omission (2026-09-10).
+    /// An allowlist here would be a TYPO guard, not a security one — it authenticates nothing about
+    /// who wrote the file, so a session that can edit config.json defeats it simply by writing a
+    /// word that IS on the list. What it would cost is real: <c>claude --model</c> takes more words
+    /// than any list compiled into this build, so a new alias would need a rebuild, and until then
+    /// the app would silently substitute its own default for a model the owner deliberately named —
+    /// a worse failure than the CLI refusing the word out loud, because it looks healthy.
+    /// <c>fable</c> is refused on the REQUEST path
+    /// (<c>OrchestrationRequests_Reader.FORBIDDEN_MEMBER_MODEL</c>) precisely because an agent writes
+    /// that file; config.json is the owner's own, and that refusal's own message names the owner as
+    /// the one who selects fable. Guarding two of the six keys and not the other four would also
+    /// give one config file two answers about what a valid model word is.
+    /// </para>
+    /// </summary>
+    static string First_StatedModel(IReadOnlyList<string?> ladder, string shippedDefault)
+    {
+        foreach (var rung in ladder)
+        {
+            if (!string.IsNullOrWhiteSpace(rung))
+                return rung.Trim();
+        }
+
+        return shippedDefault;
     }
 
     public static IOrchestratorConfig Create_Empty()

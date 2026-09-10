@@ -229,6 +229,30 @@ public static class OrchestratorConfig_Loader
             Get_String_OrNull(backendRoot, "type"));
     }
 
+    /// <summary>
+    /// TOLERATES A VALUE OF THE WRONG TYPE, for the reason <see cref="Get_Long_OrNull"/> below states
+    /// and this reader was missing: <c>JsonNode.GetValue&lt;string?&gt;()</c> THROWS for a JSON number
+    /// or boolean, and nothing here caught it.
+    ///
+    /// <para>
+    /// Proven 2026-09-10: <c>{"reviewerModel": 5}</c> threw <c>InvalidOperationException</c> out of
+    /// <see cref="Load_OrEmpty"/>, and <c>{"reviewerModel": true}</c> threw it out of
+    /// <c>IOrchestratorConfigProvider.Get_Current()</c> — which is on the app's startup path AND on
+    /// every tick, with no try/catch above it. One unquoted hand-edit in config.json was an app that
+    /// would not start. A typo must cost the DEFAULT for that one setting, never the app.
+    /// </para>
+    /// <para>
+    /// THIRTEEN SETTINGS BECOME TOLERANT AT ONCE, since this helper is shared: the six model keys
+    /// (<c>supervisorModel</c>, <c>implementerModel</c>, <c>reviewerModel</c>, <c>soloModel</c>,
+    /// <c>generalSupervisorModel</c>, <c>communicatorModel</c>), <c>telegramBotToken</c>,
+    /// <c>voiceTranscribeCommand</c>, a repo entry's <c>name</c> and <c>path</c> (a mistyped one is
+    /// skipped by <see cref="Parse_Repos"/>'s own blank check, as it already was for a blank string),
+    /// and <c>planBackend</c>'s <c>kind</c>/<c>assembly</c>/<c>type</c> (a mistyped <c>kind</c> reads
+    /// as no planBackend at all, which is what an absent key already meant). Each of the thirteen
+    /// moves from "takes the whole load down" to "takes its own default", and nothing else changes:
+    /// a correctly typed value reads exactly as before.
+    /// </para>
+    /// </summary>
     static string? Get_String_OrNull(JsonObject? root, string key)
     {
         if (root == null)
@@ -238,7 +262,16 @@ public static class OrchestratorConfig_Loader
         if (node == null)
             return null;
 
-        return node.GetValue<string?>();
+        try
+        {
+            return node.GetValue<string?>();
+        }
+        catch
+        {
+            // Broad by intent, like the numeric and boolean readers: every way a value fails to be a
+            // string — a number, a boolean, an object, an array — is the same situation here.
+            return null;
+        }
     }
 
     /// <summary>

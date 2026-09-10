@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using AIOrchestratorCoreLib.Configuration;
 using AIOrchestratorCoreLib.Configuration.OrchestratorConfig;
+using AIOrchestratorCoreLib.Configuration.OrchestratorConfigProvider;
 using AIOrchestratorCoreLib.Configuration.RepoEntry;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -174,6 +175,81 @@ public class PerRoleModelDefaultsTests : IDisposable
 
         Assert.Equal("opus", flipped.ReviewerModel);
         Assert.Equal("haiku", flipped.SoloModel);
+    }
+
+    /// <summary>
+    /// A MISTYPED VALUE COSTS THAT ONE SETTING ITS DEFAULT, NEVER THE LOAD. Proven 2026-09-10 on
+    /// this branch: <c>{"reviewerModel": 5}</c> threw <c>InvalidOperationException</c> straight out
+    /// of <see cref="OrchestratorConfig_Loader.Load_OrEmpty"/>, because the string reader called
+    /// <c>GetValue&lt;string?&gt;()</c> unguarded while its numeric and boolean neighbours had
+    /// already been made tolerant for exactly this reason. Two of these keys are documented as
+    /// hand-edited and have no Settings field to get them right, so the typo is the expected input.
+    /// </summary>
+    [Fact]
+    public void AMistypedModelValue_CostsThatOneSettingItsDefault_NotTheWholeLoad()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"sonnet","reviewerModel":5,"soloModel":true}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        // The two mistyped keys read as ABSENT, so each takes the ladder it would have taken had the
+        // owner never written it — the implementer's model, which is the compatibility promise.
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Implementer));
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Reviewer));
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Solo));
+    }
+
+    /// <summary>
+    /// AND IT DOES NOT TAKE THE APP DOWN EITHER, which is the half that made this a defect rather
+    /// than an annoyance: <see cref="OrchestratorConfigProvider.IOrchestratorConfigProvider.Get_Current"/>
+    /// is on the startup path AND on every tick, with no try/catch anywhere above it. Proven
+    /// 2026-09-10: <c>{"reviewerModel": true}</c> threw out of Get_Current.
+    /// </summary>
+    [Fact]
+    public void AMistypedModelValue_DoesNotTakeDownTheProviderOnTheStartupPath()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"supervisorModel":true,"reviewerModel":true}""");
+
+        var provider = OrchestratorConfigProvider_Factory.Create(_paths);
+
+        Assert.Equal("opus", provider.Get_Current().Get_ModelForRole(SessionRoles.Supervisor));
+        Assert.Equal("opus", provider.Get_Current().Get_ModelForRole(SessionRoles.Reviewer));
+    }
+
+    /// <summary>
+    /// AN EMPTY VALUE IS ABSENT, and it has to be said out loud because <c>??</c> does not say it.
+    /// Proven 2026-09-10: <c>{"implementerModel":"sonnet","reviewerModel":""}</c> gave the reviewer
+    /// the empty string — and both command builders add <c>--model</c> only when the value is not
+    /// whitespace, so the reviewer was spawned with NO model flag at all: the CLI's own default,
+    /// neither the ladder's answer nor this app's. A cleared field is the owner saying nothing.
+    /// </summary>
+    [Fact]
+    public void AnEmptyModelValue_IsAbsent_AndTakesTheLadder()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":"sonnet","reviewerModel":"","soloModel":"   "}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Reviewer));
+        Assert.Equal("sonnet", config.Get_ModelForRole(SessionRoles.Solo));
+    }
+
+    /// <summary>
+    /// THE SAME RULE ON THE RUNG BELOW, which is the one that would otherwise have leaked past a fix
+    /// applied only to the two new keys: an empty <c>implementerModel</c> is the SECOND rung of the
+    /// reviewer's and the solo's ladder, so a fix that stopped at the first rung would still hand
+    /// them an empty string. Every role resolves to a real word here, or no spawn carries a model.
+    /// </summary>
+    [Fact]
+    public void AnEmptyImplementerModel_IsAbsentForEveryRoleThatRidesIt()
+    {
+        File.WriteAllText(_paths.ConfigFile, """{"repos":[],"implementerModel":""}""");
+
+        var config = OrchestratorConfig_Loader.Load_OrEmpty(_paths);
+
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Implementer));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Reviewer));
+        Assert.Equal("opus", config.Get_ModelForRole(SessionRoles.Solo));
     }
 
     /// <summary>
