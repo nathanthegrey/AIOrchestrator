@@ -1153,6 +1153,12 @@ internal sealed class BridgeEngineModel(
         // to the thing every append now passes through.
         ChannelLock_Diagnostics.Set_Sink(message => _log.Log_Warning(GLOBAL_ORCH_ID, message));
 
+        // A REFUSED SETTING IS SAID AT BOOT, not on the dispatcher's first tick. Same dedupe, so a
+        // later config reload still reports anything NEW and nothing twice; what changes is that an
+        // operator who mistyped a value reads it in the log beside the startup banner, where they are
+        // already looking, instead of a tick later among session traffic.
+        _printTurns.Report_ConfigRejections();
+
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
         List<Task> loops = [Run_Supervised_Async("mirror", Run_MirrorLoop_Async, cancellationToken)];

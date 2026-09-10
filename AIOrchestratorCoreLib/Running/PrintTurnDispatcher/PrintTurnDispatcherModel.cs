@@ -584,6 +584,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// appears.
     /// </para>
     /// </summary>
+    public void Report_ConfigRejections()
+    {
+        Report_ConfigRejections_Once(_configProvider.Get_Current().Runners);
+    }
+
     void Report_ConfigRejections_Once(IRunnerConfigs configs)
     {
         foreach (var rejection in configs.Rejections)

@@ -48,6 +48,12 @@ public interface IPrintTurnDispatcher
     /// </summary>
     IReadOnlySet<string> Get_DeliveringIdentities(string orchId, string memberId);
 
+    /// <summary>
+    /// Says every <c>config.json</c> setting this host REFUSED, once each — called at engine startup so
+    /// an operator reads it beside the startup banner. <see cref="Tick"/> repeats the call on every pass
+    /// and the dedupe makes that free: what it catches is a setting refused by a LATER reload.
+    /// </summary>
+    void Report_ConfigRejections();
 
     /// <summary>
     /// THE /resume OVERRIDE. Drops <see cref="PrintSessionState.IPrintSessionState.RetryNotBeforeUtc"/>
