@@ -369,16 +369,27 @@ public class TopicStatusLinePlannerTests
     }
 
     /// <summary>
-    /// THE ONE THAT DECIDES WHETHER THE FEATURE WORKS AT ALL. A buried status line is USUALLY
-    /// unchanged text — a quiet orchestration says the same thing minute after minute — and the
-    /// identical-text rule answers None to exactly that. If the repost sat behind that rule it would
-    /// fire only for orchestrations that happened to change something in the same tick, which is the
-    /// quiet topic it was asked for, never reached.
+    /// THE RULE REVERSED, ON THE OWNER'S OWN WORDS (2026-09-09, brief C): PULSE is re-posted "only
+    /// when it is buried by later traffic AND its content changed". This test ASSERTED THE OPPOSITE
+    /// until 2026-09-10 and it was not wrong then — burial alone was the rule, and the summary above
+    /// it argued the case for it: a quiet topic never changes its text, so a content-gated repost
+    /// would never move a quiet topic's line.
     ///
-    /// Both sides, from the SAME text: unchanged and not buried is still silence.
+    /// The owner read that trade and took the other side. Their complaint is the one this whole brief
+    /// answers — half of what reaches the phone is not for them — and a repost that carries no news
+    /// is the surface breaking its own promise: PULSE exists so that status costs no notifications,
+    /// and every pause in a talkative topic was buying a delete plus a post that said the same thing.
+    /// A buried unchanged line is a cosmetic loss (it is above some traffic); a repost of it is
+    /// traffic. Cosmetics lose.
+    ///
+    /// KEPT UNDER ITS OLD NAME INVERTED RATHER THAN DELETED, so the reversal is visible in the diff
+    /// of the file that carried the old claim, and nobody re-derives the old rule from the argument
+    /// still written above it.
+    ///
+    /// Both sides, from the SAME text: unchanged is silence whether or not it is buried.
     /// </summary>
     [Fact]
-    public void TheRepostFiresEvenWhenTheTextHasNotChanged()
+    public void TheRepostDoesNotFireWhenTheTextHasNotChanged()
     {
         var current = Plan(existingMessageId: STATUS_ID).Text;
 
@@ -388,9 +399,68 @@ public class TopicStatusLinePlannerTests
                  newestTopicMessage: Newest(STATUS_ID - 20, NOW.AddHours(-1))).Action);
 
         Assert.Equal(
-            TopicStatusActions.Repost,
+            TopicStatusActions.None,
             Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
                  newestTopicMessage: Newest(STATUS_ID + 20, NOW.AddMinutes(-2))).Action);
+    }
+
+    /// <summary>
+    /// THE BRIEF'S OWN PROBE, both halves in one place: "PULSE buried under 3 later messages with
+    /// unchanged content → not re-posted; content changes → one silent re-post at the bottom".
+    ///
+    /// The three messages are modelled the way the planner sees burial — by the newest id the app
+    /// knows of, which is the third of them — because that is the only thing `Is_RepostDue` reads.
+    /// Asserting on a count of intermediate messages would test a counter this feature does not have.
+    ///
+    /// ONE repost, not two: the second call re-runs the same tick with the line now carrying the new
+    /// text, which is the state the engine is in immediately after a successful repost. It must go
+    /// quiet — otherwise a changed line reposts on every tick for as long as it stays buried, which
+    /// is the waterfall by another door.
+    /// </summary>
+    [Fact]
+    public void BuriedAndUnchangedStaysPut_BuriedAndChangedMovesOnce()
+    {
+        var buriedUnderThree = Newest(STATUS_ID + 3, NOW.AddMinutes(-2));
+
+        var current = Plan(existingMessageId: STATUS_ID).Text;
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: current,
+                 newestTopicMessage: buriedUnderThree).Action);
+
+        var afterAChange = Plan(
+            existingMessageId: STATUS_ID,
+            lastWrittenText: "what PULSE said before anything moved",
+            newestTopicMessage: buriedUnderThree);
+
+        Assert.Equal(TopicStatusActions.Repost, afterAChange.Action);
+        Assert.False(string.IsNullOrWhiteSpace(afterAChange.Text));
+
+        Assert.Equal(
+            TopicStatusActions.None,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: afterAChange.Text,
+                 newestTopicMessage: buriedUnderThree).Action);
+    }
+
+    /// <summary>
+    /// THE RESTART, which is where a content-gated repost could have gone wrong and does not. The
+    /// remembered text lives in memory, so after a restart every topic has an id and no last text —
+    /// `Decide` reads that as Edit, which this planner counts as news. On its own that would repost
+    /// every buried line at every startup, all at once: a notification storm on the one event the
+    /// owner did not ask for.
+    ///
+    /// It cannot happen, because the NEWEST-MESSAGE map is in memory as well: until the app observes
+    /// real traffic in a topic it knows of no message that could have buried the line, and
+    /// `Is_RepostDue` refuses a topic it knows nothing about. This test pins the PAIR — the two blind
+    /// spots cover each other, and either one made durable alone would open the storm.
+    /// </summary>
+    [Fact]
+    public void AfterARestartNothingIsRepostedUntilRealTrafficIsSeen()
+    {
+        Assert.Equal(
+            TopicStatusActions.Edit,
+            Plan(existingMessageId: STATUS_ID, lastWrittenText: null, newestTopicMessage: null).Action);
     }
 
     /// <summary>

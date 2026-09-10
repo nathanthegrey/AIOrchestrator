@@ -102,12 +102,25 @@ public static class TopicStatusLine_Planner
 
         var decided = TopicStatusLine_Decider.Decide(text, lastWrittenText, existingMessageId);
 
-        // THE REPOST OVERRIDES THE DECIDER, and it has to. A buried line is USUALLY unchanged text —
-        // a quiet orchestration says the same thing minute after minute — and the identical-text rule
-        // answers None to exactly that. Behind that rule the repost would fire only for a topic that
-        // happened to change something in the same tick, which is never the quiet topic it was asked
-        // for. Emptiness is still refused: the builder emits the bare lead word whenever a message is up,
-        // so blank text here would mean sending nothing at all.
+        // THE REPOST RIDES ON THE DECIDER — it no longer overrides it. Owner, 2026-09-09: PULSE is
+        // "deleted and re-posted (silently) only when it is buried by later traffic AND its content
+        // changed". Burial alone used to be enough, and the cost was the surface's own promise: a
+        // quiet orchestration says the same thing minute after minute, so every pause in a talkative
+        // topic bought a delete plus a post that carried no news — the waterfall decision 14 exists to
+        // prevent, arriving one message at a time instead of all at once.
+        //
+        // "SOMETHING NEW TO SAY" IS THE DECIDER'S ANSWER, NOT A SECOND COMPARISON. `Decide` already
+        // answers None for both cases that must not move the line — text identical to what is up, and
+        // text that is blank — so asking it is the whole predicate; writing `lastWrittenText != text`
+        // here would be a second spelling of the same rule, free to disagree with the first.
+        //
+        // AFTER A RESTART the remembered text is null (it lives in memory) and `Decide` reads that as
+        // Edit, which counts as news here. That does NOT produce a restart repost: the newest-message
+        // map is in memory too, so `Find_NewestTopicMessage_OrNull` answers null until the app observes
+        // real traffic, and `Is_RepostDue` refuses a topic it knows nothing about. The two blind spots
+        // cover each other, and the test at the bottom of this file pins the pair.
+        var somethingNewToSay = decided != TopicStatusActions.None;
+
         // THE LATCH COMES FIRST, and it is a fallback rather than a failure. Telegram REFUSES some
         // deletes permanently — a message past its 48-hour window, or a bot without
         // `can_delete_messages` — and a refusal is not a gone message, so nothing clears the id and
@@ -117,8 +130,8 @@ public static class TopicStatusLine_Planner
         //
         // Latched, the topic stops trying to MOVE its line and goes on updating it in place. That is
         // master's behaviour, which is the right floor to degrade to.
-        var action = !repostIsImpossible
-                     && !string.IsNullOrWhiteSpace(text)
+        var action = somethingNewToSay
+                     && !repostIsImpossible
                      && Is_RepostDue(existingMessageId, newestTopicMessage, now, REPOST_AFTER_QUIET_SECONDS)
             ? TopicStatusActions.Repost
             : decided;
