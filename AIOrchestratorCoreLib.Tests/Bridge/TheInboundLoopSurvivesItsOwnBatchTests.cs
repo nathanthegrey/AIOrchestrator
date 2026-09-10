@@ -566,6 +566,35 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
             _downloadFailure = failure;
     }
 
+    readonly List<(long MessageId, string? Emoji)> _reactions = [];
+    string? _refuseReactionsReason;
+
+    /// <summary>Every reaction set, in order — the receipt brief D replaced the ✓ message with.</summary>
+    public IReadOnlyList<(long MessageId, string? Emoji)> Reactions
+    {
+        get { lock (_lock) return [.. _reactions]; }
+    }
+
+    /// <summary>Makes every reaction refused, the way Telegram refuses one it will not allow.</summary>
+    public void Refuse_Reactions(string reason)
+    {
+        lock (_lock)
+            _refuseReactionsReason = reason;
+    }
+
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            if (_refuseReactionsReason != null)
+                return Task.FromException(new Exception(_refuseReactionsReason));
+
+            _reactions.Add((messageId, emoji));
+            return Task.CompletedTask;
+        }
+    }
+
+
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken)
     {
         lock (_lock)
@@ -578,9 +607,47 @@ internal sealed class ScriptedInbound_Fake : ITelegramApiClient
     public Task Delete_ForumTopic_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Remove_TopicCreationPin_Async(long messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Send_TypingAction_Async(long? messageThreadId, CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken) => Task.CompletedTask;
+    readonly List<(long MessageId, string Text, int ButtonCount, string Labels)> _buttonEdits = [];
+
+    /// <summary>
+    /// Every edit that rewrote a message AND its keyboard — which is how a probe sees whether the
+    /// status line's four-row bar survived a tap or was replaced by a single button.
+    /// </summary>
+    public IReadOnlyList<(long MessageId, string Text, int ButtonCount, string Labels)> ButtonEdits
+    {
+        get { lock (_lock) return [.. _buttonEdits]; }
+    }
+
+    public Task Edit_MessageTextWithButtons_Async(long messageId, string text, IReadOnlyList<(string Data, string Label)> buttons, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            _buttonEdits.Add((messageId, text, buttons.Count, string.Join(" | ", buttons.Select(button => button.Label))));
+
+        return Task.CompletedTask;
+    }
+
+    public Task Edit_MessageTextWithButtonRows_Async(long messageId, string text, IReadOnlyList<IReadOnlyList<(string Data, string Label)>> buttonRows, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            _buttonEdits.Add((messageId, text, buttonRows.Sum(row => row.Count), string.Join(" | ", buttonRows.SelectMany(row => row).Select(button => button.Label))));
+
+        return Task.CompletedTask;
+    }
+    int _answeredCallbacks;
+
+    /// <summary>How many taps were answered — a tap left unanswered spins on the owner's phone.</summary>
+    public int Answered_Callbacks
+    {
+        get { lock (_lock) return _answeredCallbacks; }
+    }
+
+    public Task Answer_CallbackQuery_Async(string callbackQueryId, string text, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+            _answeredCallbacks++;
+
+        return Task.CompletedTask;
+    }
     public Task Remove_MessageButtons_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Delete_Message_Async(long messageId, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task Send_Photo_Async(long? messageThreadId, string filePath, TelegramSendSounds sound, CancellationToken cancellationToken) => Task.CompletedTask;

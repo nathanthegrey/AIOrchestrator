@@ -401,6 +401,9 @@ internal sealed class TypingRecordingTelegram_Fake : ITelegramApiClient
         return Task.CompletedTask;
     }
 
+    public Task Set_MessageReaction_Async(long messageId, string? emoji, CancellationToken cancellationToken) => Task.CompletedTask;
+
+
     public Task<byte[]> Download_File_Async(string fileId, CancellationToken cancellationToken)
     {
         return Task.FromResult(Array.Empty<byte>());
