@@ -107,11 +107,31 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// door, <see cref="_shutdown"/> is pulled only when the drain grace has run out.
     /// </summary>
     readonly CancellationTokenSource _draining = new();
-    readonly Dictionary<string, Task> _inFlight = [];
+    /// <summary>
+    /// KEYED CASE-INSENSITIVELY, because the key's INPUT is agent-written. Review finding 2026-09-10:
+    /// <c>orchId</c> reaches a close straight from the request JSON with no trim and no
+    /// canonicalisation, while the session store resolves an orchestration through a FILE PATH — which
+    /// is case-insensitive on Windows, where the app runs. So a request saying <c>Fincanva-5</c> closed
+    /// the member successfully and then missed every lookup here, which handed
+    /// <see cref="Bridge.UndeliveredSpokeTraffic_Reporter"/> an empty set and resurrected the false
+    /// alarm this branch exists to fix. Matching the store's own tolerance is the safe direction; the
+    /// alternative is a lookup that silently disagrees with the operation that succeeded.
+    /// </summary>
+    readonly Dictionary<string, Task> _inFlight = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// WHAT EACH IN-FLIGHT TURN IS CARRYING, keyed exactly like <see cref="_inFlight"/> and written and
-    /// removed on the same two lines, so the two cannot disagree about whether a turn is running.
+    /// WHAT EACH IN-FLIGHT TURN IS CARRYING, keyed exactly like <see cref="_inFlight"/> — written
+    /// immediately before it in <see cref="Start_Turn"/> and removed beside it in
+    /// <see cref="Execute_Turn_Async"/>'s <c>finally</c>, both under <see cref="_lock"/>.
+    ///
+    /// <para>
+    /// NOT "the same two lines", which an earlier version of this comment claimed: the write precedes
+    /// <see cref="_inFlight"/>'s by one line and the removal is in another method. If <c>Task.Run</c>
+    /// itself threw, this would keep an entry for a turn that never existed and
+    /// <see cref="Is_TurnInFlight"/> would say false while <see cref="Get_DeliveringIdentities"/> said
+    /// otherwise — a permanent INFO where a WARNING is owed. Theoretical, and named here so the next
+    /// reader checks rather than trusting a sentence (review finding, 2026-09-10).
+    /// </para>
     ///
     /// <para>
     /// IT EXISTS BECAUSE THE CURSOR ANSWERS A DIFFERENT QUESTION. The cursor advances beside
@@ -127,10 +147,15 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// (CLAUDE.md decision 12: the <c>[n]</c> is agent-written and has duplicated in production).
     /// </para>
     /// </summary>
-    readonly Dictionary<string, IReadOnlySet<string>> _delivering = [];
+    readonly Dictionary<string, IReadOnlySet<string>> _delivering = new(StringComparer.OrdinalIgnoreCase);
 
     static readonly IReadOnlySet<string> NOTHING_IN_FLIGHT = new HashSet<string>(StringComparer.Ordinal);
-    readonly Dictionary<string, SessionTracker> _trackers = [];
+    /// <summary>
+    /// Case-insensitive for the same reason as <see cref="_inFlight"/>, and here it matters more: a
+    /// differently-cased <c>orchId</c> would hand the session a FRESH tracker, i.e. a brand-new digest
+    /// hold and a lost "has delivered traffic" flag.
+    /// </summary>
+    readonly Dictionary<string, SessionTracker> _trackers = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
     readonly HashSet<string> _warnedStaleRegistrations = [];
     readonly HashSet<string> _warnedArchiveGaps = [];
@@ -349,7 +374,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </summary>
     static string Describe_SessionKey(string orchId, string memberId)
     {
-        return $"{orchId}/{memberId}";
+        // Trimmed because the inputs are agent-written and the reader of the request JSON trims only
+        // `reason`; the dictionaries keyed by this are case-insensitive, so casing is handled there
+        // rather than by lowercasing a string that also reaches the log.
+        return $"{orchId.Trim()}/{memberId.Trim()}";
     }
 
     public void Tick(DateTime nowLocal)
@@ -571,10 +599,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </para>
     /// <para>
     /// HERE BECAUSE THIS IS WHERE THE CONFIG IS READ AND A LOG IS TO HAND, not because refusals are
-    /// the dispatcher's subject. The better home is the host, at startup, once — the daemon and the
-    /// app both construct this before their first tick, so a line from here reaches the same log a
-    /// moment later; if a host ever wants it earlier it can call the same list. Reported rather than
-    /// taken: <c>AIOrchestrator.Daemon</c> is outside this stage's file set.
+    /// the dispatcher's subject. An earlier version of this paragraph said the better home was the
+    /// host, at startup, and that it was "reported rather than taken" — it was taken on 2026-09-10:
+    /// <see cref="Report_ConfigRejections"/> is called from the engine's <c>Run_Async</c>, and this
+    /// per-tick call stays for the refusal earned by an edit made while the app runs.
     /// </para>
     /// <para>
     /// ONCE PER DISTINCT LINE, AND NOT ONCE PER PROCESS. config.json is re-read every tick, so a
@@ -583,6 +611,13 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// The set of lines is the honest key: the same refusal is said once, a new one is said when it
     /// appears.
     /// </para>
+    /// </summary>
+    /// <summary>
+    /// The same list, said at BOOT — called once from the engine's <c>Run_Async</c> so an operator
+    /// whose setting was overruled reads it beside the startup banner rather than a tick later among
+    /// session traffic, and reads it at all on a host that is draining (<see cref="Tick"/> returns
+    /// before its own call in that state). Shares
+    /// <see cref="Report_ConfigRejections_Once"/>'s dedupe, so the pair can never say a thing twice.
     /// </summary>
     public void Report_ConfigRejections()
     {

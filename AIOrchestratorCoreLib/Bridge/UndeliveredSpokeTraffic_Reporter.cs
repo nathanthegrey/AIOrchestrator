@@ -52,6 +52,17 @@ namespace AIOrchestratorCoreLib.Bridge;
 /// is what the caller distinguishes with <c>AnythingDropped</c>.
 /// </para>
 /// <para>
+/// BUT NOTHING RESOLVES THAT CONDITIONAL, AND THE COMMIT THAT ADDED IT OVERSOLD THIS (review finding,
+/// 2026-09-10). Once <c>Close_Member</c> has run, <c>TurnSources_Resolver</c> skips the member for
+/// good: the entries can never be pending again, the archived-undelivered warning only iterates
+/// RESOLVED sources, and no later close re-examines them. So if that turn does fail, the INFO line
+/// above is the only record that will ever exist — better than a WARNING with a false claim, and not
+/// the same thing as the drop being caught. Closing it properly means one warning on the turn's
+/// failure path, which already holds the pending set and can ask the store which members are closed;
+/// that is left as an OPEN item rather than added untested at the end of a long session, and it is
+/// written down in <c>docs/superpowers/specs/2026-09-10-brief-for-a-fresh-agent.md</c>.
+/// </para>
+/// <para>
 /// It lives here rather than in <c>BridgeEngineModel</c> because that file takes no new lines by
 /// inertia (`.claude/rules/code-conventions.md`): the engine keeps the one call.
 /// </para>

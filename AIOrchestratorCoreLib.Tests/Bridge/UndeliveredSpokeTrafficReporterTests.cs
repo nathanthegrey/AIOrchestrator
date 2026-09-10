@@ -1,5 +1,7 @@
 using AIOrchestratorCoreLib.Bridge;
 using AIOrchestratorCoreLib.Channels;
+using AIOrchestratorCoreLib.Logging.OrchestrationLog;
+using AIOrchestratorCoreLib.Logging.OrchestrationLogEntry;
 using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
 using AIOrchestratorCoreLib.Running.SessionLaunch;
@@ -136,6 +138,45 @@ public class UndeliveredSpokeTrafficReporterTests : IDisposable
         Assert.Null(UndeliveredSpokeTraffic_Reporter.Describe_Pending_OrNull(_paths, "repo-1", "imp-1", NOTHING_IN_FLIGHT));
     }
 
+    /// <summary>
+    /// THE LEVEL IS THE WHOLE POINT OF THE SPLIT, AND NOTHING TESTED IT. Review finding 2026-09-10:
+    /// every other case here calls <c>Describe_Pending_OrNull</c> directly, so inverting the <c>if</c>
+    /// in <c>Log_BeforeClosing</c> — sending a real loss to INFO and a routine in-flight close to
+    /// WARNING — left all of them green. That is decision 20's rule: a test that cannot fail pins
+    /// nothing.
+    /// </summary>
+    [Fact]
+    public void ADroppedEntryIsAWarning_AndAnEntryInFlightIsNot()
+    {
+        Write_Channel(("implementer", 3, "REPORT — done"));
+        Write_SupervisorCursor(highWater: 0, delivered: []);
+
+        var whenNothingIsCarryingIt = new LevelRecordingLog_Fake();
+        UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, whenNothingIsCarryingIt, "repo-1", "imp-1", NOTHING_IN_FLIGHT);
+
+        Assert.Contains("WARNING", whenNothingIsCarryingIt.Lines.Single());
+        Assert.Contains("never handed", whenNothingIsCarryingIt.Lines.Single());
+
+        var whenATurnIsCarryingIt = new LevelRecordingLog_Fake();
+        UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, whenATurnIsCarryingIt, "repo-1", "imp-1", new HashSet<string>([Identity_Of(3)], StringComparer.Ordinal));
+
+        Assert.Contains("INFO", whenATurnIsCarryingIt.Lines.Single());
+        Assert.DoesNotContain("never handed", whenATurnIsCarryingIt.Lines.Single());
+    }
+
+    /// <summary>Nothing is pending, so the close says nothing at all — at any level.</summary>
+    [Fact]
+    public void WithNothingPending_TheCloseIsSilent()
+    {
+        Write_Channel(("supervisor", 1, "BRIEF — port the ledger"));
+        Write_SupervisorCursor(highWater: 1, delivered: [Identity_Of(1)]);
+
+        var log = new LevelRecordingLog_Fake();
+        UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, log, "repo-1", "imp-1", NOTHING_IN_FLIGHT);
+
+        Assert.Empty(log.Lines);
+    }
+
     void Write_Channel(params (string Author, int Index, string Subject)[] entries)
     {
         var file = _paths.Get_ImplementerChannelFile("repo-1", "imp-1");
@@ -153,6 +194,18 @@ public class UndeliveredSpokeTrafficReporterTests : IDisposable
         var state = PrintSessionState_Factory.Create_New("sid", SessionRoles.Supervisor, "repo-1", SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, _root, null, _paths.Get_OwnerChannelFile("repo-1"), [cursor]);
 
         PrintSessionState_Store.Write(stateFile, state);
+    }
+
+    /// <summary>Records the LEVEL as well as the text, because the level is what the split decides.</summary>
+    sealed class LevelRecordingLog_Fake : IOrchestrationLog
+    {
+        public List<string> Lines { get; } = [];
+
+        public void Log_Info(string orchId, string message) => Lines.Add($"INFO {message}");
+        public void Log_Warning(string orchId, string message) => Lines.Add($"WARNING {message}");
+        public void Log_Error(string orchId, string message, Exception? exception) => Lines.Add($"ERROR {message}");
+
+        public event Action<IOrchestrationLogEntry>? EntryLogged;
     }
 
     /// <summary>The identity the cursor stores for an entry — the digest, never the agent-written index (decision 12).</summary>
