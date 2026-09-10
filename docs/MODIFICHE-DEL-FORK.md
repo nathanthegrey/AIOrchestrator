@@ -4,9 +4,13 @@ Questo file racconta a chi non ha seguito giorno per giorno **che cosa abbiamo c
 e per quale ragione**. Racconta idee e decisioni, non codice: chi vuole il dettaglio tecnico ha i
 messaggi di commit e le spec in `docs/superpowers/specs/`.
 
-Base: `ours/integration` sopra `master`. Al 2026-09-09 sono **80 commit** raggruppati in **23 rami
-`stage/*`**, ognuno tenuto integrabile su `master` per conto proprio. Tutto quello che c'è qui è
-girato in produzione sul server dal 2026-09-09, con la suite verde (2756 test, 9 saltati, 0 rossi).
+Base: `ours/integration` sopra `master`. Al 2026-09-10 sono **152 commit** raggruppati in **50 rami
+`stage/*`** fusi, ognuno tenuto integrabile su `master` per conto proprio. Tutto quello che c'è qui fino
+alla sezione 5 è girato in produzione sul server dal 2026-09-09; il blocco Telegram della sezione 6
+(rami `8a`–`8d`, `9a`, `9b`, `11`) è fuso e va in produzione il 2026-09-10. Suite: **3187 test, 9
+saltati**, verde in seriale a macchina quieta; in parallelo sotto carico ha ancora circa un rosso a
+corsa nella famiglia dei test a tempo reale (misurato il 10/9, due corse, due test diversi, entrambi
+verdi da soli) — è il primo debito aperto della sezione 7.
 
 ---
 
@@ -43,7 +47,7 @@ Un lettore che scopre il prezzo da solo, dopo, smette di fidarsi del resto del f
 > **Dove.** I rami `stage/*`, per chi poi vuole andare a vedere.
 
 **Dove metterla.** In fondo alla sezione tematica giusta. Se nessuna sezione va bene, se ne apre
-una nuova; l'ordine dentro una sezione non ha significato. La sezione 6 è l'unica che parla di
+una nuova; l'ordine dentro una sezione non ha significato. La sezione 7 è l'unica che parla di
 lavoro non ancora fatto: chi ci scrive dentro mette la data, e chi finisce una di quelle cose la
 sposta su, in una voce vera.
 
@@ -80,19 +84,21 @@ si possono leggere e decidere dalla schermata di blocco del telefono.
 
 **Dove.** `stage/3-owner-questions-and-attachments`.
 
-### «Parliamone» — un bottone che non spende niente
+### «Parliamone» — un bottone che non spende niente → ritirato il 2026-09-10
 
-**Com'era.** Per capire una domanda bisognava rispondere, e rispondere significava chiuderla.
+**Com'era (dal 2026-09-08 al 2026-09-10).** Ogni domanda offriva «💬 Parliamone»; la domanda restava
+viva con i suoi bottoni e, finché si parlava, quello che si scriveva non chiudeva niente.
 
-**Cos'è adesso.** Ogni domanda offre anche «💬 Parliamone». La domanda resta viva e segnata come in
-discussione: finché si parla, quello che si scrive non chiude niente, e solo un tocco su un'opzione
-decide.
+**Perché è stato ritirato.** Sul telefono un tocco che non cambia il messaggio è un tocco che non si
+vede: l'unico riscontro era l'avviso di un secondo di Telegram. Misurato sul canale di produzione il
+2026-09-09: dodici tocchi in un pomeriggio, **quattro nello stesso minuto**, finché il supervisore ha
+scritto «ti ho già detto tutto, tocca un'opzione». Il bottone funzionava; era muto. E la domanda lasciata
+aperta «in discussione» aveva un secondo effetto: il testo che il tocco mandava al supervisore passava per
+una risposta scritta e, se c'era un'altra domanda aperta, la chiudeva a nome del proprietario. La regola
+che ne è uscita è nella voce «Ogni tocco cambia il messaggio toccato».
 
-**Perché.** Il proprietario rispondeva alle domande con domande — «di che metodi parli?», «quale
-parte?». Se ogni parola scritta chiude qualcosa, chiedere un chiarimento diventa rischioso, e allora
-si smette di chiederlo.
-
-**Dove.** `stage/3-owner-questions-and-attachments`.
+**Dove.** `stage/3-owner-questions-and-attachments` (introdotto), `stage/8a-a-tap-closes-its-message`
+(ritirato).
 
 ### Una risposta appartiene alla sua domanda
 
@@ -204,6 +210,134 @@ contava 183 fallimenti, ognuno un processo in più, e ogni scambio col proprieta
 messaggio. Su Telegram si continua a parlare in italiano.
 
 **Dove.** `stage/7c-no-translation-layer`, `stage/7h-remove-translator`.
+
+### Ogni tocco cambia il messaggio toccato
+
+**Com'era.** Un'opzione toccata cambiava il messaggio e toglieva i bottoni; «Parliamone» e «Spiegami le
+opzioni» no. E il testo che un tocco mandava al supervisore viaggiava come se fosse una riga scritta dal
+proprietario: con esattamente un'altra domanda aperta, quel testo la chiudeva e la marcava «risposta».
+Il 2026-09-09 la domanda sui processi orfani — ad alto rischio — risulta «risposta» con la frase
+interna di un bottone toccato su un'altra domanda; nessuno l'ha mai decisa.
+
+**Cos'è adesso.** Un solo bottone dell'app, «💬 Let's talk»: al tocco i bottoni spariscono e il messaggio
+dice «Ok — tell me what you have in mind»; il supervisore discute e poi **ri-fa la domanda** con opzioni
+fresche (prima gli era vietato). Il testo che nasce da un tocco non può più chiudere nessuna domanda.
+Quando un codice a quattro cifre scade, l'app guarda il registro prima di dire «la domanda è ancora
+aperta».
+
+**Perché.** Un bottone di cui non si vede l'effetto è, per chi lo tocca, un bottone rotto. E una domanda
+che si chiude da sola con parole che nessuno ha detto è il verbale di una decisione mai presa — l'errore
+che tutto il sistema di domande esiste per evitare. Il prezzo: dopo la chiacchierata il supervisore deve
+ri-chiedere, un messaggio in più; sulle chat del 9/9 le domande dopo una discussione cambiavano quasi
+sempre, quindi i bottoni vecchi non servivano comunque.
+
+**Dove.** `stage/8a-a-tap-closes-its-message`.
+
+### Un ✓ è un ✓: il proprietario non viene mai rassicurato a vuoto
+
+**Com'era.** Il ✓ partiva appena il messaggio era letto, prima di sapere dove finiva: un messaggio in un
+argomento sconosciuto veniva scartato con una riga di registro, uno in un'orchestrazione chiusa finiva in
+un canale che nessuno leggeva più — e il ✓ arrivava lo stesso. Un documento mandato senza didascalia non
+produceva niente e veniva comunque segnato come letto. Dopo trenta minuti di Telegram irraggiungibile,
+le voci non consegnate venivano buttate via con una riga di registro.
+
+**Cos'è adesso.** Il ✓ arriva solo se il messaggio è stato scritto nel canale giusto; negli altri casi
+arriva una riga che dice dove si è fermato («questa orchestrazione è chiusa»). I documenti si scaricano
+come le foto e compaiono nel canale con `FILE:`. Le voci che non partono si **parcheggiano** e, alla prima
+consegna riuscita, arrivano come un unico documento. Se una foto del proprietario non si scarica, lo sa
+il proprietario, non solo l'agente.
+
+**Perché.** Le parole del proprietario: «non dirmi che è arrivato quando non è arrivato». Una ricevuta
+falsa è peggio di nessuna ricevuta, perché toglie la voglia di controllare.
+
+**Dove.** `stage/8b-no-lost-messages-no-false-receipts`, `stage/11`.
+
+### Suona chi parla al proprietario: il supervisore sì, l'app no
+
+**Com'era.** Tutto suonava: le ricevute, lo stato ogni mezz'ora, gli avvisi, le conferme dell'app. E non
+tutto quello che il supervisore scriveva arrivava subito: solo domande, risposte attese e blocchi; il
+resto veniva trattenuto e arrivava dopo cinque minuti di silenzio, come testo piatto con gli asterischi
+del Markdown in chiaro — proprio i messaggi più importanti della giornata (il riepilogo finale, il
+browser pass) erano i meno leggibili. Misurato su un argomento il 2026-09-09, 15:50–21:29: circa
+trentatré messaggi del bot contro otto del proprietario, e circa la metà non era per lui.
+
+**Cos'è adesso.** Regola unica: **se parla il supervisore suona, se parla l'app non suona**, salvo gli
+avvisi su cui il proprietario può agire (budget, limite d'uso, una domanda che aspetta da venticinque
+minuti). Tutto ciò che il supervisore scrive sul canale del proprietario arriva subito, formattato, con
+suono; il filtro che tratteneva la «narrazione» non c'è più, e con lui la rete dei cinque minuti. La
+ricevuta è ✓ che diventa ✓✓ in silenzio; la frase «è occupato» compare solo se l'attesa supera i tre
+minuti, con il contatore. L'avviso «aspetta la tua risposta» parte solo dopo una **vera** domanda, una
+volta sola per domanda, mai mentre il supervisore è fermo per limite d'uso — prima partiva su qualunque
+ultima parola del supervisore, anche dopo «non mi serve altro da te», e si ripeteva a ogni scambio. Le
+anteprime dei link sono spente. I due percorsi che rispedivano «l'ultima cosa detta» passano dal
+renderer come tutto il resto; il renderer non annida più codice dentro il grassetto (Telegram lo rifiuta
+— caso mai scattato in produzione: zero su 4.558 voci specchiate, ma corretto).
+
+**Perché.** Il telefono che vibra è l'unico segnale che il proprietario non può ignorare; spenderlo per
+uno stato ripetuto significa che la domanda vera arriva in mezzo al rumore. Il prezzo: il supervisore ora
+suona **sempre** quando scrive al proprietario, quindi il freno alle chiacchiere è nella sua istruzione e
+nel richiamo di brevità, non più in un filtro dell'app.
+
+**Dove.** `stage/8c-the-phone-rings-only-for-the-supervisor`.
+
+### Uno stato solo, in fondo al topic, con sei campi veri
+
+**Com'era.** Due stati nello stesso argomento, entrambi dedotti dall'app leggendo file: uno «STATUS» ogni
+mezz'ora come messaggio nuovo da quindici righe (nove delle quali «chiuso»), e una riga «PULSE» con i
+bottoni, editata. Dicevano cose vere a metà: «il supervisore aspetta te» mentre era fermo per limite
+d'uso; «5 in corso» con tutti i membri chiusi (contava le righe del piano, non le sessioni); «adesso:
+FIN-D-293a» ripetuto per cinque ore dopo che 293 era stato fuso; «invariato da 3 h 15» in tre ore con due
+merge e tre decisioni; e gergo interno come «finestra di scrittura lasciata aperta».
+
+**Cos'è adesso.** Lo stato periodico non esiste più. Resta **una** riga PULSE in fondo, silenziosa,
+editata sul posto, ripubblicata in fondo solo se è sepolta **e** il contenuto è cambiato (il battito
+«updated HH:MM» e i minuti delle durate — arrotondate a cinque — non contano come cambiamento). Sei campi,
+in quest'ordine: che cosa aspetta il proprietario (domande aperte e righe del piano bloccate su di lui,
+con il nome); lo stato del supervisore **dichiarato da lui** a fine turno, più «fermo per limite, riprende
+alle HH:MM» quando lo sa l'app; i membri vivi, uno per riga fino a quattro, con il titolo del compito e
+da quanto (i chiusi come numero); l'ultimo evento con la sua ora; fusi/totale («fusi», non «fatti»);
+l'ora dell'aggiornamento. Il nome dell'argomento porta solo ❓ (aspetta te), ⏸ (fermo per limite), 🏁
+(chiuso) e i due che mette il proprietario, 🧪 (`/test`) e ✅ (`/done`); le modalità (🌙 🔕 ✈ 🤐 💻)
+stanno nell'intestazione di PULSE. La barra dei comandi è `/pending /left /tail /limits /merge /close`;
+il General ha il suo cruscotto con `/summary /pending /limits /resume /dnd_all`. Il «non disturbare»
+trattiene solo ciò che suona: PULSE e cruscotto continuano ad aggiornarsi in silenzio.
+
+**Perché.** Quando si apre un argomento si cerca una cosa sola: «c'è qualcosa che aspetta me, e cosa?».
+Nessuno dei due stati vecchi lo diceva, e una riga di stato che mente una volta insegna a non leggerla
+più. Il prezzo: senza lo stato ogni mezz'ora non c'è più una storia dello stato su Telegram — resta nei
+file, e la narrativa vera la fanno i messaggi del supervisore, che ora suonano tutti.
+
+**Dove.** `stage/8c-the-phone-rings-only-for-the-supervisor`, `stage/8d-pulse-glyphs-and-the-general-bar`.
+
+### Le ricevute sono reazioni, non messaggi
+
+**Com'era.** Ogni messaggio del proprietario faceva nascere un messaggio del bot (✓, poi ✓✓, con il
+bottone ⏸ «aspetta»): un messaggio dell'app per ogni messaggio della persona.
+
+**Cos'è adesso.** Il bot mette una **reazione** sul messaggio del proprietario: 👀 quando l'ha scritto nel
+canale, sostituita da 👌 quando la sessione lo prende in mano. Nessun messaggio, nessuna notifica; il
+messaggio ✓ resta solo come ripiego se Telegram rifiuta la reazione. Il bottone ⏸ passa nella barra
+PULSE (⏸ `/wait` ↔ ▶ `/go`, con il conteggio dei trattenuti); `WAIT` e `GO` scritti restano.
+
+**Perché.** L'argomento deve contenere la conversazione e lo stato, non il rumore di fondo dell'app.
+Un vincolo di Telegram ha scelto le emoji: i bot possono mettere una sola reazione per messaggio, da una
+lista fissa in cui ✅ non c'è.
+
+**Dove.** `stage/9c-receipts-are-reactions` (in consegna il 2026-09-10).
+
+### Chiudere un'orchestrazione cancella il suo argomento, davvero
+
+**Com'era.** Alla chiusura l'app chiedeva a Telegram di cancellare l'argomento e non guardava la
+risposta: se falliva — rete, permessi, limite di velocità — l'argomento restava lì per sempre e l'app
+non se ne ricordava.
+
+**Cos'è adesso.** La cancellazione si ritenta rispettando i tempi che Telegram chiede, viene annotata
+prima del primo tentativo, e a ogni avvio l'app paga i conti che il processo precedente non ha potuto
+chiudere. Un rifiuto permanente viene detto al proprietario una volta sola in General. La scelta fra
+cancellare e archiviare è del proprietario: **cancellare**, perché col tempo saranno centinaia di
+argomenti e quelli chiusi in lista sono rumore; la storia resta nei file su disco.
+
+**Dove.** `stage/9a-a-closed-topic-really-goes`.
 
 ---
 
@@ -778,30 +912,155 @@ l'unico controllo che ha trovato qualcosa.
 
 **Dove.** raccontata in `docs/superpowers/specs/2026-09-09-report-lavoro-e-runbook.md`.
 
+### Un solo metro per «troppo lungo», e le istruzioni dicono quello che il codice fa
+
+**Com'era.** Due misure diverse della stessa regola sulla stessa voce: cinque righe in un posto, sei in
+un altro, entrambe attive; le istruzioni del supervisore dicevano «etichette fino a trenta caratteri» dove
+il codice tagliava a ventotto, promettevano «da due a quattro opzioni» che nessuno controllava, e
+consigliavano di aprire con «noted —», che il controllo segnalava come chiacchiera. Il supervisore poteva
+ricevere due correzioni diverse per lo stesso messaggio, e una per aver seguito il suo manuale.
+
+**Cos'è adesso.** Una costante sola — cinque righe, seicento caratteri — letta da chi misura e da chi
+controlla; da due a quattro opzioni per davvero (dalla quinta in su: correzione al supervisore e bottoni
+numerati); ventotto anche nel manuale; via l'esempio «noted —»; e il paragrafo «solo tre tipi di voce
+arrivano al telefono» riscritto, perché dopo la sezione 6 arriva tutto quello che il supervisore scrive.
+
+**Perché.** Una regola che vive in due posti è due regole, e prima o poi lo diventa (è la lezione della
+decisione 12 del file di istruzioni). Il resto di questo lavoro — far scrivere le voci attraverso uno
+strumento che controlla prima di scrivere, così la grammatica dei marcatori vive in una costante letta da
+chi scrive e da chi legge — è deciso e sta nella sezione 7.
+
+**Dove.** `stage/8e-one-brevity-ceiling` (in consegna il 2026-09-10).
+
 ---
 
-## 6. Che cosa stiamo facendo adesso
+## 6. Il ponte con Telegram: che cosa regge sotto
+
+L'audit del 2026-09-09 sull'integrazione Telegram (i brief in
+`docs/superpowers/specs/2026-09-09-telegram-briefs-A-B-C.md`) ha trovato, oltre a quello che si vede sul
+telefono, difetti nel modo in cui il ponte parla con Telegram. Queste sono le regole che valgono adesso.
+
+### Due ponti sullo stesso bot vengono detti, non subiti
+
+**Com'era.** Telegram accetta un solo ascoltatore per bot. Se l'app Windows e il servizio sul server
+ascoltavano insieme, Telegram rispondeva «conflitto» e il ponte lo trattava come un errore qualunque:
+riprovava ogni minuto per sempre, in silenzio, e i messaggi del proprietario non arrivavano più a nessuno.
+È il guasto più comune di tutto l'ecosistema dei ponti Telegram, plugin ufficiali compresi.
+
+**Cos'è adesso.** Il conflitto è riconosciuto per quello che è: un messaggio in General che nomina la
+macchina che sta parlando («un altro ponte ascolta con questo bot; io sono …»), una riga di registro per
+cambio di stato, una al ripristino. All'avvio il ponte verifica il bot e toglie un eventuale webhook. Una
+chiave di configurazione (`telegramInbound`: `poll` o `off`) dice a un host di non ascoltare; senza chiave
+ascolta, così niente smette di ricevere in silenzio.
+
+**Perché.** Un lucchetto su file protegge solo due processi sulla stessa macchina; due macchine con
+cartelle diverse nessun file le vede. L'unica cosa onesta è dire al proprietario quale delle due fermare.
+
+**Dove.** `stage/8b-no-lost-messages-no-false-receipts`.
+
+### Un aggiornamento cattivo costa solo se stesso
+
+**Com'era.** Il ponte segnava «letto fino a qui» solo dopo aver gestito tutto il lotto di aggiornamenti
+ricevuto da Telegram: un'eccezione su uno faceva rigiocare tutti gli altri. Il 2026-09-08 un comando
+solo-Windows lanciato sul server Linux ha fatto saltare il gestore, e lo stesso lotto — tocchi compresi —
+è stato rieseguito quattro volte.
+
+**Cos'è adesso.** Ogni aggiornamento è isolato e segnato da solo; un tocco arrivato due volte (Telegram lo
+fa) viene riconosciuto dal suo identificativo e agito una volta. I comandi che hanno bisogno di uno
+schermo (mostrare una finestra, fotografarla, disporle) chiedono all'host se ce l'ha: su Linux e, in
+futuro, su macOS rispondono in una riga «non disponibile su questo host» invece di lanciare.
+
+**Perché.** La scelta è «al più una volta»: un messaggio perso si vede (manca il ✓), un comando eseguito
+due volte no.
+
+**Dove.** `stage/8b-no-lost-messages-no-false-receipts`.
+
+### Il limite di velocità conta tutto, e sopravvive a un riavvio
+
+**Com'era.** Il contatore che rispetta il tetto di Telegram (venti messaggi al minuto per gruppo)
+contava solo gli invii che creano un messaggio; modifiche, cancellazioni e risposte ai tocchi — le
+chiamate più frequenti — passavano fuori dal contatore e non venivano ritentate. Al riavvio il contatore
+partiva pieno: dopo un crash in loop, dieci messaggi in un secondo. La lettura degli aggiornamenti non
+passava da nessun contatore.
+
+**Cos'è adesso.** Due contatori: uno per gli invii, uno per il resto (modifiche, cancellazioni, tocchi,
+letture), con i tempi di attesa che Telegram chiede rispettati in entrambi. Il contatore degli invii
+**si ricorda** dov'era: i suoi due numeri stanno nello stesso file di stato riscritto a ogni giro, e un
+riavvio riparte da lì — niente raffica gratis dopo un crash, niente attesa artificiale dopo un riavvio
+normale. Il secondo contatore parte vuoto.
+
+**Perché.** Un limitatore che una parte delle chiamate aggira non limita niente; un contatore che si
+azzera a ogni riavvio premia proprio il processo che si riavvia troppo.
+
+**Dove.** `stage/9b-telegram-hygiene`, `stage/11`.
+
+### Gli errori di Telegram si riconoscono da una tabella, non da una frase
+
+**Com'era.** In quattro punti diversi il ponte decideva cosa fare cercando pezzi di frasi inglesi nel
+testo dell'errore di Telegram («message to edit not found», «not modified»…): una parola cambiata da
+Telegram e il comportamento cambiava in silenzio.
+
+**Cos'è adesso.** Una tabella sola, da codice e descrizione dell'errore al caso che il ponte distingue,
+fissata da test. Lo stesso per i file: i limiti di Telegram (dieci megabyte per una foto, con le regole su
+dimensioni e proporzioni; cinquanta per un documento; venti in scaricamento) sono controllati prima di
+inviare, e un rifiuto viene detto all'agente con il rimedio. I messaggi vengono misurati come li misura
+Telegram (dopo il parsing dei tag, non contando il markup) e non si spezzano mai a metà di un'emoji.
+
+**Perché.** Ogni regola letta da Telegram e non scritta da noi è una regola che possiamo solo scoprire
+rotta; scriverla una volta, con un test, è l'unico modo di saperlo prima.
+
+**Dove.** `stage/9b-telegram-hygiene`.
+
+### Colori, menu e filtri
+
+**Cos'è adesso.** Ogni argomento nasce con il colore del suo repository (sei colori, a rotazione stabile).
+Il menu ☰ tiene tutti i trentadue comandi, in inglese come ogni stringa dell'app, ordinati per uso e con
+quelli solo-Windows in fondo. I tocchi sui bottoni e i messaggi di servizio vengono accettati solo se
+arrivano dal nostro supergruppo, non solo dall'utente giusto. Il livello che parla con Telegram ha i suoi
+primi test.
+
+**Perché.** Sono le cose che non si notano finché ci sono, e si notano tutte insieme quando mancano.
+
+**Dove.** `stage/9b-telegram-hygiene`, `stage/10`, `stage/11`.
+
+---
+
+## 7. Che cosa stiamo facendo adesso
 
 Questa sezione è l'unica che parla al futuro, quindi invecchia in fretta: **aggiornata al
-2026-09-09, notte**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
+2026-09-10, pomeriggio**. Chi la legge dopo la confronti con `docs/superpowers/specs/`, dove il piano vive.
 
-**Dov'è il costo che resta.** Le sessioni fresche hanno tolto di mezzo il contesto trascinato da un
-turno all'altro; adesso la spesa è concentrata **dentro** i turni lunghi, quelli che arrivano fino
-alla scadenza. Il prossimo intervento è un consiglio dato a metà turno — «arriva a un punto stabile,
-salva, racconta» — mentre la scadenza resta la rete dura di prima. È un suggerimento, non un
-divieto: chi lavora deve poter decidere che il punto stabile è più in là.
+**Il blocco Telegram va in produzione oggi.** Binario **e** kit nello stesso passo: le istruzioni del
+supervisore sono cambiate (ri-fa la domanda dopo «Let's talk», dichiara il suo stato a fine turno per
+PULSE); con il binario nuovo e le istruzioni vecchie le decisioni discusse non verrebbero più riproposte.
+La prima sera è una misura: quante volte vibra il telefono, e se i sei campi di PULSE dicono il vero.
 
-**Le altre cose in fila:** un riassunto di risveglio per il supervisore, così i messaggi meccanici
-non gli comprano un turno intero; il modello scelto direttamente nell'incarico invece che nella
-configurazione, e la chiave del revisore separata da quella dell'implementatore, che oggi sono la
-stessa; e infine il supervisore fresco anche lui, con il suo pacchetto — che è già costruito e sta
-lì spento.
+**In consegna.** Le ricevute come reazioni (sezione 1) e il metro unico di brevità (sezione 5).
+
+**Deciso, non iniziato.** Le voci di canale scritte attraverso uno strumento che controlla prima di
+scrivere: la grammatica dei marcatori (`QUESTION:`, `OPTION:`…) oggi vive in tre manuali e in chi la
+legge, e ogni scostamento è silenzioso. Lo strumento calcola da sé numero e ora della voce, rifiuta un
+autore che non è il ruolo della sessione, e scrive un tipo dichiarato che chi legge — ponte, riassunto,
+pacchetto di memoria — usa al posto di indovinare dalla prima parola. Chi scrive e chi legge leggono la
+stessa costante. Parte da solo, dopo che il blocco Telegram è in produzione, tenendo per un periodo la
+lettura di entrambe le forme.
 
 **Cose aperte, dette perché non sembrino risolte.**
+- **La suite non è affidabile sotto carico.** Verde in seriale a macchina quieta; in parallelo con
+  un'altra suite in corsa ha circa un rosso a corsa, sempre in un test a tempo reale diverso, sempre verde
+  da solo. Ogni «fatto quando» futuro dipende da questo: la proposta è iniettare l'orologio in tutte le
+  sonde a tempo reale e bonificare le 113 fixture che cancellano la cartella temporanea senza guardia.
+  In attesa della decisione del proprietario.
 - I guadagni misurati sono **misurati prima della messa in produzione**: sul server, dopo, non sono
   ancora stati rifatti. Sono attesi, non verificati.
+- La grazia di spegnimento del servizio (36 minuti) non è onorata dall'unità di sistema (90 secondi):
+  un riavvio uccide ancora i turni in corso. Configurazione del server, non codice.
 - Il file di istruzioni del progetto principale è stato modificato benché sia territorio di chi ha
-  scritto l'originale: andrà risolto al prossimo allineamento.
+  scritto l'originale: andrà risolto al prossimo allineamento. Stesso destino per due voci di quel file
+  che il codice non rispecchia più (la vista unificata «taggata» dei canali, che non esiste; il guardiano
+  elencato fra i tagli e costruito).
+- Un ramo (`stage/4c-closing-turn`) è rimasto fuori dall'integrazione senza che nessuno ne rivendichi la
+  paternità: va fuso o buttato, a chi l'ha scritto.
 
 **Le tre modifiche di quella notte sono state fermate, corrette e consegnate il giorno dopo.** Il
 consiglio a metà turno, il riassunto di risveglio del supervisore e la chiave del revisore sono state
