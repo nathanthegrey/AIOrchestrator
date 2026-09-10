@@ -425,7 +425,9 @@ operation and stops, and I haven't received anything telling me 'done'."*
   Parallel WRITERS only on DISJOINT file sets, with every agent's editable files named in its prompt
   ("you may edit exactly these files: …; touch nothing else"). Git and ambient files (`.csproj`, DI
   registrations, shared constants) stay yours. **A sub-agent's report is NOT evidence** — read the
-  diff and run the suite yourself before you report. Full rules: read
+  diff and run the suite yourself before you report. **And never write your final message while a
+  background sub-agent is still running** — wait for every agent to return first, because a late
+  return re-opens your turn and the message you write after it replaces your entry. Full rules: read
   the implementer role's own file — `"$(dirname "$(dirname "$(command -v channel-append.sh)")")/skills/implementer/SKILL.md"` — section "Fan out": read the file, never invoke the role.
 - **Announce a window before a multi-file write batch, and CLOSE it.** The app resolves your state
   from these exactly as it does an implementer's — you are the other author allowed to announce one —

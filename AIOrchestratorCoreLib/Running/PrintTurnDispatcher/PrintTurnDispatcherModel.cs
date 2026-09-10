@@ -67,6 +67,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     const string DEADLINE_KILLS_SUBJECT = PrintTurn_Words.DEADLINE_KILLS_SUBJECT;
     const string TURN_LIMITED_SUBJECT = PrintTurn_Words.TURN_LIMITED_SUBJECT;
     const string MISADDRESSED_SUBJECT = PrintTurn_Words.MISADDRESSED_SUBJECT;
+    const string SUPERSEDED_FINAL_SUBJECT = PrintTurn_Words.SUPERSEDED_FINAL_SUBJECT;
     const int ENTRY_APPEND_ATTEMPTS = 3;
     const int ENTRY_APPEND_RETRY_MILLISECONDS = 300;
     /// <summary>
@@ -1333,12 +1334,25 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         if (TurnOutcomes.Is_Success(result))
         {
+            // BEFORE THE TURN'S OWN ENTRY, in the order they were written. A final message the turn
+            // then superseded is content the result does not carry, and this is the only place it
+            // still exists — see ITurnResult.SupersededFinals.
+            if (!await Write_SupersededFinals_Async(state, sources, result, requestId))
+            {
+                _log.Log_Error(state.OrchId, $"Turn {requestId} completed but a superseded final message could not be appended — the channel stayed locked; the turn will be retried", null);
+                Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
+                return;
+            }
+
             if (!(await Write_Reply_Async(state, sources, result.ResultText)).AllLanded)
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
                 return;
             }
+
+            // AFTER BOTH ARE FILED, because it says both were.
+            Append_SupersededNotice(state, result);
 
             Append_TurnEnded(state, requestId, attempt, pending, result, outcome, null);
 
@@ -1734,6 +1748,68 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// thing a non-null signature bought was a compiler warning at the one call site — and a signature
     /// that promises what its caller cannot give is a lie that the next reader resolves with a `!`.
     /// </param>
+    /// <summary>
+    /// FILES EVERY FINAL MESSAGE THE TURN SUPERSEDED, oldest first, through the SAME splitters and
+    /// under the same author word as the turn's own entry — because that is what each of them was:
+    /// a message the session wrote intending it to be its entry.
+    ///
+    /// <para>
+    /// Measured 3× on 2026-09-09/10: a session writes its report, a BACKGROUND sub-agent
+    /// (<c>Task</c> with <c>run_in_background</c>) returns, the CLI resumes the session, a later
+    /// message is produced, and THAT becomes the entry. A 19,771-character report and a nine-agent
+    /// review were lost that way, and both turns reported success.
+    /// </para>
+    /// <para>
+    /// IT CAN COST A SECOND, DIFFERENT ANSWER, exactly as <see cref="Write_Reply_Async"/> can and for
+    /// the same reason: a superseded final that lands, followed by a final one that cannot, fails the
+    /// turn and re-runs it, so what landed here may be written again. That trade is the existing one
+    /// — bad WHERE SOMEONE CAN SEE IT — and it is not made worse by writing these first: writing them
+    /// AFTER the entry would file them behind the answer they preceded, which is the one ordering a
+    /// reader cannot recover from.
+    /// </para>
+    /// </summary>
+    async Task<bool> Write_SupersededFinals_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, ITurnResult result, string requestId)
+    {
+        if (result.SupersededFinals.Count == 0)
+            return true;
+
+        _log.Log_Info(state.OrchId, $"Turn {requestId} wrote {result.SupersededFinals.Count} final message(s) before the one that became its entry — filing {(result.SupersededFinals.Count == 1 ? "it" : "them")} first so nothing is lost");
+
+        foreach (var superseded in result.SupersededFinals)
+        {
+            if (!(await Write_Reply_Async(state, sources, superseded)).AllLanded)
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// TELLS THE SESSION, in its own channel, that it did this — the same shape as the misaddressed
+    /// note, and for the same reason: the alternative is a channel that has grown an entry nobody
+    /// asked for, with no way to find out why. Agent audience (decision 15): the action is the
+    /// session's, and the owner cannot take it.
+    /// </summary>
+    void Append_SupersededNotice(IPrintSessionState state, ITurnResult result)
+    {
+        var count = result.SupersededFinals.Count;
+
+        if (count == 0)
+            return;
+
+        var plural = count == 1 ? string.Empty : "s";
+
+        ChannelAppender.Append_AppEntry(
+            state.ChannelFilePath,
+            AppEntryAudiences.Agent,
+            $"{SUPERSEDED_FINAL_SUBJECT} — {state.MemberId}, {count} message{plural}",
+            $"This turn wrote {count} final-looking message{plural} and then carried on working; a LATER message became the turn's result, and the result is what the bridge files as the entry. "
+                + $"Nothing was dropped — {(count == 1 ? "the earlier message was" : "the earlier messages were")} filed above, in order, before the final one.\n\n"
+                + "This is what a BACKGROUND sub-agent does when it returns after you have written your report: it re-opens the turn, and your next message replaces your entry. "
+                + "Wait for every sub-agent to return BEFORE you write your final message.",
+            DateTime.Now);
+    }
+
     async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
     {
         var author = SessionRole_Names.Get_Author(state.Role);

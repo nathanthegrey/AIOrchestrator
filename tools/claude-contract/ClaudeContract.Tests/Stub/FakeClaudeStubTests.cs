@@ -190,6 +190,45 @@ public class FakeClaudeStubTests : IDisposable
         Assert.Contains(lines, line => line.StartsWith("=== SessionStart ") && line.EndsWith("source=resume"));
     }
 
+    /// <summary>
+    /// A ONE-SHOT PRINT TURN CAN SPEAK NDJSON TOO — the format the bridge switched to at stage 19, so
+    /// both transports put the same events on the wire and a superseded final report is visible on
+    /// either. <c>--verbose</c> is demanded here because the real CLI demands it.
+    /// </summary>
+    [Fact]
+    public void PrintStreamJson_EmitsInit_TheAssistantMessages_ThenTheResult()
+    {
+        Write_Scenario("""
+        {"default":{"result":"the later one","assistant_messages":["the report","the later one"],"tool_use_between":true}}
+        """);
+
+        // The id of the refused run is spent all the same — a refused invocation is still one the
+        // bridge made, which is why the fake logs it before refusing.
+        Assert.NotEqual(0, Run(["-p", "--output-format", "stream-json", "--session-id", "99999999-8888-7777-6666-555555555555"], stdin: "x").ExitCode);
+
+        var run = Run(["-p", "--output-format", "stream-json", "--verbose", "--session-id", SESSION_ID], stdin: "x");
+        Assert.Equal(0, run.ExitCode);
+
+        var events = run.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => JsonNode.Parse(line)!.AsObject()).ToList();
+
+        Assert.Equal("system", events[0]["type"]!.GetValue<string>());
+        Assert.Equal("init", events[0]["subtype"]!.GetValue<string>());
+        Assert.Equal(["assistant", "assistant", "assistant", "result"], events.Skip(1).Select(json => json["type"]!.GetValue<string>()));
+
+        // text, tool_use, text — the middle one is what "further events followed it" looks like.
+        Assert.Equal("the report", Read_Text(events[1]));
+        Assert.Equal("tool_use", (events[2]["message"] as JsonObject)!["content"]!.AsArray()[0]!["type"]!.GetValue<string>());
+        Assert.Equal("the later one", Read_Text(events[3]));
+        Assert.Equal("the later one", events[4]["result"]!.GetValue<string>());
+    }
+
+    static string Read_Text(JsonObject assistantEvent)
+    {
+        return string.Concat((assistantEvent["message"] as JsonObject)!["content"]!.AsArray()
+            .Where(block => block!["type"]!.GetValue<string>() == "text")
+            .Select(block => block!["text"]!.GetValue<string>()));
+    }
+
     [Fact]
     public void InvocationLog_RecordsFlagsPromptCwdAndAiorchEnvironment()
     {

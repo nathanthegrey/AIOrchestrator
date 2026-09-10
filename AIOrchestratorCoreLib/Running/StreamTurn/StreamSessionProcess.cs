@@ -169,6 +169,13 @@ internal sealed class StreamSessionProcess : IDisposable
         // possible to say "nothing new arrived in this turn" and mean it.
         JsonObject? rateLimitInfo = null;
 
+        // EVERY MESSAGE THIS TURN COULD HAVE ENDED ON, in order. Kept because this loop is the last
+        // place they are visible: once the result event arrives, the earlier ones are gone from
+        // everything downstream, and a background sub-agent returning after the report re-opens the
+        // turn and hands the entry to a later message. SupersededFinals_Rule decides which of these
+        // the result did not keep.
+        List<string> finalLooking = [];
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -198,11 +205,16 @@ internal sealed class StreamSessionProcess : IDisposable
                 }
 
                 if (!StreamEvent_Reader.Is_Result(json))
+                {
+                    if (TurnResult.SupersededFinals_Rule.Is_FinalLooking(json))
+                        finalLooking.Add(StreamEvent_Reader.Read_AssistantText(json));
+
                     continue;
+                }
 
                 stopwatch.Stop();
 
-                var result = Build_Result(0, timedOut: false, json, stopwatch.Elapsed);
+                var result = Build_Result(0, timedOut: false, json, stopwatch.Elapsed, finalLooking);
 
                 json[StreamSessionProcess_Words.TURN_COST_KEY] = result.TotalCostUsd;
                 _onRawLine(json.ToJsonString());
@@ -281,12 +293,12 @@ internal sealed class StreamSessionProcess : IDisposable
         }
     }
 
-    ITurnResult Build_Result(int exitCode, bool timedOut, JsonObject? resultJson, TimeSpan elapsed)
+    ITurnResult Build_Result(int exitCode, bool timedOut, JsonObject? resultJson, TimeSpan elapsed, IReadOnlyList<string>? finalLooking = null)
     {
         if (resultJson == null)
             return TurnResult_Parser.Parse(exitCode, timedOut, string.Empty, Stderr, elapsed);
 
-        var parsed = TurnResult_Parser.Parse(exitCode, timedOut, resultJson.ToJsonString(), Stderr, elapsed);
+        var parsed = TurnResult_Parser.Parse(exitCode, timedOut, resultJson.ToJsonString(), Stderr, elapsed, finalLooking);
 
         // THE COST IS THE PROCESS'S RUNNING TOTAL, not this turn's — measured, and the reason this
         // class keeps a baseline at all. Reported straight through, one turn would carry the sum of
@@ -301,7 +313,7 @@ internal sealed class StreamSessionProcess : IDisposable
         return TurnResult_Factory.Create(
             parsed.ExitCode, parsed.TimedOut, parsed.IsError, parsed.Subtype, parsed.ResultText, parsed.SessionId,
             turnCost, parsed.DurationMs, parsed.DurationApiMs, parsed.NumTurns, parsed.ApiErrorStatus,
-            parsed.RawStdout, parsed.RawStderr, parsed.Elapsed);
+            parsed.RawStdout, parsed.RawStderr, parsed.Elapsed, supersededFinals: parsed.SupersededFinals);
     }
 
     int Read_ExitCode()

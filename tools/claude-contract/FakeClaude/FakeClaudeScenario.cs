@@ -30,6 +30,32 @@ public sealed class FakeClaudeTurn
     /// </summary>
     public JsonObject? RateLimit { get; init; }
 
+    /// <summary>
+    /// THE ASSISTANT MESSAGES OF THIS TURN, in order — one text-only <c>assistant</c> event each,
+    /// before the <c>result</c>. Empty (the common case) means the measured shape: ONE assistant
+    /// event carrying the same text as the result.
+    ///
+    /// <para>
+    /// It exists because the fake could not script the defect it is now tested against: a session
+    /// writes its report, a background sub-agent returns, the CLI re-opens the turn and a LATER
+    /// message becomes the result — so the report is lost. With this, a turn emits N finals and the
+    /// bridge's rule can be observed offline instead of only in a channel.
+    /// </para>
+    /// <para>
+    /// The <c>result</c> event still carries <see cref="Result"/>, which is what the real CLI does:
+    /// the result text is the LAST message, so a scenario that means "superseded" gives a different
+    /// <c>result</c> from its last assistant message, and one that means "ordinary" repeats it.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> AssistantMessages { get; init; } = [];
+
+    /// <summary>
+    /// Emits one tool_use assistant event between consecutive <see cref="AssistantMessages"/> — the
+    /// "further events followed it" half of the rule, and what a returning sub-agent actually looks
+    /// like on the wire.
+    /// </summary>
+    public bool ToolUseBetween { get; init; }
+
     public int Resolve_ExitCode()
     {
         if (ExitCode != null)
@@ -55,6 +81,8 @@ public sealed class FakeClaudeTurn
             Hooks = Read_Strings(node["hooks"]) ?? defaults.Hooks,
             ExtraJson = node["extra_json"] as JsonObject ?? defaults.ExtraJson,
             RateLimit = node["rate_limit"] as JsonObject ?? defaults.RateLimit,
+            AssistantMessages = Read_Strings(node["assistant_messages"]) ?? defaults.AssistantMessages,
+            ToolUseBetween = node["tool_use_between"]?.GetValue<bool>() ?? defaults.ToolUseBetween,
         };
     }
 

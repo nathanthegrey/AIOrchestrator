@@ -120,12 +120,44 @@ if (turn.Stderr.Length > 0)
 if (turn.StdoutPrefix.Length > 0)
     Console.Out.Write(turn.StdoutPrefix);
 
-if (parsed.OutputFormat == "json")
+// THE NDJSON SHAPE OF A ONE-SHOT PRINT TURN — what the bridge asks for since stage 19, so a print
+// turn and a stream turn of the same scenario put the SAME events on the wire and the bridge's
+// superseded-final rule can be observed on both. The event order is the measured one: `init`, the
+// turn's assistant messages, then the `result`.
+if (parsed.OutputFormat == StreamJson_Responder.OUTPUT_FORMAT)
+{
+    if (!parsed.Verbose)
+    {
+        // The real CLI refuses it; refused here so a bridge that stops sending --verbose is caught
+        // offline rather than in a channel.
+        Console.Error.WriteLine("Error: --output-format=stream-json requires --verbose");
+        return 1;
+    }
+
+    Write_Line(StreamEventJson_Builder.Build_Init(sessionId, model, workingDirectory, parsed.PermissionMode));
+
+    foreach (var assistantEvent in StreamEventJson_Builder.Build_AssistantSequence(turn, sessionId, model))
+        Write_Line(assistantEvent);
+
+    Write_Line(ResultJson_Builder.Build(turn, sessionId, model, numTurns: 2));
+}
+else if (parsed.OutputFormat == "json")
+{
     Console.Out.WriteLine(ResultJson_Builder.Build(turn, sessionId, model, numTurns: 2));
+}
 else
+{
     Console.Out.WriteLine(turn.Result);
+}
 
 return turn.Resolve_ExitCode();
+
+static void Write_Line(string json)
+{
+    Console.Out.Write(json);
+    Console.Out.Write('\n');
+    Console.Out.Flush();
+}
 
 static string Read_StdinPrompt()
 {

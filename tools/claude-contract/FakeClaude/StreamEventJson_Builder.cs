@@ -93,6 +93,57 @@ public static class StreamEventJson_Builder
     }
 
     /// <summary>
+    /// AN ASSISTANT MESSAGE THAT ASKS FOR A TOOL — text-free, <c>stop_reason</c> <c>tool_use</c>, in
+    /// the shape the real CLI emits when the model calls one. Scripted between two text messages it
+    /// is the "further events followed it" half of the superseded-final rule.
+    /// </summary>
+    public static string Build_AssistantToolUse(string sessionId, string model, string toolName)
+    {
+        return Serialise(new JsonObject
+        {
+            ["type"] = TYPE_ASSISTANT,
+            ["message"] = new JsonObject
+            {
+                ["model"] = model,
+                ["id"] = $"msg_{Guid.NewGuid():N}",
+                ["type"] = "message",
+                ["role"] = "assistant",
+                ["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "tool_use",
+                    ["id"] = $"toolu_{Guid.NewGuid():N}",
+                    ["name"] = toolName,
+                    ["input"] = new JsonObject { ["description"] = "scripted" },
+                }),
+                ["stop_reason"] = "tool_use",
+            },
+            ["uuid"] = Guid.NewGuid().ToString(),
+            ["session_id"] = sessionId,
+        });
+    }
+
+    /// <summary>
+    /// THE TURN'S ASSISTANT EVENTS, in order — ONE copy for both responders, so a print turn and a
+    /// stream turn of the same scenario emit the same events. A turn that names no
+    /// <c>assistant_messages</c> emits the measured default: one message carrying the result text.
+    /// </summary>
+    public static IReadOnlyList<string> Build_AssistantSequence(FakeClaudeTurn turn, string sessionId, string model)
+    {
+        var messages = turn.AssistantMessages.Count > 0 ? turn.AssistantMessages : [turn.Result];
+        List<string> events = [];
+
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (i > 0 && turn.ToolUseBetween)
+                events.Add(Build_AssistantToolUse(sessionId, model, "Task"));
+
+            events.Add(Build_Assistant(sessionId, model, messages[i]));
+        }
+
+        return events;
+    }
+
+    /// <summary>
     /// The limits event. <paramref name="rateLimit"/> is the scenario's own
     /// <c>rate_limit_info</c> — injected verbatim, so a test can pin a utilisation, a reset instant
     /// or a shape the parser has never seen without this builder having an opinion about it.
