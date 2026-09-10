@@ -11,7 +11,21 @@ namespace AIOrchestratorCoreLib.Channels;
 /// </summary>
 public static partial class ChannelEntry_Parser
 {
-    [GeneratedRegex(@"^##\s*\[(\d+)\]\s*FROM\s+(\S+)\s*(.*)$", RegexOptions.Compiled)]
+    /// <summary>
+    /// THE HEADER SHAPE, named so it can be COMPARED with the grammar the tool writes from.
+    ///
+    /// <para>
+    /// It cannot be read from <see cref="ChannelGrammar"/> at runtime: <c>[GeneratedRegex]</c> needs a
+    /// compile-time constant, and the source-generated matcher is why this parse is cheap enough to
+    /// run on every tick. So the pattern stays a literal here — and
+    /// <c>ChannelGrammarTests.TheGrammarsHeaderPatternIsTheOneTheParserCompiles</c> asserts it equals
+    /// the grammar's, which is the cheapest thing that cannot silently rot. Two spellings of a header
+    /// is the drift that produced four header variants on 2026-08-08.
+    /// </para>
+    /// </summary>
+    public const string HEADER_PATTERN = @"^##\s*\[(\d+)\]\s*FROM\s+(\S+)\s*(.*)$";
+
+    [GeneratedRegex(HEADER_PATTERN, RegexOptions.Compiled)]
     private static partial Regex Header_Regex();
 
     const string EM_DASH = "—";
