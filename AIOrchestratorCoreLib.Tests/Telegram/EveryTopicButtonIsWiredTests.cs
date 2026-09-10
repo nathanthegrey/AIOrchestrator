@@ -29,7 +29,7 @@ public class EveryTopicButtonIsWiredTests
     {
         var engineSource = Read_EngineSource();
 
-        foreach (var command in TopicCommandButtons.Commands)
+        foreach (var command in Every_RenderedCommand())
         {
             Assert.True(
                 engineSource.Contains($"case \"{command}\":", StringComparison.Ordinal),
@@ -49,7 +49,7 @@ public class EveryTopicButtonIsWiredTests
     {
         var engineSource = Read_EngineSource();
 
-        foreach (var command in TopicCommandButtons.Commands)
+        foreach (var command in Every_RenderedCommand())
         {
             // A MULTI-WORD BAR VERB LEXES AS ITS FIRST WORD, and that is not a loophole — it is how a
             // typed command works. `Get_BotCommand_OrNull` reads the verb after the slash, so the
@@ -66,6 +66,29 @@ public class EveryTopicButtonIsWiredTests
                 + $"branch dispatches the verb '{lexedVerb}' — "
                 + "so the text is routed to the session as chat instead of running the command.");
         }
+    }
+
+    /// <summary>
+    /// BOTH BARS, and the omission of the second one is why this guard reported everything wired
+    /// while three buttons were not.
+    ///
+    /// <para>
+    /// The guard walked <see cref="TopicCommandButtons.Commands"/> only. `GeneralCommands` — the
+    /// General topic's own bar — was never walked, so `/summary`, `/resume` and `/dnd_all` sat with
+    /// no case in the switch and a green suite above them from 2026-09-09 to 2026-09-10. The bar had
+    /// also never been rendered, which is what hid it: nobody could tap a button that was not drawn,
+    /// so the dead arm cost nothing until the bar landed. A guard that covers one of two lists is
+    /// decision 20's harness again — it certified the absence of what it never read.
+    /// </para>
+    /// <para>
+    /// CONCATENATED RATHER THAN A SECOND PAIR OF TESTS. The property is the same property for both
+    /// bars, and two copies of it would be the next thing to fall out of step when a third bar
+    /// appears.
+    /// </para>
+    /// </summary>
+    static IEnumerable<string> Every_RenderedCommand()
+    {
+        return TopicCommandButtons.Commands.Concat(TopicCommandButtons.GeneralCommands).Distinct();
     }
 
     /// <summary>

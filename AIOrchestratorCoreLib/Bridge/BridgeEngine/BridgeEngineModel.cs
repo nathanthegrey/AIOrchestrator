@@ -3305,13 +3305,24 @@ internal sealed class BridgeEngineModel(
 
         try
         {
+            // GENERAL'S COMMAND BAR RIDES ON THE DASHBOARD, for the reason the topic bar rides on
+            // PULSE: this is the one message in General the app already keeps current and already
+            // keeps near the bottom, so the buttons stay within reach without a pin the owner has
+            // refused.
+            //
+            // THE ROW-AWARE CALLS, NOT THE PLAIN ONES. A plain edit sends no reply_markup and
+            // Telegram reads the absence as "remove the keyboard", so editing this message the old
+            // way would strip the bar off it on the very next tick — the same trap the per-topic
+            // line documents at its own edit.
+            var commandButtonRows = Build_GeneralCommandButtonRows();
+
             if (action == Telegram.TopicStatusActions.Edit && _generalDashboardMessageId != null)
             {
-                await _telegramClient.Edit_MessageText_Async(_generalDashboardMessageId.Value, text, cancellationToken);
+                await _telegramClient.Edit_MessageTextWithButtonRows_Async(_generalDashboardMessageId.Value, text, commandButtonRows, cancellationToken);
             }
             else
             {
-                var messageId = await _telegramClient.Send_Message_Async(null, text, TelegramSendSounds.Silent, cancellationToken);
+                var messageId = await _telegramClient.Send_MessageWithButtonRows_Async(null, text, commandButtonRows, TelegramSendSounds.Silent, cancellationToken);
 
                 if (messageId == null)
                     return;
@@ -6631,7 +6642,7 @@ internal sealed class BridgeEngineModel(
                     }
                     else if (command == "summary")
                     {
-                        routableMessages.Add(Build_GeneralCommandMessage(message, "Make a summary of what is going on across all orchestrations."));
+                        routableMessages.Add(Build_GeneralCommandMessage(message, GENERAL_SUMMARY_REQUEST));
                     }
                     else if (command == "pending")
                     {
@@ -6964,15 +6975,38 @@ internal sealed class BridgeEngineModel(
         return command.ToLowerInvariant();
     }
 
+    /// <summary>
+    /// The sentence `/summary` becomes, whether the owner TYPED it or TAPPED it. A constant because
+    /// the button and the command must ask the general supervisor the same question — two spellings
+    /// of it would be two commands wearing one name, which is the drift the shared bar exists to
+    /// prevent.
+    /// </summary>
+    const string GENERAL_SUMMARY_REQUEST = "Make a summary of what is going on across all orchestrations.";
+
     /// <summary>A command becomes a canned English request for the GENERAL supervisor (thread null = general channel).</summary>
     static ITelegramOwnerMessage Build_GeneralCommandMessage(ITelegramOwnerMessage original, string cannedText)
     {
-        // APP-COMPOSED, like a tap: the owner typed `/summary`, and the SENTENCE that reaches the
-        // general supervisor was written here. Left unmarked, it met the typed-answer binding — so
-        // with one question open in General, asking for a summary filed that canned sentence as the
-        // owner's answer to it. Same defect the tap fix closed (stage 8a), one route further along.
+        return Build_GeneralCommandMessage(original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, cannedText);
+    }
+
+    /// <summary>
+    /// The same canned request, built from IDS rather than from a message — because a TAP has no
+    /// owner message to copy. `ITelegramCallbackTap` carries an update id and a message id and
+    /// nothing else, so a tapped `/summary` passes zeros for chat and sender, exactly as the
+    /// close-confirmation tap already does for its own synthetic message.
+    ///
+    /// <para>
+    /// ONE CONSTRUCTION SITE ON PURPOSE. The `isAppComposed` flag below is the whole reason this
+    /// helper exists, and a second place that built this message would be a second place that could
+    /// forget it: left unmarked, the canned sentence met the typed-answer binding — so with one
+    /// question open in General, asking for a summary filed that sentence as the owner's answer to
+    /// it. Same defect the tap fix closed (stage 8a), one route further along.
+    /// </para>
+    /// </summary>
+    static ITelegramOwnerMessage Build_GeneralCommandMessage(long updateId, long? messageId, long chatId, long fromUserId, string cannedText)
+    {
         return TelegramOwnerMessage_Factory.Create(
-            original.UpdateId, original.MessageId, original.ChatId, original.FromUserId, null, cannedText, null, null,
+            updateId, messageId, chatId, fromUserId, null, cannedText, null, null,
             isAppComposed: true);
     }
 
@@ -7612,7 +7646,38 @@ internal sealed class BridgeEngineModel(
 
     static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_CommandButtonRows(long messageThreadId)
     {
-        var buttons = Telegram.TopicCommandButtons.Build_ForTopic(messageThreadId);
+        return Chunk_IntoRows(Telegram.TopicCommandButtons.Build_ForTopic(messageThreadId));
+    }
+
+    /// <summary>
+    /// GENERAL's own bar — `/summary /pending /limits /resume /dnd_all`, the owner's list of
+    /// 2026-09-09.
+    ///
+    /// <para>
+    /// THREAD ID ZERO IS DELIBERATE and is what the parser round-trips for General. General is not a
+    /// topic, so there is no thread to name; the tap handler reads a zero as "use the tap's own
+    /// thread", which in General is null, which every command below already treats as General. A
+    /// sentinel would be a second spelling of the same nothing.
+    /// </para>
+    /// <para>
+    /// The bar was BUILT AND UNIT-TESTED SINCE 2026-09-09 AND NEVER RENDERED: `Build_ForGeneral` had
+    /// no production caller at all, and the wiring guard that would have caught the three unhandled
+    /// buttons walked `Commands` only, never `GeneralCommands`. Both halves are fixed here — this
+    /// call site, and the guard.
+    /// </para>
+    /// </summary>
+    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Build_GeneralCommandButtonRows()
+    {
+        return Chunk_IntoRows(Telegram.TopicCommandButtons.Build_ForGeneral(0));
+    }
+
+    /// <summary>
+    /// ONE chunker for both bars. The loop existed once per caller for as long as there was one
+    /// caller; a second copy of it is how the two bars come to wrap differently for no reason anybody
+    /// decided.
+    /// </summary>
+    static IReadOnlyList<IReadOnlyList<(string Data, string Label)>> Chunk_IntoRows(IReadOnlyList<(string Data, string Label)> buttons)
+    {
         List<IReadOnlyList<(string Data, string Label)>> rows = [];
 
         for (var index = 0; index < buttons.Count; index += COMMAND_BUTTONS_PER_ROW)
@@ -11819,6 +11884,34 @@ internal sealed class BridgeEngineModel(
                 // racing the ✓ acks of the batch it arrived in; this tap was acknowledged above,
                 // before the switch, so there is nothing left to race.
                 await Apply_PresenceCommand_Async(client, threadId, cancellationToken);
+                return true;
+
+            // GENERAL'S THREE, unrendered until 2026-09-10 and unhandled with them. A tap on any of
+            // these used to reach the `default:` arm below and be told the button came from an older
+            // build — while the bar it came from had never been drawn by any build at all.
+            case "summary":
+                // ROUTED, not answered here. /summary is the one General command whose answer is a
+                // model's to write: the general supervisor reads every channel and says what is going
+                // on. The app knows the counts (that is /left) and not the meaning.
+                await Route_OwnerMessage_Async(
+                    Build_GeneralCommandMessage(tap.UpdateId, tap.MessageId, 0, 0, GENERAL_SUMMARY_REQUEST),
+                    cancellationToken);
+                return true;
+
+            case "resume":
+                await Resume_AllSessions_Async(client, threadId, cancellationToken);
+                return true;
+
+            case "dnd_all":
+                // THE LITERAL COMMAND STRING, because that is the argument this method takes: it
+                // derives the wanted mode from the "mute"/"dnd" stem and the app-wide scope from the
+                // "_all" suffix. Passing the string the button already carries keeps the tap and the
+                // typed command on one implementation.
+                //
+                // NOT deferred the way the typed command is. That deferral keeps the toggle from
+                // racing the ✓ acks of the batch it arrived in — this tap was acknowledged above,
+                // before the switch, so there is nothing left to race. Same reasoning as /pc.
+                await Apply_ModeCommand_Async(client, "dnd_all", threadId, cancellationToken);
                 return true;
 
             case "close":
