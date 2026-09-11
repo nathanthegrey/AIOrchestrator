@@ -3331,7 +3331,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> Read_CurrentLimitWindows()
     {
-        Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> maxPercents = [];
+        // TakenAtUtc rides along only to pick the window instance in force; it is projected away
+        // below, because no consumer of this method has any business with a file's write time.
+        Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc, DateTime TakenAtUtc)> maxPercents = [];
 
         // FROM THE INJECTED CLOCK, both readings, because this method decides which windows are still
         // live and the pause decides what to do about them — two clocks for one decision is two ways
@@ -3351,6 +3353,9 @@ internal sealed class BridgeEngineModel(
         {
             var windows = Limits.LimitData_Parser.Extract_LimitWindows(UsageTotals_Reader.Read_Text_Safe(usageFile));
 
+            // When this probe last learned anything — see WindowInstance_Order.Compare_Reading.
+            var takenAtUtc = UsageTotals_Reader.Read_LastWriteUtc_Safe(usageFile);
+
             foreach (var pair in windows)
             {
                 // PER WINDOW, not per file. The file-level gate above keeps a file when ANY of
@@ -3362,21 +3367,43 @@ internal sealed class BridgeEngineModel(
 
                 if (!maxPercents.TryGetValue(pair.Key, out var known))
                 {
-                    maxPercents[pair.Key] = pair.Value;
+                    maxPercents[pair.Key] = (pair.Value.Percent, pair.Value.WindowResetsAtUtc, takenAtUtc);
                     continue;
                 }
 
-                // The same rule /limits uses, through the same comparison: a newer window
-                // replaces an older one outright, and only readings of the SAME window compete
-                // on percentage.
-                var instance = Limits.WindowInstance_Order.Compare_Instance(pair.Value.WindowResetsAtUtc, known.WindowResetsAtUtc);
+                // The same rule /limits uses, through the same comparison: the window instance
+                // named by the more recently WRITTEN probe replaces the other outright, and only
+                // readings of the SAME window compete on percentage. Ordering these by reset stamp
+                // instead is what froze both this scan and /limits on 2026-09-11 — the latch pinned
+                // to a window nothing live was reporting, so the real weekly climbed past 90%
+                // without an alert.
+                var instance = Limits.WindowInstance_Order.Compare_Reading(pair.Value.WindowResetsAtUtc, takenAtUtc, known.WindowResetsAtUtc, known.TakenAtUtc);
 
-                if (instance > 0 || (instance == 0 && pair.Value.Percent > known.Percent))
-                    maxPercents[pair.Key] = pair.Value;
+                if (instance > 0)
+                {
+                    maxPercents[pair.Key] = (pair.Value.Percent, pair.Value.WindowResetsAtUtc, takenAtUtc);
+                    continue;
+                }
+
+                if (instance < 0)
+                    continue;
+
+                // Same instance: the highest reading constrains the account, and the instance keeps
+                // the latest moment anything confirmed it, so the fold cannot depend on file order.
+                var confirmedAtUtc = takenAtUtc > known.TakenAtUtc ? takenAtUtc : known.TakenAtUtc;
+
+                maxPercents[pair.Key] = pair.Value.Percent > known.Percent
+                    ? (pair.Value.Percent, pair.Value.WindowResetsAtUtc, confirmedAtUtc)
+                    : (known.Percent, known.WindowResetsAtUtc, confirmedAtUtc);
             }
         }
 
-        return maxPercents;
+        Dictionary<string, (double Percent, DateTime? WindowResetsAtUtc)> current = [];
+
+        foreach (var pair in maxPercents)
+            current[pair.Key] = (pair.Value.Percent, pair.Value.WindowResetsAtUtc);
+
+        return current;
     }
 
     async Task Check_UsageLimits_Async(CancellationToken cancellationToken)
