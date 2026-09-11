@@ -142,6 +142,11 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         if (Is_TransportFailure(outcome))
             return Report_TransportFailure(key, state, outcome, requestId, "mid-turn");
 
+        // Said out loud because the silent version of this cost a whole afternoon of wrong answers
+        // (fincanva-5, 2026-09-11) and nothing in the log pointed at it.
+        if (outcome.UnpromptedReplies > 0)
+            _log.Log_Info(state.OrchId, $"Stream session '{state.MemberId}' had written {outcome.UnpromptedReplies} message(s) on its own since its last turn (a background task woke it) — filed ahead of turn {requestId}'s entry, never as its answer");
+
         Clear_StructuralFailures(key);
 
         return bootCost > 0 || bootElapsed > TimeSpan.Zero ? With_BootAddedIn(outcome.Result, bootCost, bootElapsed) : outcome.Result;
