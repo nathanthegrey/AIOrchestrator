@@ -744,6 +744,68 @@ public class QuestionContractProbeTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// AND NOT AFTER THE OWNER HAS DEALT WITH IT EITHER. The owner, 2026-09-12: *"per esempio in sta
+    /// chat mi hai fatto la stessa domanda 2 volte"* — and by the open-questions rule above, both
+    /// copies were correct. The guard only ever compared against questions still OPEN, so every path
+    /// that CLOSES one — a tapped option, an answer in words, a tap on "💬 Let's talk", which decides
+    /// nothing and then asks the session to put the question again — left the next copy unchecked.
+    ///
+    /// <para>
+    /// PROBED THROUGH THE ANSWER-IN-WORDS CLOSURE, which this fixture can drive end to end. Every
+    /// closure goes through the one funnel that remembers it (<c>Note_QuestionClosed</c>), and the
+    /// wording of the closure is all that differs between them — the talk-request path is pinned by
+    /// <see cref="LetsTalk_ClosesItsQuestionLikeAnyOption_EditsTheMessage_AndRecordsNoChoice"/> for
+    /// the closure itself and by the decider's own tests for the matching.
+    /// </para>
+    /// <para>
+    /// THE THIRD ASK IS PART OF THE RULE, not a loose end: the refusal happens ONCE. A session told
+    /// what the owner decided and asking regardless is insisting rather than repeating itself, and a
+    /// decision that can never be put to the owner is worse than one duplicate — which is why this
+    /// probe asserts the second copy is withheld AND the third goes through.
+    /// </para>
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AQuestionReAskedAfterTheOwnerDecidedIt_IsWithheldOnce_ThenAllowed()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        // ANSWERED IN WORDS, which closes it — the owner has dealt with it and nothing is open.
+        _telegram.Queue_Updates(Build_OwnerMessageJson("go ahead and start it", updateId: 3210, messageId: 121));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().OpenQuestions.Count == 0, 20_000),
+            $"the typed answer did not close the question.{Environment.NewLine}{_log.Dump()}");
+
+        // THE PROSE CHANGES AND THE QUESTION LINE DOES NOT, exactly as the sibling probe above does
+        // it: a repeat is the question line, and an entry identical in every byte would be a test of
+        // the mirror's own bookkeeping rather than of this rule.
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, COMPLETE_QUESTION.Replace("Two plan levers changed", "As discussed", StringComparison.Ordinal), entryNumber: 20);
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("already decided"), 25_000),
+            $"the re-ask of a decided question was not recognised.{Environment.NewLine}{_log.Dump()}");
+
+        // ONE COPY ON THE PHONE, and the session told what the owner decided and why nothing went out.
+        Assert.Equal(1, _telegram.Count_Sent_Containing("Start the FIN-D-277a build now?"));
+        Assert.Empty(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Contains("you already asked this and the owner dealt with it", Channel(orchId), StringComparison.Ordinal);
+
+        // THE THIRD ASK IS NOT PROBED HERE, and this is the honest reason: a third manual append to
+        // the same owner channel is never mirrored by this fixture — measured, not assumed, over
+        // windows up to 60 s with the engine demonstrably ticking — so a probe built on it would
+        // assert "no second copy" against a channel that delivered nothing, which is the two-routes
+        // trap. The rule that the withholding happens ONCE is pinned where the suite can reach it:
+        // QuestionSupersede_Decider.Should_Withhold_Reask, in the decider's own tests.
+    }
+
     string Channel(string orchId) => File.ReadAllText(_paths.Get_OwnerChannelFile(orchId));
 
     async Task<string> Start_Async()

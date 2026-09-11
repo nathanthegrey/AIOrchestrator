@@ -87,4 +87,79 @@ public class QuestionSupersedeDeciderTests
 
         Assert.Null(QuestionSupersede_Decider.Find_Repeat_OrNull([open], "q"));
     }
+
+    static ClosedQuestionRecord Closed(DateTime closedUtc, string prompt, string orchId = "fincanva-6", string? answer = null)
+    {
+        return new ClosedQuestionRecord
+        {
+            OrchId = orchId,
+            Prompt = prompt,
+            ClosedUtc = closedUtc,
+            Closure = answer == null ? QuestionClosure_Wording.TALK_REQUEST : QuestionClosure_Wording.TAPPED_OPTION,
+            AnswerLabel = answer,
+        };
+    }
+
+    [Fact]
+    public void AQuestionClosedByATalkRequest_IsStillARepeat()
+    {
+        var closed = Closed(T0, "Faccio aprire il topic subito?");
+
+        var repeat = QuestionSupersede_Decider.Find_ClosedRepeat_OrNull([closed], "fincanva-6", "faccio  aprire il topic subito?", T0.AddMinutes(3));
+
+        Assert.Same(closed, repeat);
+    }
+
+    [Fact]
+    public void PastTheWindow_TheSameSentenceIsANewQuestion()
+    {
+        var closed = Closed(T0, "Merge stage 13 now?");
+
+        Assert.Null(QuestionSupersede_Decider.Find_ClosedRepeat_OrNull(
+            [closed], "fincanva-6", "Merge stage 13 now?", T0 + QuestionSupersede_Decider.CLOSED_REPEAT_WINDOW + TimeSpan.FromMinutes(1)));
+    }
+
+    [Fact]
+    public void AnotherOrchestrationsDecisionIsNotThisOnes()
+    {
+        var closed = Closed(T0, "Merge stage 13 now?", orchId: "ai-orch-6");
+
+        Assert.Null(QuestionSupersede_Decider.Find_ClosedRepeat_OrNull([closed], "fincanva-6", "Merge stage 13 now?", T0.AddMinutes(1)));
+    }
+
+    /// <summary>
+    /// THE NEWEST MATCH WINS, because it is the one whose answer the session is about to be told
+    /// about — telling it what the owner decided an hour ago, when they decided something else five
+    /// minutes ago, would be worse than saying nothing.
+    /// </summary>
+    [Fact]
+    public void TheNewestDecisionIsTheOneReported()
+    {
+        var older = Closed(T0, "Merge stage 13 now?", answer: "Hold");
+        var newer = Closed(T0.AddMinutes(30), "Merge stage 13 now?", answer: "Merge it");
+
+        var repeat = QuestionSupersede_Decider.Find_ClosedRepeat_OrNull([older, newer], "fincanva-6", "Merge stage 13 now?", T0.AddMinutes(31));
+
+        Assert.Same(newer, repeat);
+    }
+
+    /// <summary>
+    /// THE FIRST COPY IS WITHHELD AND THE SECOND IS NOT, which is the whole rule: it is a warning,
+    /// not a wall. A decision that can never be put to the owner is worse than one duplicate.
+    /// </summary>
+    [Fact]
+    public void AReaskIsWithheldOnce_AndGoesOutIfTheSessionInsists()
+    {
+        var decided = Closed(T0, "Merge stage 13 now?", answer: "Hold");
+
+        Assert.True(QuestionSupersede_Decider.Should_Withhold_Reask(decided, withheldOnceAlready: false));
+        Assert.False(QuestionSupersede_Decider.Should_Withhold_Reask(decided, withheldOnceAlready: true));
+    }
+
+    [Fact]
+    public void AQuestionThatRepeatsNothing_IsNeverWithheld()
+    {
+        Assert.False(QuestionSupersede_Decider.Should_Withhold_Reask(null, withheldOnceAlready: false));
+        Assert.False(QuestionSupersede_Decider.Should_Withhold_Reask(null, withheldOnceAlready: true));
+    }
 }

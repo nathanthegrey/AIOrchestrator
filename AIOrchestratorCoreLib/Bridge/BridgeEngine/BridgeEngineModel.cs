@@ -934,6 +934,21 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<long, string> _closedQuestionReasons = [];
 
+    /// <summary>
+    /// The questions the owner has RESOLVED, newest last, so the same words are not sent again a
+    /// minute later. Bounded by <see cref="CLOSED_QUESTION_MEMORY"/> like the reasons beside it, and
+    /// in memory only — see <see cref="Decisions.ClosedQuestionRecord"/> for the trade.
+    /// </summary>
+    readonly Queue<Decisions.ClosedQuestionRecord> _closedQuestions = [];
+
+    /// <summary>
+    /// The verbatim re-asks already refused once, keyed orchestration + question line. It is what
+    /// keeps the guard from being a wall: a session told its question repeats a decided one and
+    /// asking it AGAIN is no longer making the owner's mistake, it is insisting, and the owner is
+    /// better served by the question than by a decision that dangles for ever.
+    /// </summary>
+    readonly HashSet<string> _reaskRefusedOnce = [];
+
     readonly Queue<long> _closedQuestionOrder = new();
 
     /// <summary>
@@ -4146,6 +4161,34 @@ internal sealed class BridgeEngineModel(
         {
             Handle_RepeatedQuestion(channel, repeated);
             return;
+        }
+
+        // AND NOT ONE THE OWNER HAS JUST DEALT WITH EITHER. The guard above only sees questions still
+        // open, which is blind to the way it actually happened to the owner on 2026-09-12: a tap on
+        // "💬 Let's talk" CLOSES the question, the protocol then tells the session to ask it again once
+        // the discussion has settled, and a session that re-asks word for word puts the identical
+        // question on their phone a second time — *"per esempio in sta chat mi hai fatto la stessa
+        // domanda 2 volte"*. Same for a question they answered by tapping or in words.
+        //
+        // REFUSED ONCE, then allowed: see _reaskRefusedOnce. The session is told what the owner
+        // decided and when, which is usually the fact it was missing; if it asks the same thing again
+        // anyway it is no longer making the owner's mistake, and a decision that never reaches them is
+        // worse than one duplicate.
+        var decidedAlready = Find_ClosedRepeat_OrNull(channel.OrchId, questionPrompt);
+
+        // THE MEMORY IS TOUCHED ONLY WHEN THERE IS A REPEAT, and that is not tidiness. Recording every
+        // question that goes out would mark its own FIRST asking as "already withheld once", so the day
+        // it was genuinely re-asked after being decided it would sail straight through — the guard
+        // would be armed by nothing and disarmed by everything.
+        if (decidedAlready != null)
+        {
+            var withheldOnceAlready = Note_ReaskWithheld(channel.OrchId, questionPrompt);
+
+            if (QuestionSupersede_Decider.Should_Withhold_Reask(decidedAlready, withheldOnceAlready))
+            {
+                Handle_ReaskOfADecidedQuestion(channel, decidedAlready);
+                return;
+            }
         }
 
         // A SECOND OPEN QUESTION IS COACHED, NOT REFUSED — and the refusal was tried first.
@@ -10634,13 +10677,17 @@ internal sealed class BridgeEngineModel(
             // Answered — it must never be marked "parked" by a later away-mode sweep.
             lock (_ownerStateLock)
             {
-                if (_openQuestions.Remove(tap.MessageId.Value))
+                if (_openQuestions.Remove(tap.MessageId.Value, out var closedByTheTap))
                 {
                     Note_QuestionClosed(
                         tap.MessageId.Value,
                         registered.AnswersNothing
                             ? QuestionClosure_Wording.TALK_REQUEST
-                            : QuestionClosure_Wording.TAPPED_OPTION);
+                            : QuestionClosure_Wording.TAPPED_OPTION,
+                        closedByTheTap,
+
+                        // A "let's talk" records no choice, because none was made.
+                        registered.AnswersNothing ? null : registered.OptionText);
                 }
             }
 
@@ -10883,8 +10930,8 @@ internal sealed class BridgeEngineModel(
 
                 // The decision is taken, so the question it belongs to is answered. It was left OPEN
                 // while the read-back ran, on purpose — see Begin_HighRiskConfirmation_Async.
-                if (confirmation.MessageId != null && _openQuestions.Remove(confirmation.MessageId.Value))
-                    Note_QuestionClosed(confirmation.MessageId.Value, QuestionClosure_Wording.CONFIRMED_HIGH_RISK);
+                if (confirmation.MessageId != null && _openQuestions.Remove(confirmation.MessageId.Value, out var confirmedQuestion))
+                    Note_QuestionClosed(confirmation.MessageId.Value, QuestionClosure_Wording.CONFIRMED_HIGH_RISK, confirmedQuestion, confirmation.OptionText);
             }
         }
 
@@ -11091,10 +11138,10 @@ internal sealed class BridgeEngineModel(
 
         lock (_ownerStateLock)
         {
-            if (!_openQuestions.Remove(question.MessageId))
+            if (!_openQuestions.Remove(question.MessageId, out var lapsedQuestion))
                 return;
 
-            Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.DEADLINE);
+            Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.DEADLINE, lapsedQuestion);
 
             // A READ-BACK BELONGS TO ITS QUESTION AND DIES WITH IT. Left behind, it would keep a live
             // code for a decision that has just been denied on timeout — the owner types the code
@@ -12034,6 +12081,49 @@ internal sealed class BridgeEngineModel(
     /// state — "tapped, waiting for the code" is the fact that session was missing the day this was
     /// written. The awaiting-answer flag is raised as for any question: it asked, so it stops.
     /// </summary>
+    Decisions.ClosedQuestionRecord? Find_ClosedRepeat_OrNull(string orchId, string questionPrompt)
+    {
+        lock (_ownerStateLock)
+            return QuestionSupersede_Decider.Find_ClosedRepeat_OrNull(_closedQuestions, orchId, questionPrompt, _clock.UtcNow);
+    }
+
+    /// <summary>
+    /// Records that this question line has been withheld once in this orchestration, and answers
+    /// whether it HAD been before — the memory half of
+    /// <see cref="QuestionSupersede_Decider.Should_Withhold_Reask"/>, which holds the rule.
+    /// </summary>
+    bool Note_ReaskWithheld(string orchId, string questionPrompt)
+    {
+        lock (_ownerStateLock)
+            return !_reaskRefusedOnce.Add($"{orchId}\n{questionPrompt.Trim().ToLowerInvariant()}");
+    }
+
+    /// <summary>
+    /// Tells the session what the owner already decided, and that nothing went out. The audience is
+    /// Agent: the owner must not be told twice about a message they never received — decision 15, and
+    /// the same reading <see cref="Handle_RepeatedQuestion"/> gives it.
+    /// </summary>
+    void Handle_ReaskOfADecidedQuestion(Channels.DiscoveredChannel.IDiscoveredChannel channel, Decisions.ClosedQuestionRecord decided)
+    {
+        var whatTheyDid = decided.AnswerLabel == null
+            ? $"they closed it — {decided.Closure}"
+            : $"they chose «{decided.AnswerLabel}»";
+
+        _log.Log_Info(
+            channel.OrchId,
+            $"a question repeating one already decided at {decided.ClosedUtc:HH:mm} UTC ({decided.Closure}) was not sent again — the session was told what the owner decided");
+
+        ChannelAppender.Append_AppEntry(
+            channel.FilePath,
+            AppEntryAudiences.Agent,
+            "you already asked this and the owner dealt with it — not sent again",
+            $"This question repeats, word for word, one the owner resolved at {decided.ClosedUtc.ToLocalTime():HH:mm}: {whatTheyDid}. "
+            + "A second identical copy reads on their phone as being asked twice, so nothing went out. "
+            + "If the discussion since then changed what you need to know, ASK THAT — a question that is "
+            + "not the same sentence goes through immediately, and so does this one if you send it again.",
+            DateTime.Now);
+    }
+
     void Handle_RepeatedQuestion(Channels.DiscoveredChannel.IDiscoveredChannel channel, OpenQuestionRecord repeated)
     {
         bool awaitingReadBack;
@@ -12070,7 +12160,14 @@ internal sealed class BridgeEngineModel(
     /// same instant as the removal it explains, because a reason recorded a few lines later is a
     /// reason that can be missed by an early return.
     /// </summary>
-    void Note_QuestionClosed(long messageId, string reason)
+    /// <param name="question">
+    /// The record being closed, when the caller has it. Passing it is what lets a verbatim re-ask be
+    /// recognised after the buttons are gone; passing null keeps the old behaviour for the two
+    /// closures where a re-ask is legitimate — a SUPERSEDED question was replaced rather than decided,
+    /// and an AWAY-PARKED one was never put to the owner at all.
+    /// </param>
+    /// <param name="answerLabel">The option the owner chose, when they chose one.</param>
+    void Note_QuestionClosed(long messageId, string reason, OpenQuestionRecord? question = null, string? answerLabel = null)
     {
         if (!_closedQuestionReasons.ContainsKey(messageId))
             _closedQuestionOrder.Enqueue(messageId);
@@ -12079,6 +12176,23 @@ internal sealed class BridgeEngineModel(
 
         while (_closedQuestionOrder.Count > CLOSED_QUESTION_MEMORY)
             _closedQuestionReasons.Remove(_closedQuestionOrder.Dequeue());
+
+        // NOTHING TO COMPARE IS NOT A MATCH: a record saved before question lines were remembered has
+        // no prompt, and inventing one from the whole message would match on the options too.
+        if (question?.Prompt == null)
+            return;
+
+        _closedQuestions.Enqueue(new Decisions.ClosedQuestionRecord
+        {
+            OrchId = question.OrchId,
+            Prompt = question.Prompt,
+            ClosedUtc = _clock.UtcNow,
+            Closure = reason,
+            AnswerLabel = answerLabel,
+        });
+
+        while (_closedQuestions.Count > CLOSED_QUESTION_MEMORY)
+            _closedQuestions.Dequeue();
     }
 
     /// <summary>
@@ -12114,8 +12228,8 @@ internal sealed class BridgeEngineModel(
 
             foreach (var question in answered)
             {
-                _openQuestions.Remove(question.MessageId);
-                Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.TYPED_ANSWER);
+                _openQuestions.Remove(question.MessageId, out var answeredInWords);
+                Note_QuestionClosed(question.MessageId, QuestionClosure_Wording.TYPED_ANSWER, answeredInWords);
             }
         }
 
