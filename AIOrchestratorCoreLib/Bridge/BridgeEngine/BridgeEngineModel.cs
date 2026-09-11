@@ -14832,17 +14832,19 @@ internal sealed class BridgeEngineModel(
             if (!pending.Answered && ownerAnswerCount > pending.OwnerAnswerCountAtDelivery)
                 pending.Answered = true;
 
-            var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, _store.Get_Session_OrNull(orchId));
+            var ownerFacingSession = _store.Get_Session_OrNull(orchId);
+            var supervisorUsageFile = OwnerFacingSession_Locator.Get_UsageFile(_paths, orchId, ownerFacingSession);
 
-            var supervisorBusy = Is_Working(
-                Running.SessionRoles.Supervisor, orchId,
-                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID, supervisorUsageFile);
+            // The dispatcher is asked about the session the owner is waiting on — a solo or the general
+            // supervisor as well as a crew's supervisor. Asking about "supervisor" read every headless
+            // solo as idle mid-turn, and the nudge below told it and the owner its turn had ended.
+            var (ownerFacingRole, ownerFacingMemberId) = OwnerFacingSession_Locator.Resolve_Session(orchId, ownerFacingSession);
+
+            var supervisorBusy = Is_Working(ownerFacingRole, orchId, ownerFacingMemberId, supervisorUsageFile);
 
             // ASKED SEPARATELY, because Is_Working folds Queued into "occupied" on purpose (a queued
             // session cannot be disturbed either) — but what the owner is TOLD must not.
-            var supervisorQueued = Resolve_MemberWorking(
-                Running.SessionRoles.Supervisor, orchId,
-                Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID) == WorkingVerdicts.Queued;
+            var supervisorQueued = Resolve_MemberWorking(ownerFacingRole, orchId, ownerFacingMemberId) == WorkingVerdicts.Queued;
 
             // THE BUBBLE IS THE WHOLE "THINKING…" STORY NOW: up while the session is mid-turn, and
             // while a free session has not yet picked the message up — down at the nudge, the one
@@ -14961,7 +14963,7 @@ internal sealed class BridgeEngineModel(
             //
             // AND THE PROMISE ONLY WHEN THE TURN BEHIND IT CAN KEEP IT — OwnerNudgeReceipt_Decider
             // (2026-09-11: promised twice to an owner whose supervisor could not log in).
-            var turnFailures = OwnerFacingTurn_Reader.Read_CurrentTurnFailures(_paths, orchId, _store.Get_Session_OrNull(orchId));
+            var turnFailures = OwnerFacingTurn_Reader.Read_CurrentTurnFailures(_paths, orchId, ownerFacingSession);
 
             if (turnFailures.ReadFailure != null)
                 _log.Log_Warning(orchId, OwnerNudgeReceipt_Decider.Describe_Unreadable(turnFailures.ReadFailure));

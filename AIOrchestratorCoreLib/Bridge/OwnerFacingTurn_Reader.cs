@@ -1,7 +1,4 @@
-using AIOrchestratorCoreLib.Channels;
-using AIOrchestratorCoreLib.Running;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
-using AIOrchestratorCoreLib.Running.SessionLaunch;
 using AIOrchestratorCoreLib.Sessions;
 using AIOrchestratorCoreLib.Sessions.OrchestrationSession;
 using AIOrchestratorCoreLib.SupervisionPaths;
@@ -37,7 +34,7 @@ public static class OwnerFacingTurn_Reader
     /// </summary>
     public static (int FailedAttempts, string? ReadFailure) Read_CurrentTurnFailures(ISupervisionPaths paths, string orchId, IOrchestrationSession? session)
     {
-        var (role, memberId) = Resolve_OwnerFacingSession(orchId, session);
+        var (role, memberId) = OwnerFacingSession_Locator.Resolve_Session(orchId, session);
 
         try
         {
@@ -49,17 +46,5 @@ public static class OwnerFacingTurn_Reader
         {
             return (0, $"'{memberId}' state file: {ex.Message}");
         }
-    }
-
-    static (SessionRoles Role, string MemberId) Resolve_OwnerFacingSession(string orchId, IOrchestrationSession? session)
-    {
-        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
-            return (SessionRoles.General, SessionLaunch_Factory.GENERAL_MEMBER_ID);
-
-        var soloMemberId = OwnerFacingSession_Locator.Find_LiveSoloMemberId_OrNull(session);
-
-        return soloMemberId == null
-            ? (SessionRoles.Supervisor, SessionLaunch_Factory.SUPERVISOR_MEMBER_ID)
-            : (SessionRoles.Solo, soloMemberId);
     }
 }
