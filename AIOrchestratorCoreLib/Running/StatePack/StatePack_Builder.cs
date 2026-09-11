@@ -58,7 +58,7 @@ public static class StatePack_Builder
             Append_Entry(text, "## Your last report (your state as you left it)", inputs.LastOwnEntry, LAST_OWN_CAP);
 
         if (inputs.ProgressNote != null)
-            Append_Tail(text, PROGRESS_HEADING, inputs.ProgressNote, PROGRESS_CAP, StatePack_Locator.PROGRESS_FILE_NAME);
+            Append_Block(text, PROGRESS_HEADING, inputs.ProgressNote, PROGRESS_CAP, StatePack_Locator.PROGRESS_FILE_NAME, keepTail: true);
 
         if (inputs.PlanText != null)
             Append_Block(text, "## The ledger — PLAN.md", inputs.PlanText, PLAN_CAP, "PLAN.md");
@@ -93,28 +93,20 @@ public static class StatePack_Builder
         Append_Block(text, $"{heading} — entry [{entry.Index}], {entry.DateText}", entry.RawText.Trim(), cap, $"entry [{entry.Index}] in your channel");
     }
 
-    static void Append_Block(StringBuilder text, string heading, string body, int cap, string whereToReadTheRest)
+    /// <param name="keepTail">
+    /// Keep the END of a body over its cap rather than its start — for the progress note, whose last
+    /// lines are where the member got to while its first are the oldest steps.
+    /// </param>
+    static void Append_Block(StringBuilder text, string heading, string body, int cap, string whereToReadTheRest, bool keepTail = false)
     {
         text.Append(heading).Append('\n').Append('\n');
 
         if (body.Length <= cap)
             text.Append(body).Append('\n').Append('\n');
+        else if (keepTail)
+            text.Append(Describe_Truncation(body.Length - cap, whereToReadTheRest)).Append('\n').Append(body, body.Length - cap, cap).Append('\n').Append('\n');
         else
             text.Append(body, 0, cap).Append('\n').Append(Describe_Truncation(body.Length - cap, whereToReadTheRest)).Append('\n').Append('\n');
-    }
-
-    /// <summary>
-    /// Like <see cref="Append_Block"/>, but a note that has outgrown its cap keeps its END: the last
-    /// lines of a progress note are where the member got to, and its first lines are the oldest steps.
-    /// </summary>
-    static void Append_Tail(StringBuilder text, string heading, string body, int cap, string whereToReadTheRest)
-    {
-        text.Append(heading).Append('\n').Append('\n');
-
-        if (body.Length <= cap)
-            text.Append(body).Append('\n').Append('\n');
-        else
-            text.Append(Describe_Truncation(body.Length - cap, whereToReadTheRest)).Append('\n').Append(body, body.Length - cap, cap).Append('\n').Append('\n');
     }
 
     public static string Describe_Truncation(int droppedCharacters, string whereToReadTheRest)

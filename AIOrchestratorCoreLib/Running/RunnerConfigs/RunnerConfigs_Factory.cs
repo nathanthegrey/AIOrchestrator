@@ -84,6 +84,15 @@ public static class RunnerConfigs_Factory
     public static readonly TimeSpan DEFAULT_MEMBER_TURN_TIMEOUT = TimeSpan.FromHours(2);
 
     /// <summary>
+    /// A DAY, past which the member silence limit and the member ceiling are refused at the config
+    /// reader: neither is a policy anyone can mean beyond it, and the reader compares the NUMBER
+    /// against this before any <c>TimeSpan</c> exists (<c>TimeSpan.FromMinutes(1e11)</c> throws).
+    /// </summary>
+    public static readonly TimeSpan MAX_MEMBER_SILENCE_LIMIT = TimeSpan.FromDays(1);
+
+    public static readonly TimeSpan MAX_MEMBER_TURN_TIMEOUT = TimeSpan.FromDays(1);
+
+    /// <summary>
     /// Three gigabytes per session. Measured against the shape the VPS actually runs: 8 GB total,
     /// the daemon and its bridge under 300 MB, and <c>printRunner.maxConcurrentTurns</c> defaulting
     /// to 10 — so this is not a budget that adds up to the machine, it is the point past which ONE

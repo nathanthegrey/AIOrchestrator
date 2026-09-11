@@ -52,6 +52,11 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         var fresh = roleConfig.Resume == ResumeModes.Fresh;
         string? prompt = null;
 
+        // A NEW TASK RETIRES THE OLD NOTE IN EVERY RESUME MODE, not only where a pack is written: a
+        // member in transcript mode keeps appending too, and a later switch to fresh would otherwise
+        // hand it a note from tasks long finished (simplify review, 2026-09-11).
+        StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, state.Role, state.OrchId, state.MemberId, pending.Select(item => item.Entry).ToList());
+
         if (resumeTranscript)
             prompt = PrintTurnPrompt_Builder.Build_FollowUp(requestId, pending, alreadyExecutedTurns, sources);
         else if (fresh && pending.Count > 0)
@@ -104,8 +109,6 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
     {
         try
         {
-            StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, state.Role, state.OrchId, state.MemberId, pending.Select(item => item.Entry).ToList());
-
             var inputs = StatePackInputs_Reader.Read(_paths, state, requestId, pending, sources);
             StatePack_Writer.Write(StatePack_Locator.Get_File(_paths, state.Role, state.OrchId, state.MemberId), StatePack_Builder.Build(inputs));
         }

@@ -1,5 +1,6 @@
 using AIOrchestratorCoreLib.Running.PrintTurnRunner;
 using AIOrchestratorCoreLib.Running.TurnLiveness;
+using AIOrchestratorCoreLib.Tests.TestSupport;
 using Xunit;
 
 namespace AIOrchestratorCoreLib.Tests.Running;
@@ -45,7 +46,7 @@ public class PrintTurnRunnerSilenceBrakeTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TempTree.Delete_BestEffort(workDir);
         }
     }
 
@@ -66,7 +67,7 @@ public class PrintTurnRunnerSilenceBrakeTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TempTree.Delete_BestEffort(workDir);
         }
     }
 
@@ -86,7 +87,7 @@ public class PrintTurnRunnerSilenceBrakeTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TempTree.Delete_BestEffort(workDir);
         }
     }
 
@@ -107,7 +108,7 @@ public class PrintTurnRunnerSilenceBrakeTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TempTree.Delete_BestEffort(workDir);
         }
     }
 
@@ -131,7 +132,7 @@ public class PrintTurnRunnerSilenceBrakeTests
         }
         finally
         {
-            Directory.Delete(workDir, recursive: true);
+            TempTree.Delete_BestEffort(workDir);
         }
     }
 }

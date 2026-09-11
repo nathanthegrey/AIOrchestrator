@@ -36,10 +36,9 @@ public static class TurnTimeout_Rule
     /// <summary>The longest any turn may run under these settings — what a shutdown has to wait for.</summary>
     public static TimeSpan Resolve_Longest(IRunnerConfigs configs)
     {
-        if (configs.MemberSilenceLimit <= TimeSpan.Zero || OperatingSystem.IsWindows())
-            return configs.TurnTimeout;
+        var member = Resolve_ForRole(SessionRoles.Implementer, configs);
 
-        return configs.MemberTurnTimeout > configs.TurnTimeout ? configs.MemberTurnTimeout : configs.TurnTimeout;
+        return member > configs.TurnTimeout ? member : configs.TurnTimeout;
     }
 
     static bool Is_BrakedMember(SessionRoles role, IRunnerConfigs configs)

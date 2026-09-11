@@ -51,13 +51,14 @@ public static class TurnSilenceBrake_Factory
             return null;
 
         var claudeHome = TranscriptActivity_Reader.Resolve_ClaudeHome(childEnvironment);
+        var loopWatch = new TranscriptLoopWatch(claudeHome, sessionId);
 
         return new TurnSilenceBrakeModel(
             silenceLimit,
             Resolve_PollInterval(silenceLimit),
             () => TranscriptActivity_Reader.Read_LastWriteUtc_OrNull(claudeHome, sessionId),
             ProcessDescendants_Reader.Count_Descendants_OrNull,
-            sinceUtc => Describe_Loop_OrNull(claudeHome, sessionId, sinceUtc),
+            loopWatch.Describe_Loop_OrNull,
             () => TranscriptActivity_Reader.Read_SubAgentLastWriteUtc_OrNull(claudeHome, sessionId));
     }
 
@@ -65,13 +66,6 @@ public static class TurnSilenceBrake_Factory
     public static bool Is_LoopKill(string brakeKill)
     {
         return brakeKill.StartsWith(TurnSilenceBrakeModel.LOOP_KILL_PREFIX, StringComparison.Ordinal);
-    }
-
-    static string? Describe_Loop_OrNull(string claudeHome, string sessionId, DateTime sinceUtc)
-    {
-        var transcript = TranscriptActivity_Reader.Find_MainTranscript_OrNull(claudeHome, sessionId);
-
-        return transcript == null ? null : TranscriptLoop_Detector.Describe_Loop_OrNull(transcript, sinceUtc);
     }
 
     /// <summary>

@@ -318,7 +318,7 @@ public static class RunnerConfigs_Json
         if (written.Value <= 0)
             return TimeSpan.Zero;
 
-        if (written.Value <= MAX_MEMBER_SILENCE_MINUTES)
+        if (written.Value <= RunnerConfigs_Factory.MAX_MEMBER_SILENCE_LIMIT.TotalMinutes)
             return TimeSpan.FromMinutes(written.Value);
 
         rejections.Add(
@@ -328,8 +328,6 @@ public static class RunnerConfigs_Json
 
         return RunnerConfigs_Factory.DEFAULT_MEMBER_SILENCE_LIMIT;
     }
-
-    const double MAX_MEMBER_SILENCE_MINUTES = 24 * 60;
 
     /// <summary>
     /// THE MEMBER CEILING, WHICH HAS NO "OFF". A ceiling of zero would be a turn killed at once, and a
@@ -344,7 +342,7 @@ public static class RunnerConfigs_Json
         if (written == null)
             return RunnerConfigs_Factory.DEFAULT_MEMBER_TURN_TIMEOUT;
 
-        if (written.Value > 0 && written.Value <= MAX_MEMBER_SILENCE_MINUTES)
+        if (written.Value > 0 && written.Value <= RunnerConfigs_Factory.MAX_MEMBER_TURN_TIMEOUT.TotalMinutes)
             return TimeSpan.FromMinutes(written.Value);
 
         rejections.Add(

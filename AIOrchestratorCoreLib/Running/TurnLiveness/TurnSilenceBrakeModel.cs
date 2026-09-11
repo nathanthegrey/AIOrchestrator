@@ -29,9 +29,25 @@ internal sealed class TurnSilenceBrakeModel(
         // 60` or a blocking TaskOutput repeated while the sub-agent writes and the build runs). So a
         // repetition kills only when no command runs below the turn and no sub-agent has written
         // within the silence limit; "cannot tell" is, as everywhere here, read as alive.
+        // ONE READ OF THE PROCESS TABLE PER DECISION, whichever branch asks first: it is a walk of
+        // every /proc entry, and the loop gate and the silence test below both need its answer.
+        var descendantsRead = false;
+        int? descendants = null;
+
+        int? Descendants()
+        {
+            if (!descendantsRead)
+            {
+                descendants = _countDescendants(processId);
+                descendantsRead = true;
+            }
+
+            return descendants;
+        }
+
         var loop = _describeLoopSince(turnStartedUtc);
 
-        if (loop != null && Is_NothingElseMoving(nowUtc, processId))
+        if (loop != null && Is_NothingElseMoving(nowUtc, Descendants))
             return Describe_LoopKill(loop);
 
         // THE TURN'S OWN START IS THE FLOOR. A resumed transcript carries every earlier turn's writes,
@@ -60,22 +76,20 @@ internal sealed class TurnSilenceBrakeModel(
         // A COMMAND STILL RUNNING IS WORK. A build or a suite writes nothing to the transcript until
         // it returns; measured 2026-09-11, an idle turn has no process below it and a working one has
         // its shell and the test runner. Null — the OS would not say — is read as alive.
-        var descendants = _countDescendants(processId);
-
-        if (descendants == null || descendants > 0)
+        if (Descendants() is null or > 0)
             return null;
 
         return Describe_Kill(nowUtc - lastSign, SilenceLimit);
     }
 
-    bool Is_NothingElseMoving(DateTime nowUtc, int processId)
+    bool Is_NothingElseMoving(DateTime nowUtc, Func<int?> descendants)
     {
         var subAgentWrite = _readSubAgentLastWriteUtc();
 
         if (subAgentWrite != null && nowUtc - subAgentWrite.Value < SilenceLimit)
             return false;
 
-        return _countDescendants(processId) == 0;
+        return descendants() == 0;
     }
 
     internal static string Describe_LoopKill(string loop)
