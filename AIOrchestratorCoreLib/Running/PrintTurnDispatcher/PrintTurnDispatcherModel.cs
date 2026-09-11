@@ -63,7 +63,6 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     const int MAX_ATTEMPTS = PrintTurn_Words.MAX_ATTEMPTS;
     const string RUNNER_ENV_VAR = PrintTurn_Words.RUNNER_ENV_VAR;
     const string TURN_ENDED_SUBJECT = PrintTurn_Words.TURN_ENDED_SUBJECT;
-    const string TURN_STALLED_SUBJECT = PrintTurn_Words.TURN_STALLED_SUBJECT;
     const string DEADLINE_KILLS_SUBJECT = PrintTurn_Words.DEADLINE_KILLS_SUBJECT;
     const string TURN_LIMITED_SUBJECT = PrintTurn_Words.TURN_LIMITED_SUBJECT;
     const string MISADDRESSED_SUBJECT = PrintTurn_Words.MISADDRESSED_SUBJECT;
@@ -305,6 +304,8 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// <c>[n]</c>, which is agent-written (CLAUDE.md decision 12).
     /// </param>
     readonly record struct SourceRead(ITurnSource Source, IReadOnlyList<IChannelEntry> Pending, bool NothingEverDelivered);
+
+    public ReplyLinks.IReplyLinks ReplyLinks { get; } = Running.ReplyLinks.ReplyLinks_Factory.Create_InMemory();
 
     public int InFlightCount
     {
@@ -770,7 +771,33 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (digestHeldSince != null)
             _log.Log_Info(orchId, $"'{memberId}': {Describe_Traffic(ordered)} — {wakeReason}");
 
-        Start_Turn(key, stateFile, state, ordered, sources, tracker, configs);
+        Start_Turn(key, stateFile, state, With_AgentNotes(state, sources, ordered, nowLocal), sources, tracker, configs);
+    }
+
+    /// <summary>
+    /// THE APP'S NOTES TO THIS SESSION RIDE THE TURN THAT IS STARTING — first, as context, before the
+    /// traffic that started it — and never start one (see <see cref="PrintTurn_Trigger.Select_AgentNotes"/>
+    /// for what they are and why nothing carried them before). Added AFTER every wake-up rule has
+    /// decided, so a note can neither start a turn nor change which rule released one. A boot turn
+    /// carries none: its empty pending set is what tells the executor it is a boot.
+    /// </summary>
+    IReadOnlyList<PendingEntry> With_AgentNotes(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> ordered, DateTime nowLocal)
+    {
+        if (ordered.Count == 0)
+            return ordered;
+
+        var own = sources.FirstOrDefault(source => string.Equals(source.ChannelFilePath, state.ChannelFilePath, StringComparison.OrdinalIgnoreCase));
+        var cursor = own == null ? null : state.Cursors.FirstOrDefault(candidate => SOURCE_KEYS.Equals(candidate.SourceKey, own.Key));
+
+        if (own == null || cursor == null)
+            return ordered;
+
+        var notes = PrintTurn_Trigger.Select_AgentNotes(ChannelHistory_Cache.Read_Entries(own.ChannelFilePath), cursor, nowLocal);
+
+        if (notes.Count == 0)
+            return ordered;
+
+        return [.. notes.Select(note => new PendingEntry(own, note)), .. ordered];
     }
 
     /// <summary>
@@ -1205,8 +1232,8 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             ChannelAppender.Append_AppEntry(
                 state.ChannelFilePath,
-                Stall_Audience(state),
-                $"{TURN_STALLED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — failed outside the process × {failed.FailedAttempts}",
+                Resolve_StallAlertAudience(state),
+                StallAlert_Decider.Build_Subject(state.MemberId, state.NextTurnNumber, $"failed outside the process × {failed.FailedAttempts}"),
                 $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast error: {cause.GetType().Name}: {cause.Message}",
                 DateTime.Now);
         }
@@ -1344,7 +1371,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 return;
             }
 
-            if (!(await Write_Reply_Async(state, sources, result.ResultText)).AllLanded)
+            if (!(await Write_Reply_Async(state, sources, result.ResultText, Find_AnsweredOwnerEntry_OrNull(state, pending))).AllLanded)
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
@@ -1815,10 +1842,49 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             DateTime.Now);
     }
 
-    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
+    /// <summary>
+    /// The owner entry this turn's answer answers: the LAST owner message it was handed from the
+    /// session's own channel — the one the owner is looking at when the answer arrives. Null when the
+    /// turn carried no owner message (member traffic, a boot).
+    /// </summary>
+    static int? Find_AnsweredOwnerEntry_OrNull(IPrintSessionState state, IReadOnlyList<PendingEntry> pending)
+    {
+        for (var index = pending.Count - 1; index >= 0; index--)
+        {
+            var item = pending[index];
+
+            if (item.Entry.Author == ChannelAuthors.Owner && string.Equals(item.Source.ChannelFilePath, state.ChannelFilePath, StringComparison.OrdinalIgnoreCase))
+                return item.Entry.Index;
+        }
+
+        return null;
+    }
+
+    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText, int? answersOwnerEntry = null)
     {
         var author = SessionRole_Names.Get_Author(state.Role);
         var ownChannel = state.ChannelFilePath;
+
+        // THE FIRST PART THAT LANDS IN THE SESSION'S OWN CHANNEL CARRIES THE LINK, and only that one:
+        // it is the answer to the owner's message, and the phone threads it as a reply
+        // (Running.ReplyLinks). Later parts follow it in the chat as they always did.
+        var linkPending = answersOwnerEntry != null;
+
+        async Task<bool> Append_Async(string target, string subject, string body)
+        {
+            var index = await Append_SessionEntry_WithRetry_OrNull_Async(target, author, subject, body);
+
+            if (index == null)
+                return false;
+
+            if (linkPending && string.Equals(target, ownChannel, StringComparison.OrdinalIgnoreCase))
+            {
+                ReplyLinks.Record_Answer(ownChannel, index.Value, answersOwnerEntry!.Value);
+                linkPending = false;
+            }
+
+            return true;
+        }
 
         // WHICH FILES THE REPLY ACTUALLY REACHED, collected as they are written rather than worked out
         // again afterwards from the same text — a second reading of the addressing rule is how the
@@ -1828,7 +1894,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (sources.Count <= 1)
         {
             var (soleSubject, soleBody) = PrintTurnEntry_Splitter.Split(resultText);
-            var soleLanded = await Append_SessionEntry_WithRetry_Async(ownChannel, author, soleSubject, soleBody);
+            var soleLanded = await Append_Async(ownChannel, soleSubject, soleBody);
 
             if (soleLanded)
                 written.Add(ownChannel);
@@ -1842,7 +1908,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (blocks.Count == 0)
         {
             var (emptySubject, emptyBody) = PrintTurnEntry_Splitter.Split(resultText);
-            var emptyLanded = await Append_SessionEntry_WithRetry_Async(ownChannel, author, emptySubject, emptyBody);
+            var emptyLanded = await Append_Async(ownChannel, emptySubject, emptyBody);
 
             if (emptyLanded)
                 written.Add(ownChannel);
@@ -1867,7 +1933,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             var (subject, body) = PrintTurnEntry_Splitter.Split(block.Text);
 
-            if (await Append_SessionEntry_WithRetry_Async(target, author, subject, body))
+            if (await Append_Async(target, subject, body))
                 written.Add(target);
             else
                 allLanded = false;
@@ -1969,8 +2035,8 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             ChannelAppender.Append_AppEntry(
                 state.ChannelFilePath,
-                Stall_Audience(state),
-                $"{TURN_STALLED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — {outcome} × {failed.FailedAttempts}",
+                Resolve_StallAlertAudience(state),
+                StallAlert_Decider.Build_Subject(state.MemberId, state.NextTurnNumber, $"{outcome} × {failed.FailedAttempts}"),
                 $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast exit_code: {result.ExitCode}\napi_error_status: {Describe_ApiErrorStatus(result)}\nstderr (tail): {Tail(result.RawStderr, 600)}",
                 DateTime.Now);
 
@@ -2073,17 +2139,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// wait is under a second, which no shutdown notices.
     /// </para>
     /// </summary>
-    static async Task<bool> Append_SessionEntry_WithRetry_Async(string channelFilePath, ChannelAuthors author, string subject, string body)
+    static async Task<int?> Append_SessionEntry_WithRetry_OrNull_Async(string channelFilePath, ChannelAuthors author, string subject, string body)
     {
         for (var attempt = 0; attempt < ENTRY_APPEND_ATTEMPTS; attempt++)
         {
-            if (ChannelAppender.Append_SessionEntry(channelFilePath, author, subject, body, DateTime.Now))
-                return true;
+            if (ChannelAppender.Append_SessionEntry_OrNull(channelFilePath, author, subject, body, DateTime.Now) is int index)
+                return index;
 
             await Task.Delay(ENTRY_APPEND_RETRY_MILLISECONDS);
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>
@@ -2186,6 +2252,27 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return state.Role is SessionRoles.Solo or SessionRoles.General or SessionRoles.Supervisor
             ? AppEntryAudiences.Owner
             : AppEntryAudiences.Agent;
+    }
+
+    /// <summary>
+    /// <see cref="Stall_Audience"/>, minus the repeats: a turn whose stall has already reached the
+    /// owner files every later stall of the SAME turn for the session only. See
+    /// <see cref="StallAlert_Decider"/> for the 2026-09-11 incident (three identical alerts on the
+    /// phone for one turn) and for why the memory is the channel rather than the tracker.
+    /// </summary>
+    AppEntryAudiences Resolve_StallAlertAudience(IPrintSessionState state)
+    {
+        var roleAudience = Stall_Audience(state);
+
+        if (roleAudience != AppEntryAudiences.Owner)
+            return roleAudience;
+
+        var audience = StallAlert_Decider.Resolve_Audience(roleAudience, ChannelHistory_Cache.Read_Entries(state.ChannelFilePath), state.MemberId, state.NextTurnNumber);
+
+        if (audience != roleAudience)
+            _log.Log_Info(state.OrchId, StallAlert_Decider.Describe_Repeat(state.MemberId, state.NextTurnNumber));
+
+        return audience;
     }
 
     static string Describe_ApiErrorStatus(ITurnResult result)
