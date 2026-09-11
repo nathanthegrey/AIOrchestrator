@@ -71,6 +71,67 @@ public static class QuestionSupersede_Decider
         return openInOrchestration.FirstOrDefault(question => question.Prompt != null && Normalise(question.Prompt) == wanted);
     }
 
+    /// <summary>
+    /// How long a question the owner has ALREADY resolved keeps the same words off their phone.
+    ///
+    /// <para>
+    /// It is a window rather than for ever because a verbatim re-ask is legitimate once the world has
+    /// moved: "merge stage 13 now?" asked again tomorrow is a new question wearing the same sentence.
+    /// Two hours is about one conversation, which is where the fault lives.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan CLOSED_REPEAT_WINDOW = TimeSpan.FromHours(2);
+
+    /// <summary>
+    /// The recently RESOLVED question the new one repeats word for word, or null.
+    ///
+    /// <para>
+    /// The sibling above guards the questions still open; this one guards the ones the owner has just
+    /// dealt with — tapped an option, typed an answer, or tapped "let's talk", which closes the
+    /// question without deciding anything and then asks the session to put it again. That last path is
+    /// the one the owner met on 2026-09-12, and by the open-questions rule both copies were correct.
+    /// </para>
+    /// <para>
+    /// SAME MATCHING AS THE OPEN CASE — the question line alone, case-folded, whitespace collapsed —
+    /// so the two guards cannot disagree about what "the same question" means. The newest match wins:
+    /// it is the one whose answer the session is being told about.
+    /// </para>
+    /// </summary>
+    public static ClosedQuestionRecord? Find_ClosedRepeat_OrNull(
+        IEnumerable<ClosedQuestionRecord> closedQuestions,
+        string orchId,
+        string newPrompt,
+        DateTime nowUtc)
+    {
+        var wanted = Normalise(newPrompt);
+
+        if (wanted.Length == 0)
+            return null;
+
+        return closedQuestions
+            .Where(closed => closed.OrchId == orchId)
+            .Where(closed => nowUtc - closed.ClosedUtc <= CLOSED_REPEAT_WINDOW)
+            .Where(closed => Normalise(closed.Prompt) == wanted)
+            .OrderByDescending(closed => closed.ClosedUtc)
+            .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Whether a question that repeats a DECIDED one is withheld: only the first time.
+    ///
+    /// <para>
+    /// A WARNING, NEVER A WALL. The first copy is withheld because the owner has just dealt with this
+    /// question and a second identical one reads as being asked twice. A session that has been told
+    /// what they decided and asks the same thing REGARDLESS is no longer repeating itself by accident
+    /// — it is insisting, and a decision that can never be put to the owner is worse than one
+    /// duplicate. So the second attempt goes out.
+    /// </para>
+    /// </summary>
+    public static bool Should_Withhold_Reask(ClosedQuestionRecord? decidedAlready, bool withheldOnceAlready)
+    {
+        return decidedAlready != null && !withheldOnceAlready;
+    }
+
     static string Normalise(string text)
     {
         return string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
