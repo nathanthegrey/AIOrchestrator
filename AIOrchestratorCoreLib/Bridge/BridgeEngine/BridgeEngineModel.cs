@@ -4087,6 +4087,19 @@ internal sealed class BridgeEngineModel(
         var client = _telegramClient
             ?? throw new Exception("Send_QuestionWithButtons_Async called without a Telegram client");
 
+        // THE SAME QUESTION IS NOT ASKED TWICE. A session that re-asks what is still open on the
+        // phone — word for word, buttons live, perhaps already tapped and waiting for its code —
+        // would put a second copy under the first, and the owner reads that as being asked twice
+        // (fincanva-6, 2026-09-11, 10:35 and 10:43). The open one stands; the session is told why
+        // nothing new went out, and it stops exactly as if it had asked.
+        var repeated = Find_RepeatedQuestion_OrNull(channel.OrchId, questionPrompt);
+
+        if (repeated != null)
+        {
+            Handle_RepeatedQuestion(channel, repeated);
+            return;
+        }
+
         // A SECOND OPEN QUESTION IS COACHED, NOT REFUSED — and the refusal was tried first.
         //
         // `kit/commands/supervisor.md:323` carries "A QUESTION ENDS YOUR TURN — one open question at
@@ -4203,6 +4216,7 @@ internal sealed class BridgeEngineModel(
                     MessageId = messageId.Value,
                     OrchId = channel.OrchId,
                     Text = promptWithTerms,
+                    Prompt = questionPrompt,
                     AskedUtc = askedUtc,
                     ButtonGroupId = buttonGroupId,
                     DeadlineUtc = deadlineUtc,
@@ -11817,19 +11831,29 @@ internal sealed class BridgeEngineModel(
     }
 
     /// <summary>
-    /// The open questions of this topic asked BEFORE the owner last replied in words — the ones a
-    /// newer question from the same asker will close as superseded. Empty when the owner has not
-    /// spoken since the oldest of them: two parallel questions with no reply between stay open.
+    /// The open questions of this topic a newer question from the same asker will close as
+    /// superseded — the rule is <see cref="QuestionSupersede_Decider.Select_ToSupersede"/>; this only
+    /// gathers its inputs under the lock that guards them.
     /// </summary>
     IReadOnlyList<OpenQuestionRecord> Find_QuestionsToSupersede(string orchId)
     {
         lock (_ownerStateLock)
         {
-            if (!_ownerRepliedInWordsUtcByOrchId.TryGetValue(orchId, out var repliedUtc))
-                return [];
+            DateTime? repliedUtc = _ownerRepliedInWordsUtcByOrchId.TryGetValue(orchId, out var replied) ? replied : null;
+            HashSet<long> awaitingReadBack = [.. _pendingConfirmations.Where(confirmation => confirmation.MessageId != null).Select(confirmation => confirmation.MessageId!.Value)];
 
-            return [.. _openQuestions.Values.Where(question => question.OrchId == orchId && question.AskedUtc < repliedUtc)];
+            return QuestionSupersede_Decider.Select_ToSupersede(
+                _openQuestions.Values.Where(question => question.OrchId == orchId),
+                repliedUtc,
+                awaitingReadBack);
         }
+    }
+
+    /// <summary>The open question of this orchestration that <paramref name="questionPrompt"/> repeats word for word, or null.</summary>
+    OpenQuestionRecord? Find_RepeatedQuestion_OrNull(string orchId, string questionPrompt)
+    {
+        lock (_ownerStateLock)
+            return QuestionSupersede_Decider.Find_Repeat_OrNull(_openQuestions.Values.Where(question => question.OrchId == orchId), questionPrompt);
     }
 
     /// <summary>
@@ -11899,6 +11923,36 @@ internal sealed class BridgeEngineModel(
                 QuestionPrompt_Builder.Build_SupersededText(question.Text),
                 cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// A repeat stays unsent, and the session is told which question is still open and in what
+    /// state — "tapped, waiting for the code" is the fact that session was missing the day this was
+    /// written. The awaiting-answer flag is raised as for any question: it asked, so it stops.
+    /// </summary>
+    void Handle_RepeatedQuestion(Channels.DiscoveredChannel.IDiscoveredChannel channel, OpenQuestionRecord repeated)
+    {
+        bool awaitingReadBack;
+
+        lock (_ownerStateLock)
+            awaitingReadBack = _pendingConfirmations.Any(confirmation => confirmation.MessageId == repeated.MessageId);
+
+        var state = awaitingReadBack
+            ? "the owner has already TAPPED an answer and the app is holding it until they type the read-back code shown on their phone — it reaches you when they do"
+            : "its buttons are still live on the owner's phone";
+
+        _log.Log_Info(channel.OrchId, $"a question repeating one still open (asked {repeated.AskedUtc:HH:mm} UTC) was not sent again — {(awaitingReadBack ? "tapped, awaiting its read-back code" : "still unanswered")}");
+
+        ChannelAppender.Append_AppEntry(
+            channel.FilePath,
+            AppEntryAudiences.Agent,
+            "this question is already open — not sent again",
+            $"You asked a question the owner already has open, word for word (asked {repeated.AskedUtc.ToLocalTime():HH:mm}), and {state}. "
+            + "A second copy would read on the phone as being asked twice, so nothing new went out. Do not ask it again.",
+            DateTime.Now);
+
+        if (channel.IsOwnerChannel && OwnerPresence_Policy.Should_RaiseAwaitingAnswer(Resolve_Presence(channel.OrchId)))
+            Raise_AwaitingAnswerFlag(channel.OrchId);
     }
 
     bool Would_BeASecondOpenQuestion(string orchId)
@@ -12663,10 +12717,15 @@ internal sealed class BridgeEngineModel(
         {
             await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
 
-            // Stamped whether or not the reply bound: what matters later is that the owner SPOKE
+            // Stamped whether or not the reply bound: what matters later is that the owner REPLIED
             // after a question was asked, and a bound reply leaves nothing open to supersede anyway.
-            lock (_ownerStateLock)
-                _ownerRepliedInWordsUtcByOrchId[orchId] = _clock.UtcNow;
+            // NOT when the owner ASKED something: a question answers nothing, so it cannot make an
+            // older question obsolete (fincanva-6, 2026-09-11 — see QuestionSupersede_Decider).
+            if (QuestionSupersede_Decider.Counts_AsAReply(segmentText))
+            {
+                lock (_ownerStateLock)
+                    _ownerRepliedInWordsUtcByOrchId[orchId] = _clock.UtcNow;
+            }
         }
         Clear_AwaitingAnswerFlag(orchId);
 

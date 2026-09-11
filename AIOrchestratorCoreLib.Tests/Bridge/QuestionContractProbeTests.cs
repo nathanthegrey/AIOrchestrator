@@ -533,6 +533,138 @@ public class QuestionContractProbeTests : IDisposable
         Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
     }
 
+    /// <summary>
+    /// THE OWNER'S OWN QUESTION IS NOT A REPLY. fincanva-6, 2026-09-11: a question was open, the owner
+    /// asked "devo fare solo smoke?", and the supervisor's next question closed the open one as
+    /// superseded — "you had replied in words" — when the owner had replied to nothing.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task TheOwnersOwnQuestion_DoesNotLetANewQuestionSupersedeTheOpenOne()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("devo fare solo smoke?", updateId: 3100, messageId: 101));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("is itself a question"), 20_000),
+            $"the owner's question was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 20);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Merge it") != null, 25_000),
+            $"the second question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(2, _engineState.Load_OrEmpty().OpenQuestions.Count);
+        Assert.Equal(0, _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX));
+    }
+
+    /// <summary>
+    /// THE SAME QUESTION IS NOT POSTED TWICE. The second half of the same chain: the supervisor asked
+    /// its open question again word for word, and the owner got a second copy with live buttons.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AQuestionAskedAgainWordForWord_IsNotSentTwice_AndTheAskerIsTold()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("devo fare solo smoke?", updateId: 3110, messageId: 111));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("is itself a question"), 20_000),
+            $"the owner's question was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, COMPLETE_QUESTION.Replace("Two plan levers changed", "Only the smoke is left", StringComparison.Ordinal), entryNumber: 20);
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("was not sent again"), 25_000),
+            $"the repeat was not recognised.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Equal(1, _telegram.Count_Sent_Containing("Start the FIN-D-277a build now?"));
+        Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Contains("this question is already open — not sent again", Channel(orchId), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A TAPPED QUESTION WAITING FOR ITS CODE IS ANSWERED, AND IS NEVER SUPERSEDED. fincanva-6,
+    /// 2026-09-11: the owner tapped «Sì» on a high-risk merge question; the supersede sweep closed it
+    /// and discarded the pending read-back, so their answer was thrown away. Here a later reply
+    /// really does count (two questions open, a plain sentence), and the third question closes the
+    /// untapped one only.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task ATappedQuestionAwaitingItsCode_IsNeverSuperseded()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION.Replace("RISK: low", "RISK: high", StringComparison.Ordinal));
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        var questionMessageId = _telegram.LastButtonMessageId ?? throw new Exception("the question was sent with no message id");
+        var startIt = _telegram.Find_ButtonFor("Start it") ?? throw new Exception("the option never reached the phone");
+
+        _telegram.Queue_Updates(Build_CallbackTapJson(startIt, questionMessageId, updateId: 3120));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().PendingConfirmations.Count == 1, 20_000),
+            $"the high-risk tap did not open a read-back.{Environment.NewLine}{_log.Dump()}");
+
+        // As on the day: before typing the code, the owner asks something. That unfreezes the
+        // conversation (a held high-risk answer does not) and, being a question, replies to nothing.
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("devo fare solo smoke?", updateId: 3125, messageId: 125));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("is itself a question"), 20_000),
+            $"the owner's question was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 20);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Merge it") != null, 25_000),
+            $"the second question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        _telegram.Queue_Updates(Build_OwnerMessageJson("start the build and hold the merge", updateId: 3130, messageId: 131));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("the reply names none of them"), 20_000),
+            $"the typed reply was never routed.{Environment.NewLine}{_log.Dump()}");
+
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        Append_Supervisor(orchId, THIRD_QUESTION, entryNumber: 30);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Ship it") != null && _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX) >= 1, 25_000),
+            $"the third question did not supersede the untapped one.{Environment.NewLine}{_log.Dump()}");
+
+        var state = _engineState.Load_OrEmpty();
+        Assert.Equal(2, state.OpenQuestions.Count);
+        Assert.Contains(state.OpenQuestions, question => question.Text.Contains("Start the FIN-D-277a build now?", StringComparison.Ordinal));
+        Assert.Single(state.PendingConfirmations);
+        Assert.Equal(1, _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX));
+    }
+
     async Task Run_For_Async(int milliseconds)
     {
         using var cancellation = new CancellationTokenSource();
