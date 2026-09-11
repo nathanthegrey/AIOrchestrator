@@ -156,7 +156,7 @@ internal sealed class StreamSessionProcess : IDisposable
         // everything downstream, and a background sub-agent returning after the report re-opens the
         // turn and hands the entry to a later message. SupersededFinals_Rule decides which of these
         // the result did not keep.
-        List<string> finalLooking = [];
+        List<(string? MessageId, string Text)> finalLooking = [];
 
         // WHAT THE SESSION SAID WHEN NOBODY HAD ASKED — see Read_Line below. Filed ahead of this
         // turn's answer, never as it.
@@ -204,7 +204,7 @@ internal sealed class StreamSessionProcess : IDisposable
 
                 stopwatch.Stop();
 
-                var result = Build_Result(0, timedOut: false, json, stopwatch.Elapsed, finalLooking, unprompted);
+                var result = Build_Result(0, timedOut: false, json, stopwatch.Elapsed, TurnResult.SupersededFinals_Rule.Texts(finalLooking), unprompted);
 
                 json[StreamSessionProcess_Words.TURN_COST_KEY] = result.TotalCostUsd;
                 _onRawLine(json.ToJsonString());
@@ -291,9 +291,7 @@ internal sealed class StreamSessionProcess : IDisposable
 
             if (!StreamEvent_Reader.Is_Result(json))
             {
-                if (TurnResult.SupersededFinals_Rule.Is_FinalLooking(json))
-                    finalLooking.Add(StreamEvent_Reader.Read_AssistantText(json));
-
+                TurnResult.SupersededFinals_Rule.Track(finalLooking, json);
                 return null;
             }
 
@@ -306,7 +304,7 @@ internal sealed class StreamSessionProcess : IDisposable
             {
                 var text = StreamEvent_Reader.Read_ResultText(json);
 
-                unprompted.AddRange(TurnResult.SupersededFinals_Rule.Select_Superseded(finalLooking, text));
+                unprompted.AddRange(TurnResult.SupersededFinals_Rule.Select_Superseded(TurnResult.SupersededFinals_Rule.Texts(finalLooking), text));
 
                 if (text.Trim().Length > 0)
                     unprompted.Add(text);
