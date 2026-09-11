@@ -1663,6 +1663,12 @@ internal sealed class BridgeEngineModel(
         Flag_IdleMembers();
         Report_GuardsNotInForce();
 
+        // BEFORE THE TAILER, so an orchestration created this tick has its topic by the time anything
+        // it wrote is mirrored. Below the DND gate on purpose: creating a topic is visible in the
+        // group, and 🌙 means the owner is not to be disturbed — a topic deferred by a mute is still
+        // created by the first mirrorable entry after the unmute, as it always was.
+        await Ensure_TopicsForNewOrchestrations_Async(cancellationToken);
+
         var channels = Find_ActiveChannels();
         var pollResult = _tailer.Poll(channels);
 
@@ -1810,7 +1816,7 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
+            var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel.OrchId, cancellationToken);
 
             await client.Send_Document_Async(
                 threadId,
@@ -3752,7 +3758,7 @@ internal sealed class BridgeEngineModel(
         if (Is_TopicSilenced(append.Channel.OrchId))
             return true;
 
-        var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel, cancellationToken);
+        var threadId = await Resolve_ThreadId_OrNull_Async(append.Channel.OrchId, cancellationToken);
 
         foreach (var entry in mirrorableEntries)
         {
@@ -4625,16 +4631,27 @@ internal sealed class BridgeEngineModel(
         return deduplicated;
     }
 
-    /// <summary>General channel → the General topic (null thread id). Orchestrations get a topic on first mirror.</summary>
-    async Task<long?> Resolve_ThreadId_OrNull_Async(IDiscoveredChannel channel, CancellationToken cancellationToken)
+    /// <summary>
+    /// General channel → the General topic (null thread id). An orchestration's topic is created here
+    /// and nowhere else — this is the ONE implementation, called both by the mirror and by the sweep
+    /// that gives a new orchestration its topic at creation (see
+    /// <see cref="Ensure_TopicsForNewOrchestrations_Async"/>).
+    ///
+    /// <para>
+    /// IT TAKES AN ORCH ID RATHER THAN A CHANNEL, because the sweep has no append to point at: a
+    /// brand-new orchestration's only entry is the owner's own, which is never mirrored. The body
+    /// never read anything else off the channel.
+    /// </para>
+    /// </summary>
+    async Task<long?> Resolve_ThreadId_OrNull_Async(string orchId, CancellationToken cancellationToken)
     {
-        if (channel.OrchId == ChannelDiscovery.GENERAL_ORCH_ID)
+        if (orchId == ChannelDiscovery.GENERAL_ORCH_ID)
             return null;
 
         if (_telegramClient == null)
             return null;
 
-        var session = _store.Get_Session_OrNull(channel.OrchId);
+        var session = _store.Get_Session_OrNull(orchId);
         if (session == null)
             return null;
 
@@ -4643,10 +4660,10 @@ internal sealed class BridgeEngineModel(
 
         try
         {
-            var topicId = await _telegramClient.Create_ForumTopic_Async(channel.OrchId, Resolve_TopicColour_OrNull(session.RepoName), cancellationToken);
-            _store.Set_TelegramTopicId(channel.OrchId, topicId);
-            _log.Log_Info(channel.OrchId, $"Telegram topic created (thread id {topicId})");
-            Remove_TopicCreationPin_FireAndForget(channel.OrchId, topicId);
+            var topicId = await _telegramClient.Create_ForumTopic_Async(orchId, Resolve_TopicColour_OrNull(session.RepoName), cancellationToken);
+            _store.Set_TelegramTopicId(orchId, topicId);
+            _log.Log_Info(orchId, $"Telegram topic created (thread id {topicId})");
+            Remove_TopicCreationPin_FireAndForget(orchId, topicId);
             return topicId;
         }
         // DELIBERATELY NOT FILTERED, AND THIS COMMENT IS THE REASON — DO NOT "COMPLETE" THE SWEEP HERE.
@@ -4687,8 +4704,51 @@ internal sealed class BridgeEngineModel(
         }
         catch (Exception ex)
         {
-            _log.Log_Error(channel.OrchId, "Telegram topic creation failed — mirroring to the General topic for now", ex);
+            _log.Log_Error(orchId, "Telegram topic creation failed — mirroring to the General topic for now", ex);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// A NEW ORCHESTRATION GETS ITS TOPIC WHEN IT IS CREATED, not when one of its sessions first
+    /// speaks. The owner's directive of 2026-09-12, after watching a topic fail to appear for twenty
+    /// minutes: *"c'è qualcosa che non va con l'apertura dei topic, non so se un topic è stato aperto
+    /// silente o se le cose si sono perse o cosa."*
+    ///
+    /// <para>
+    /// WHAT IT WAS. Topic creation hung off the mirror: <c>Mirror_Append_Async</c> returns before
+    /// resolving a thread id when an append carries nothing mirrorable, and an owner-authored entry is
+    /// never mirrored (it came FROM Telegram). So an orchestration whose only entry is the owner's own
+    /// message had no topic at all — and a session that takes twenty minutes over its first turn, which
+    /// a print-run solo routinely does, left the owner looking at a topic list with nothing in it and
+    /// no way to tell a slow start from a lost one. Nothing was lost and nothing was logged either:
+    /// the skip is silent and correct, and the absence looked exactly like a failure.
+    /// </para>
+    /// <para>
+    /// SILENCED TOPICS ARE SKIPPED, like every other outbound site in this file. Creating a forum topic
+    /// puts a service message in the group, and Silenced means the owner is reading this orchestration
+    /// in its terminal. It costs nothing: the first mirrorable entry still creates the topic exactly as
+    /// it did before, through the same one implementation.
+    /// </para>
+    /// <para>
+    /// BEST EFFORT, ONE AT A TIME. The resolver already logs and swallows its own failure, so a
+    /// Telegram outage costs a log line and a retry next tick.
+    /// </para>
+    /// </summary>
+    async Task Ensure_TopicsForNewOrchestrations_Async(CancellationToken cancellationToken)
+    {
+        if (_telegramClient == null)
+            return;
+
+        foreach (var session in Sessions_ThisTick())
+        {
+            if (session.ClosedUtc != null || session.TelegramTopicId != null)
+                continue;
+
+            if (Is_TopicSilenced(session.OrchId))
+                continue;
+
+            await Resolve_ThreadId_OrNull_Async(session.OrchId, cancellationToken);
         }
     }
 
