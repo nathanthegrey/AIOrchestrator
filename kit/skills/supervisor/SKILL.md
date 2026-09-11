@@ -794,7 +794,7 @@ Write the reason for the OWNER, not for yourself: "adversarial review of the pid
   2026-09-07: *"a fixed model for everyone makes no sense"*). Size it to the job in front of you:
   **sonnet** for bounded, mechanical, well-specified work — a one-line fix, a rename, tests to make
   pass, porting a file, a checker to run; **opus** for design, several files, judgement, uncertain
-  debugging, anything on a money path, and every reviewer at `deep` or `max`. In doubt, one tier UP —
+  debugging, anything on a money path, and every reviewer at `xhigh` or `max`. In doubt, one tier UP —
   a wrong-low costs a rework, a wrong-high costs tokens. Say the choice and the reason in the brief
   (`MODEL: sonnet — mechanical rename, spec is exact`) so the owner can see it. **Fable never** — the
   app refuses it from you; only the owner picks it, through `set-model`. Omit `model` and the member
@@ -977,14 +977,15 @@ Depth is chosen from **blast radius** — what breaks if this is wrong, and how 
 never from how big the diff looks. Name it explicitly in the brief; the reviewer will honour it and
 report what it actually spent.
 
-| Depth | The reviewer runs | Use when |
+| Depth | The reviewer runs | Where it usually fits |
 |---|---|---|
-| `quick` | nothing — it reads the diff itself | Small, local, easily reverted. A docs/config edit, a re-check of one earlier finding, a re-review of a fix. |
-| `standard` | `/code-review high` | Ordinary feature work or a bug fix on a branch. **The default.** |
-| `deep` | `/code-review xhigh` | Engine/algorithm changes, money or order paths, shared libraries, many call sites. |
-| `max` | `/code-review max` | Irreversible or safety-critical: migrations, deletion sweeps, auth/licensing, anything shipping straight to paying customers. |
+| `quick` | nothing — it reads the diff itself | A re-review of a fix, a docs/config edit, a re-check of one earlier finding. |
+| `low`, `medium` | `/code-review low` or `medium` | Small, local, easily reverted changes. |
+| `high` | `/code-review high` | Ordinary feature work or a bug fix on a branch. |
+| `xhigh`, `max` | `/code-review xhigh` or `max` | Engine/algorithm changes, money or order paths, shared libraries; irreversible or safety-critical work. |
 
-**The depth IS the `/code-review` level, and choosing it is yours** (owner, 2026-09-11). The reviewer
+**The depth IS the `/code-review` level, and choosing it is yours — any level, the low ones included;
+the third column is guidance, not a mapping** (owner, 2026-09-11). The reviewer
 spawns no finders of its own — its only fan-out is what the skill does at the level you named — and
 the implementer runs no `/code-review` at all, only `/simplify` on its own diff. Before this, every
 round paid for two heavy reviews of the same code: the implementer's own pass (127 of 143 calls at
@@ -994,7 +995,7 @@ round paid for two heavy reviews of the same code: the implementer's own pass (1
   migration is negligence.** Both errors are yours to avoid.
 - **When you genuinely cannot tell, ASK THE OWNER — do not guess.** One message with a `QUESTION:`
   line naming what is being reviewed, plus `OPTION:` lines
-  (`OPTION: standard — code-review high`, `OPTION: deep — code-review xhigh`, `OPTION: max — code-review max`)
+  (`OPTION: medium — code-review medium`, `OPTION: high — code-review high`, `OPTION: xhigh — code-review xhigh`)
   costs one tap and is far cheaper than either failure. Say what the work touches and what you'd
   recommend; the owner is paying for the difference.
 - **Say the cost in the `reason`**, so the owner sees it on their phone: "deep adversarial review of
@@ -1011,8 +1012,8 @@ report in its channel; it never talks to the owner.
 
 **A RE-REVIEW BRIEF names the FIX, not the branch** (owner, 2026-09-11). After the first round, the
 brief carries the last reviewed commit, the new one, and the findings to check — and the reviewer
-reviews `git diff <last>..<new>` plus those findings, at `quick` unless the fix is large or sits on
-a money, auth or gate path (reviewer, "A RE-REVIEW reviews the FIX"). Three rules, because the rounds
+reviews `git diff <last>..<new>` plus those findings — usually at `quick`, since the delta is small by
+construction, though the level is yours to pick (reviewer, "A RE-REVIEW reviews the FIX"). Three rules, because the rounds
 are where review money goes:
 
 - **Never brief an open hunt on a branch already reviewed** — "find the fourth", "find the eighth".

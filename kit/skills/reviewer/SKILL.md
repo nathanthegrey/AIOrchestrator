@@ -73,19 +73,24 @@ A `max`-level review of a two-line change wastes the owner's money; a single-pas
 an irreversible migration is negligence. Depth is chosen from **blast radius** (what breaks if this
 is wrong, and how reversible it is), not from diff size.
 
-| Depth | Your finder | Fits |
+| Depth | What you run | Where it usually fits |
 |---|---|---|
-| `quick` | You read it yourself. No skill, no agents. | Small, local, easily reverted changes; a docs or config edit; a re-check of one earlier finding; a re-review of a fix. |
-| `standard` | `/code-review high` on the target. **Default when the brief says "review this".** | Ordinary feature work and bug fixes on a branch. |
-| `deep` | `/code-review xhigh` on the target. | Engine/algorithm changes, money or order paths, anything touching shared libraries or many call sites. |
-| `max` | `/code-review max` on the target. | Irreversible or safety-critical work: migrations, deletion sweeps, auth/licensing, anything shipping straight to paying customers. |
+| `quick` | Nothing — you read it yourself. No skill, no agents. | A re-review of a fix; a docs or config edit; a re-check of one earlier finding. |
+| `low`, `medium` | `/code-review low` or `/code-review medium` on the target. | Small, local, easily reverted changes. |
+| `high` | `/code-review high` on the target. | Ordinary feature work and bug fixes on a branch. |
+| `xhigh`, `max` | `/code-review xhigh` or `/code-review max` on the target. | Engine/algorithm changes, money or order paths, shared libraries; irreversible or safety-critical work — migrations, deletion sweeps, auth/licensing. |
+
+**The third column is guidance, not a mapping.** The depth is the level itself, the supervisor picks
+whichever one the task needs — the low ones included — and nothing here ties a kind of change to a
+level (owner, 2026-09-11: *"why high or extra high? I would leave total freedom with respect to the
+task, including lower levels"*).
 
 Rules that make the ladder real:
 
 - **YOUR FINDER IS `/code-review`, AT THE LEVEL THE DEPTH NAMES — you spawn no finders of your own**
   (owner, 2026-09-11: *"if the reviewer spams 9 agents every time, that is a problem"*). The
   supervisor picks the depth, so the supervisor picks the level. Pass the level AND the target every
-  time — `/code-review xhigh origin/dev...<branch>`, three dots — because with no level the skill
+  time — `/code-review <level> origin/dev...<branch>`, three dots — because with no level the skill
   reuses the last one typed. Never `--fix` (you are read-only), never `--comment` or `--post` (that
   publishes), never `ultra` (a billed cloud review). What the skill spends at its level is the whole
   budget; the verification below is yours, done by reading.
@@ -107,7 +112,7 @@ Rules that make the ladder real:
   failure mode.
 - **Push back on a depth that does not match what you are looking at**, in either direction. "This
   is `max` on a config default — `quick` covers it, saving a max-level review" is exactly as useful as
-  "this brief says `quick` but it rewrites the order-sizing path; recommend `deep`". Say it before
+  "this brief says `quick` but it rewrites the order-sizing path; recommend `xhigh`". Say it before
   you start, not after you have spent the tokens.
 - **A SOFT BOUNDARY may arrive mid-review, once. It is ADVICE about WHERE THIS TURN ENDS, and never
   about what a verdict may leave out.** The reminder reads
@@ -233,8 +238,8 @@ than the first round's, by rule (owner, 2026-09-11):
   read it. One line in a MISSED EARLIER block beside OUT OF SCOPE, same shape, with its severity;
   it does not block this round, and the supervisor decides whether it is worth another. Promoting it
   into F1 to force a round is the move OUT OF SCOPE exists to stop.
-- **A re-review is `quick` unless the fix itself is large or sits on a money, auth or gate path** —
-  push back on anything heavier before you start, as for any depth.
+- **A re-review is usually `quick`** — the delta is small by construction. The supervisor may name
+  any level; push back before you start when it looks heavier than the fix, as for any depth.
 - **Why:** `fincanva-3` ran five reviews of FIN-D-282a for $49 and the count never fell — 9, 11, 10,
   8, 7 findings — because each fresh round re-read the whole branch; an audit of those rounds put
   about half their findings on code the previous fix had not changed [estimate]. Targeted re-reads of
