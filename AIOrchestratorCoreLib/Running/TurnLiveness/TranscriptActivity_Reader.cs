@@ -91,6 +91,21 @@ public static class TranscriptActivity_Reader
     /// </summary>
     public static DateTime? Read_LastWriteUtc_OrNull(string claudeHome, string sessionId)
     {
+        return Read_Newest_OrNull(claudeHome, sessionId, includeMainTranscript: true);
+    }
+
+    /// <summary>
+    /// The same reading over the SUB-AGENTS' transcripts only — what tells a member waiting on its own
+    /// fan-out from a member repeating itself: the loop detector's repeated poll writes the main file,
+    /// and only real work elsewhere writes these.
+    /// </summary>
+    public static DateTime? Read_SubAgentLastWriteUtc_OrNull(string claudeHome, string sessionId)
+    {
+        return Read_Newest_OrNull(claudeHome, sessionId, includeMainTranscript: false);
+    }
+
+    static DateTime? Read_Newest_OrNull(string claudeHome, string sessionId, bool includeMainTranscript)
+    {
         // THE SESSION ID BECOMES A PATH SEGMENT, so it is validated before it touches one: only the
         // exact hyphenated GUID shape is accepted. Anything else — "../x", "a/b", "*", a padded or
         // braced GUID — returns null rather than a path built from it. Null is the safe direction
@@ -113,7 +128,7 @@ public static class TranscriptActivity_Reader
             DateTime? newest = null;
 
             foreach (var projectFolder in projectsFolder.EnumerateDirectories())
-                newest = Latest_OrNull(newest, Read_ProjectFolder_OrNull(projectFolder.FullName, sessionId));
+                newest = Latest_OrNull(newest, Read_ProjectFolder_OrNull(projectFolder.FullName, sessionId, includeMainTranscript));
 
             return newest;
         }
@@ -167,7 +182,7 @@ public static class TranscriptActivity_Reader
     /// One project folder's contribution. Its own try, so ONE unreadable sibling (another repo's
     /// folder with odd permissions) cannot blind the reading for the folder that holds this session.
     /// </summary>
-    static DateTime? Read_ProjectFolder_OrNull(string projectFolder, string sessionId)
+    static DateTime? Read_ProjectFolder_OrNull(string projectFolder, string sessionId, bool includeMainTranscript)
     {
         try
         {
@@ -179,7 +194,7 @@ public static class TranscriptActivity_Reader
             // existence and timestamp from the same stat.
             var mainTranscript = new FileInfo(Path.Combine(projectFolder, sessionId + TRANSCRIPT_EXTENSION));
 
-            if (mainTranscript.Exists)
+            if (includeMainTranscript && mainTranscript.Exists)
                 newest = mainTranscript.LastWriteTimeUtc;
 
             var sessionFolder = new DirectoryInfo(Path.Combine(projectFolder, sessionId));

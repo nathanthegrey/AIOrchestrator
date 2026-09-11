@@ -104,6 +104,8 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
     {
         try
         {
+            StatePack_Locator.Archive_ProgressNote_IfNewTask(_paths, state.Role, state.OrchId, state.MemberId, pending.Select(item => item.Entry).ToList());
+
             var inputs = StatePackInputs_Reader.Read(_paths, state, requestId, pending, sources);
             StatePack_Writer.Write(StatePack_Locator.Get_File(_paths, state.Role, state.OrchId, state.MemberId), StatePack_Builder.Build(inputs));
         }

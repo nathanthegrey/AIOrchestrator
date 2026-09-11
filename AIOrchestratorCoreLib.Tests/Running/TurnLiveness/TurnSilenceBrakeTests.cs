@@ -106,17 +106,24 @@ public class TurnSilenceBrakeTests
         Assert.Null(TurnSilenceBrake_Factory.Create_ForTurn_OrNull(SessionRoles.Implementer, TimeSpan.Zero, Guid.NewGuid().ToString(), new Dictionary<string, string>()));
     }
 
+    const string LOOP = "the same Bash call returned the same result 4 times in a row";
+
+    static ITurnSilenceBrake LoopingBrake(int? descendants, DateTime? subAgentWrite)
+    {
+        return TurnSilenceBrake_Factory.Create_WithReaders(LIMIT, TimeSpan.FromSeconds(15), () => START.AddMinutes(9), _ => descendants, _ => LOOP, () => subAgentWrite);
+    }
+
     /// <summary>
-    /// A LOOPING TURN SHOWS LIFE FOR EVER — output a second ago, a growing transcript, a command
-    /// running — and is still killed, because repetition is the other half of best practice (research
+    /// A LOOPING TURN SHOWS LIFE FOR EVER — output a second ago, its transcript growing with every
+    /// repeat — and is still killed, because repetition is the other half of best practice (research
     /// 2026-09-11, OpenHands' stuck detector). And the loop is looked for only in THIS turn's steps.
     /// </summary>
     [Fact]
-    public void Decide_ALoopingTurnThatShowsEverySignOfLife_IsKilledAsALoop()
+    public void Decide_ALoopingTurnThatWritesAndPrints_IsKilledAsALoop()
     {
         DateTime? askedSince = null;
-        var brake = TurnSilenceBrake_Factory.Create_WithReaders(LIMIT, TimeSpan.FromSeconds(15), () => START.AddMinutes(9), _ => 3,
-            since => { askedSince = since; return "the same Bash call returned the same result 4 times in a row"; });
+        var brake = TurnSilenceBrake_Factory.Create_WithReaders(LIMIT, TimeSpan.FromSeconds(15), () => START.AddMinutes(9), _ => 0,
+            since => { askedSince = since; return LOOP; });
 
         var line = brake.Decide_Kill_OrNull(START.AddMinutes(10), START, START.AddMinutes(10), 4242);
 
@@ -132,5 +139,34 @@ public class TurnSilenceBrakeTests
         var silence = Brake(null, 0).Decide_Kill_OrNull(START.AddMinutes(16), START, null, 4242);
 
         Assert.False(TurnSilenceBrake_Factory.Is_LoopKill(silence!));
+    }
+
+    /// <summary>
+    /// WAITING IS NOT LOOPING (review finding, 2026-09-11). A member polling its own background work
+    /// gets the same answer again and again while that work moves — a build below it, a sub-agent
+    /// writing. The repetition is spared while anything else moves, and "cannot tell" moves.
+    /// </summary>
+    [Fact]
+    public void Decide_ARepeatedPollWhileABuildRunsBelow_IsSpared()
+    {
+        Assert.Null(LoopingBrake(1, null).Decide_Kill_OrNull(START.AddMinutes(10), START, START.AddMinutes(10), 4242));
+    }
+
+    [Fact]
+    public void Decide_ARepeatedPollWhileASubAgentWrites_IsSpared()
+    {
+        Assert.Null(LoopingBrake(0, START.AddMinutes(8)).Decide_Kill_OrNull(START.AddMinutes(10), START, START.AddMinutes(10), 4242));
+    }
+
+    [Fact]
+    public void Decide_ARepeatedPollWhenTheOsCannotSayWhatRuns_IsSpared()
+    {
+        Assert.Null(LoopingBrake(null, null).Decide_Kill_OrNull(START.AddMinutes(10), START, START.AddMinutes(10), 4242));
+    }
+
+    [Fact]
+    public void Decide_ARepeatAfterTheSubAgentWentQuiet_IsKilled()
+    {
+        Assert.NotNull(LoopingBrake(0, START.AddMinutes(-20)).Decide_Kill_OrNull(START.AddMinutes(10), START, START.AddMinutes(10), 4242));
     }
 }

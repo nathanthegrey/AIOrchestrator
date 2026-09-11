@@ -1616,7 +1616,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (kills < ClosingTurn_Words.KILLS_BEFORE_ALERT || kills % ClosingTurn_Words.KILLS_BEFORE_ALERT != 0)
             return;
 
-        var alert = $"'{state.MemberId}' has been killed at the turn deadline {kills} turns in a row — every one of them reported where it got to, so nothing is lost, but no turn has finished its work inside the deadline";
+        // EVERY KIND OF KILL IS COUNTED HERE, and the advice differs by kind (review finding,
+        // 2026-09-11): a deadline says the brief is bigger than a turn; the silence brake or the loop
+        // detector says the member is stuck, not slow. Each turn_ended record names which fired.
+        var alert = $"'{state.MemberId}' has been killed {kills} turns in a row — at the deadline, by the silence brake or by the loop detector; each turn_ended record says which. Every one reported where it got to, so nothing is lost, but no turn has finished its work";
 
         _log.Log_Warning(state.OrchId, alert);
 
@@ -1624,7 +1627,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             state.ChannelFilePath,
             Stall_Audience(state),
             $"{DEADLINE_KILLS_SUBJECT} — '{state.MemberId}', {kills} turns in a row",
-            $"{alert}\n\nNothing is retried and nothing is waiting: each killed turn was closed down and its entries answered. What this says is that the briefs are bigger than a turn — the next one wants to be smaller, or split.\n\nlast request_id: {requestId}\nturns: {string.Join(", ", executedTurns.TakeLast(kills).Select(turn => turn.RequestId))}",
+            $"{alert}\n\nNothing is retried and nothing is waiting: each killed turn was closed down and its entries answered. If they were deadline kills, the briefs are bigger than a turn — the next one wants to be smaller, or split. If the silence brake or the loop detector fired, the member is stuck rather than slow — look at what it was doing, not at the size of the brief.\n\nlast request_id: {requestId}\nturns: {string.Join(", ", executedTurns.TakeLast(kills).Select(turn => turn.RequestId))}",
             DateTime.Now);
     }
 
@@ -2099,7 +2102,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             $"cost_usd: {(result.TotalCostUsd?.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")}\n" +
             $"duration_ms: {(result.DurationMs?.ToString() ?? "unknown")} (api {(result.DurationApiMs?.ToString() ?? "unknown")}), wall {result.Elapsed.TotalSeconds:F1} s\n" +
             $"api_error_status: {Describe_ApiErrorStatus(result)}\n" +
-            $"exit_code: {result.ExitCode}{(result.TimedOut ? " (killed on timeout)" : string.Empty)}\n" +
+            $"exit_code: {result.ExitCode}{(result.TimedOut ? $" ({ClosingTurn_Words.Describe_Kill(result)})" : string.Empty)}\n" +
             $"session_id: {result.SessionId ?? state.SessionId}";
 
         if (!ChannelAppender.Append_AppEntry(state.ChannelFilePath, AppEntryAudiences.Agent, $"{TURN_ENDED_SUBJECT} {state.MemberId} turn {requestId[(requestId.LastIndexOf('/') + 1)..]} — {outcome}", body, DateTime.Now))

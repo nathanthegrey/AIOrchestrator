@@ -19,13 +19,24 @@ public static class TurnTimeout_Rule
     /// </summary>
     public static TimeSpan Resolve_ForRole(SessionRoles role, IRunnerConfigs configs)
     {
-        return Is_BrakedMember(role, configs) ? configs.MemberTurnTimeout : configs.TurnTimeout;
+        return Resolve_ForRole(role, configs, OperatingSystem.IsWindows());
+    }
+
+    /// <summary>
+    /// WINDOWS KEEPS THE SHORT CEILING, because there the silence brake cannot fire: the CLI is started
+    /// as <c>cmd.exe /c claude</c> (<c>ClaudeInvocation_Resolver</c>), so a process ALWAYS runs below
+    /// the turn and "a command is running" is always true (review finding, 2026-09-11). A two-hour
+    /// ceiling is only safe where something catches a hang sooner; the loop detector still runs there.
+    /// </summary>
+    public static TimeSpan Resolve_ForRole(SessionRoles role, IRunnerConfigs configs, bool isWindows)
+    {
+        return !isWindows && Is_BrakedMember(role, configs) ? configs.MemberTurnTimeout : configs.TurnTimeout;
     }
 
     /// <summary>The longest any turn may run under these settings — what a shutdown has to wait for.</summary>
     public static TimeSpan Resolve_Longest(IRunnerConfigs configs)
     {
-        if (configs.MemberSilenceLimit <= TimeSpan.Zero)
+        if (configs.MemberSilenceLimit <= TimeSpan.Zero || OperatingSystem.IsWindows())
             return configs.TurnTimeout;
 
         return configs.MemberTurnTimeout > configs.TurnTimeout ? configs.MemberTurnTimeout : configs.TurnTimeout;

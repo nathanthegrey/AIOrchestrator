@@ -57,7 +57,8 @@ public static class TurnSilenceBrake_Factory
             Resolve_PollInterval(silenceLimit),
             () => TranscriptActivity_Reader.Read_LastWriteUtc_OrNull(claudeHome, sessionId),
             ProcessDescendants_Reader.Count_Descendants_OrNull,
-            sinceUtc => Describe_Loop_OrNull(claudeHome, sessionId, sinceUtc));
+            sinceUtc => Describe_Loop_OrNull(claudeHome, sessionId, sinceUtc),
+            () => TranscriptActivity_Reader.Read_SubAgentLastWriteUtc_OrNull(claudeHome, sessionId));
     }
 
     /// <summary>True when <paramref name="brakeKill"/> is the loop detector's line rather than the silence brake's.</summary>
@@ -78,13 +79,13 @@ public static class TurnSilenceBrake_Factory
     /// child" without writing a transcript into the real claude home or leaving a process behind.
     /// </summary>
     public static ITurnSilenceBrake Create_WithReaders(
-        TimeSpan silenceLimit, TimeSpan pollInterval, Func<DateTime?> readTranscriptLastWriteUtc, Func<int, int?> countDescendants, Func<DateTime, string?>? describeLoopSince = null)
+        TimeSpan silenceLimit, TimeSpan pollInterval, Func<DateTime?> readTranscriptLastWriteUtc, Func<int, int?> countDescendants, Func<DateTime, string?>? describeLoopSince = null, Func<DateTime?>? readSubAgentLastWriteUtc = null)
     {
         if (silenceLimit <= TimeSpan.Zero)
             throw new ArgumentException($"silenceLimit must be positive, got {silenceLimit}");
         if (pollInterval <= TimeSpan.Zero)
             throw new ArgumentException($"pollInterval must be positive, got {pollInterval}");
 
-        return new TurnSilenceBrakeModel(silenceLimit, pollInterval, readTranscriptLastWriteUtc, countDescendants, describeLoopSince ?? (_ => null));
+        return new TurnSilenceBrakeModel(silenceLimit, pollInterval, readTranscriptLastWriteUtc, countDescendants, describeLoopSince ?? (_ => null), readSubAgentLastWriteUtc ?? (() => null));
     }
 }

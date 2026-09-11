@@ -70,4 +70,15 @@ public class TurnTimeoutRuleTests
         Assert.Equal(TimeSpan.FromMinutes(90), RunnerConfigs_Factory.Create_WithRole(configs, SessionRoles.Implementer, configs.Get_ForRole(SessionRoles.Implementer)).MemberTurnTimeout);
         Assert.Equal(TimeSpan.FromMinutes(90), RunnerConfigs_Factory.Create_WithLimits(configs, 4, 2, TimeSpan.FromMinutes(30), TimeSpan.Zero).MemberTurnTimeout);
     }
+
+    /// <summary>
+    /// WINDOWS KEEPS THE SHORT CEILING: the CLI runs under cmd.exe there, so a process always runs below
+    /// the turn and the silence brake can never fire — a two-hour ceiling would be two hours of a hung slot.
+    /// </summary>
+    [Fact]
+    public void Resolve_ForRole_OnWindows_AMemberKeepsTheShortCeiling()
+    {
+        Assert.Equal(TimeSpan.FromMinutes(30), TurnTimeout_Rule.Resolve_ForRole(SessionRoles.Implementer, Configs("{}"), isWindows: true));
+        Assert.Equal(TimeSpan.FromMinutes(120), TurnTimeout_Rule.Resolve_ForRole(SessionRoles.Implementer, Configs("{}"), isWindows: false));
+    }
 }

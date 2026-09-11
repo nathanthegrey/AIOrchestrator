@@ -5,8 +5,10 @@ internal sealed class TurnSilenceBrakeModel(
     TimeSpan pollInterval,
     Func<DateTime?> readTranscriptLastWriteUtc,
     Func<int, int?> countDescendants,
-    Func<DateTime, string?> describeLoopSince) : ITurnSilenceBrake
+    Func<DateTime, string?> describeLoopSince,
+    Func<DateTime?> readSubAgentLastWriteUtc) : ITurnSilenceBrake
 {
+    readonly Func<DateTime?> _readSubAgentLastWriteUtc = readSubAgentLastWriteUtc;
     readonly Func<DateTime?> _readTranscriptLastWriteUtc = readTranscriptLastWriteUtc;
     readonly Func<int, int?> _countDescendants = countDescendants;
     readonly Func<DateTime, string?> _describeLoopSince = describeLoopSince;
@@ -20,9 +22,16 @@ internal sealed class TurnSilenceBrakeModel(
         // life for ever: it writes its transcript on every step, so the silence test below would spare
         // it until the ceiling. Only THIS turn's steps count — a resumed transcript's earlier turns are
         // not evidence about this one.
+        //
+        // AND ONLY WHILE NOTHING ELSE MOVES. A member waiting on its own background work — a sub-agent
+        // it fanned out to, a build it started with run_in_background — polls it, and a poll that
+        // gets the same answer four times is WAITING, not looping (review finding, 2026-09-11: `sleep
+        // 60` or a blocking TaskOutput repeated while the sub-agent writes and the build runs). So a
+        // repetition kills only when no command runs below the turn and no sub-agent has written
+        // within the silence limit; "cannot tell" is, as everywhere here, read as alive.
         var loop = _describeLoopSince(turnStartedUtc);
 
-        if (loop != null)
+        if (loop != null && Is_NothingElseMoving(nowUtc, processId))
             return Describe_LoopKill(loop);
 
         // THE TURN'S OWN START IS THE FLOOR. A resumed transcript carries every earlier turn's writes,
@@ -57,6 +66,16 @@ internal sealed class TurnSilenceBrakeModel(
             return null;
 
         return Describe_Kill(nowUtc - lastSign, SilenceLimit);
+    }
+
+    bool Is_NothingElseMoving(DateTime nowUtc, int processId)
+    {
+        var subAgentWrite = _readSubAgentLastWriteUtc();
+
+        if (subAgentWrite != null && nowUtc - subAgentWrite.Value < SilenceLimit)
+            return false;
+
+        return _countDescendants(processId) == 0;
     }
 
     internal static string Describe_LoopKill(string loop)
