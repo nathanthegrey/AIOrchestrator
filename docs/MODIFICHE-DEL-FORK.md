@@ -1149,6 +1149,36 @@ divergono in silenzio.
 **Dove.** `stage/21-the-instrument`; installato sul server come temporizzatore d'utente, che è la
 convenzione della macchina, senza privilegi di amministratore.
 
+### Una promessa scritta nello script, annullata in silenzio da un'impostazione globale
+
+**Com'era.** Lo script che mette in produzione dichiara, nei suoi commenti: *«il clone è HTTPS e in
+sola lettura di proposito: nessuna chiave di deploy, nessun token, **niente su questa macchina può
+pubblicare**»*. Misurato il 2026-09-11: il server si autentica a GitHub come utente reale, e da
+quella cartella un `push` **passava**. Non l'aveva cambiato nessuno per distrazione. Sulla macchina
+c'era una riscrittura **globale** degli indirizzi — ogni indirizzo `https://github.com/` viene
+tradotto in quello con la chiave — messa perché altri due repository, che il server pubblica
+legittimamente, funzionassero senza attriti. Lo script clonava in HTTPS come dichiarava, il file di
+configurazione conteneva l'indirizzo HTTPS, e git ne usava un altro. La garanzia era falsa da chissà
+quando, e nessuna delle due parti era sbagliata di per sé.
+
+**Cos'è adesso.** Quel clone porta una regola locale che neutralizza la riscrittura solo per sé —
+vince perché è più specifica — e la garanzia è tornata vera, verificata con il fallimento che deve
+produrre: scaricare funziona, pubblicare risponde *«nessun accesso in scrittura anonimo»*. La chiave
+resta dov'è: serve agli altri due repository. La copia di lavoro separata, quella su cui si lavora a
+mano, continua a poter pubblicare perché è il suo mestiere.
+
+**Perché.** Non è la protezione che conta — chi vuole pubblicare da quella macchina può ancora farlo
+in dieci modi, ed è la decisione 21 applicata a sé stessa: una guardia lì trattiene una sessione
+onesta e non ferma nessun altro. Quello che conta è che **una frase scritta in un file non può
+restare vera per conto suo**. Valeva quando è stata scritta; una configurazione aggiunta altrove,
+per un motivo del tutto ragionevole, l'ha resa falsa senza toccare né il file né chi l'aveva scritto.
+La sola cosa che l'ha scoperta è stato provarla.
+
+**Il prezzo.** La guardia **non si ripristina da sola**: se quel clone viene cancellato e rifatto, la
+regola locale sparisce e la riscrittura globale torna a valere in silenzio. Lo script che dovrebbe
+rimetterla non sta in questo repository. Finché non ci sta, va riprovata dopo ogni ricostruzione —
+ed è registrata fra le cose aperte per quello.
+
 ## 6. Il ponte con Telegram: che cosa regge sotto
 
 L'audit del 2026-09-09 sull'integrazione Telegram (i brief in
@@ -1348,6 +1378,14 @@ pacchetto è già scritto e spento. Il rischio, che è sul giudizio e non sul co
 quello di prima.
 
 **Cose aperte, dette perché non sembrino risolte.**
+- **La sola lettura del clone di produzione non si ripristina da sola.** La regola locale che
+  neutralizza la riscrittura globale degli indirizzi vive solo in quel clone: cancellarlo e
+  rifarlo la perde, e la garanzia scritta nello script torna falsa senza che niente lo dica. Il
+  posto giusto per rimetterla è lo script del server, che non sta in questo repository. Da
+  riprovare dopo ogni ricostruzione, con il comando che deve **fallire**: un `push` di prova deve
+  rispondere «nessun accesso in scrittura anonimo». Da valutare a parte se la riscrittura globale
+  serva ancora: i due repository per cui è stata messa usano già indirizzi con la chiave, quindi
+  forse non serviva a loro nemmeno allora.
 - **Lo sportello unico verso Telegram — progettato, non costruito (2026-09-10, notte).** Oggi ogni
   parte del programma parla con Telegram *dentro* il battito da due secondi, e siccome il battito non
   può aspettare i trenta secondi che Telegram chiede, ogni punto di chiamata si è inventato la sua
