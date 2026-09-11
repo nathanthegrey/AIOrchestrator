@@ -27,11 +27,12 @@ public static class RunnerConfigs_Factory
     /// <para>
     /// THE COUPLING, MEASURED BY A REVIEW ON 2026-09-09. <c>BridgeEngineModel</c> tells a supervisor it
     /// owes a member a verdict once that member's channel has been quiet for
-    /// <c>IMPLEMENTER_NUDGE_MINUTES</c> = 8 (read in that file on 2026-09-09; it is a private
-    /// <c>const int</c> there and this stage did not touch it, so the number is restated here rather
-    /// than referenced — giving that constant a shared home is the fix for the other half, and it is
-    /// reported rather than done). The quiet clock runs from the member's REPORT, so a digest of D
-    /// minutes leaves 8 − D for the supervisor's turn to be released, run and file its verdict. Probed
+    /// <see cref="Status.Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES"/> — REFERENCED, not restated, since
+    /// 2026-09-10: it was a private <c>const int</c> in that file and this doc carried a second copy of
+    /// the number, which is the copy nobody updates. The relationship between the two is now pinned by a
+    /// test (<c>RunnerConfigsJsonTests</c>) rather than by this sentence. The quiet clock runs from the
+    /// member's REPORT, so a digest of D minutes leaves that window minus D for the supervisor's turn to
+    /// be released, run and file its verdict. Probed
     /// at D = 10: at minute 9 the app considered the supervisor 9.6 min late on a verdict for a report
     /// IT WAS ITSELF HOLDING, and spent that quiet spell's single nudge token on the false alarm — so a
     /// genuinely stalled supervisor in the same spell got nothing. The nudge is agent-audience and the

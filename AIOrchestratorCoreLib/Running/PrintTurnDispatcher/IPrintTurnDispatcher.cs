@@ -46,6 +46,31 @@ public interface IPrintTurnDispatcher
     bool Is_TurnQueued(string orchId, string memberId);
 
     /// <summary>
+    /// THE ENTRY IDENTITIES THIS SESSION'S IN-FLIGHT TURN IS CARRYING — empty when no turn is running.
+    ///
+    /// <para>
+    /// "Is it pending" and "will it ever be handed over" are different questions, and only this
+    /// dispatcher can answer the second: the cursor in the state file advances when a turn COMPLETES,
+    /// so throughout a turn's run the entries it is delivering still read as pending. Measured in
+    /// production 2026-09-10: <see cref="Bridge.UndeliveredSpokeTraffic_Reporter"/> read the cursor
+    /// while a turn was mid-flight and announced a member's final report as dropped 15 seconds before
+    /// the turn carrying it succeeded.
+    /// </para>
+    /// <para>
+    /// Identities, not indexes — the same <c>ChannelEntry_Digest</c> the cursor is keyed on, because the
+    /// <c>[n]</c> is agent-written (CLAUDE.md decision 12). A caller compares, it never counts.
+    /// </para>
+    /// </summary>
+    IReadOnlySet<string> Get_DeliveringIdentities(string orchId, string memberId);
+
+    /// <summary>
+    /// Says every <c>config.json</c> setting this host REFUSED, once each — called at engine startup so
+    /// an operator reads it beside the startup banner. <see cref="Tick"/> repeats the call on every pass
+    /// and the dedupe makes that free: what it catches is a setting refused by a LATER reload.
+    /// </summary>
+    void Report_ConfigRejections();
+
+    /// <summary>
     /// THE /resume OVERRIDE. Drops <see cref="PrintSessionState.IPrintSessionState.RetryNotBeforeUtc"/>
     /// on every registered session that has one, so the very next tick tries the turn again instead of
     /// waiting out the appointment.

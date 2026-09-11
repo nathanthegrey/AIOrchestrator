@@ -107,15 +107,63 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// door, <see cref="_shutdown"/> is pulled only when the drain grace has run out.
     /// </summary>
     readonly CancellationTokenSource _draining = new();
-    readonly Dictionary<string, Task> _inFlight = [];
+
+    /// <summary>
+    /// KEYED CASE-INSENSITIVELY, because the key's INPUT is agent-written. Review finding 2026-09-10:
+    /// <c>orchId</c> reaches a close straight from the request JSON with no trim and no
+    /// canonicalisation, while the session store resolves an orchestration through a FILE PATH — which
+    /// is case-insensitive on Windows, where the app runs. So a request saying <c>Fincanva-5</c> closed
+    /// the member successfully and then missed every lookup here, which handed
+    /// <see cref="Bridge.UndeliveredSpokeTraffic_Reporter"/> an empty set and resurrected the false
+    /// alarm this branch exists to fix. Matching the store's own tolerance is the safe direction; the
+    /// alternative is a lookup that silently disagrees with the operation that succeeded.
+    /// </summary>
+    readonly Dictionary<string, Task> _inFlight = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The subset of <see cref="_inFlight"/> that HOLDS ITS SLOTS and is executing. A key in the
     /// in-flight table and not here is queued behind the concurrency cap. Written under
     /// <see cref="_lock"/> the moment the last slot is acquired, removed with the in-flight entry.
     /// </summary>
-    readonly HashSet<string> _running = [];
-    readonly Dictionary<string, SessionTracker> _trackers = [];
+    readonly HashSet<string> _running = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// WHAT EACH IN-FLIGHT TURN IS CARRYING, keyed exactly like <see cref="_inFlight"/> — written
+    /// immediately before it in <see cref="Start_Turn"/> and removed beside it in
+    /// <see cref="Execute_Turn_Async"/>'s <c>finally</c>, both under <see cref="_lock"/>.
+    ///
+    /// <para>
+    /// NOT "the same two lines", which an earlier version of this comment claimed: the write precedes
+    /// <see cref="_inFlight"/>'s by one line and the removal is in another method. If <c>Task.Run</c>
+    /// itself threw, this would keep an entry for a turn that never existed and
+    /// <see cref="Is_TurnInFlight"/> would say false while <see cref="Get_DeliveringIdentities"/> said
+    /// otherwise — a permanent INFO where a WARNING is owed. Theoretical, and named here so the next
+    /// reader checks rather than trusting a sentence (review finding, 2026-09-10).
+    /// </para>
+    ///
+    /// <para>
+    /// IT EXISTS BECAUSE THE CURSOR ANSWERS A DIFFERENT QUESTION. The cursor advances beside
+    /// <see cref="Advance_Cursors"/> — when a turn COMPLETES — so for the whole of a turn's run the
+    /// entries it is delivering still read as pending to anyone reading the state file. That is correct
+    /// for delivery (a turn that fails must not lose them) and wrong for anyone asking "will these ever
+    /// be handed over": measured in production 2026-09-10, that gap made
+    /// <see cref="Bridge.UndeliveredSpokeTraffic_Reporter"/> announce a dropped final report 15 seconds
+    /// before the turn carrying it succeeded.
+    /// </para>
+    /// <para>
+    /// IDENTITIES, NOT INDEXES — <see cref="ChannelEntry_Digest"/>, the same key the cursor is built on
+    /// (CLAUDE.md decision 12: the <c>[n]</c> is agent-written and has duplicated in production).
+    /// </para>
+    /// </summary>
+    readonly Dictionary<string, IReadOnlySet<string>> _delivering = new(StringComparer.OrdinalIgnoreCase);
+
+    static readonly IReadOnlySet<string> NOTHING_IN_FLIGHT = new HashSet<string>(StringComparer.Ordinal);
+    /// <summary>
+    /// Case-insensitive for the same reason as <see cref="_inFlight"/>, and here it matters more: a
+    /// differently-cased <c>orchId</c> would hand the session a FRESH tracker, i.e. a brand-new digest
+    /// hold and a lost "has delivered traffic" flag.
+    /// </summary>
+    readonly Dictionary<string, SessionTracker> _trackers = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, SemaphoreSlim> _orchestrationSlots = [];
     readonly HashSet<string> _warnedStaleRegistrations = [];
     readonly HashSet<string> _warnedArchiveGaps = [];
@@ -318,13 +366,28 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     public bool Is_TurnInFlight(string orchId, string memberId)
     {
-        // THE SAME KEY Consider_Session builds, and deliberately not a second way of spelling it: two
-        // constructions of one key are two that can drift, and this one decides whether a working
-        // member is described as idle.
-        var key = $"{orchId}/{memberId}";
-
         lock (_lock)
-            return _inFlight.ContainsKey(key);
+            return _inFlight.ContainsKey(Describe_SessionKey(orchId, memberId));
+    }
+
+    public IReadOnlySet<string> Get_DeliveringIdentities(string orchId, string memberId)
+    {
+        lock (_lock)
+            return _delivering.TryGetValue(Describe_SessionKey(orchId, memberId), out var carrying) ? carrying : NOTHING_IN_FLIGHT;
+    }
+
+    /// <summary>
+    /// THE ONE SPELLING OF A SESSION'S KEY. It was five, and the comment that used to sit in
+    /// <see cref="Is_TurnInFlight"/> asked for this in as many words ("two constructions of one key are
+    /// two that can drift, and this one decides whether a working member is described as idle") while
+    /// itself being the second. Collapsed on 2026-09-10, when a sixth was about to be added.
+    /// </summary>
+    static string Describe_SessionKey(string orchId, string memberId)
+    {
+        // Trimmed because the inputs are agent-written and the reader of the request JSON trims only
+        // `reason`; the dictionaries keyed by this are case-insensitive, so casing is handled there
+        // rather than by lowercasing a string that also reaches the log.
+        return $"{orchId.Trim()}/{memberId.Trim()}";
     }
 
     public bool Is_TurnQueued(string orchId, string memberId)
@@ -367,7 +430,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             // deleted by the launcher at the next spawn; until then, this is the gate.
             if (!Is_StillBridgeDriven(configs, registered.Role))
             {
-                if (_warnedStaleRegistrations.Add($"{registered.OrchId}/{registered.MemberId}"))
+                if (_warnedStaleRegistrations.Add(Describe_SessionKey(registered.OrchId, registered.MemberId)))
                     _log.Log_Warning(registered.OrchId, $"'{registered.MemberId}' has a bridge-driven registration but role '{SessionRole_Names.Get_ConfigKey(registered.Role)}' is now configured runner: {SessionRunner_Names.Get_Word(configs.Get_ForRole(registered.Role).Runner)} — no turns are dispatched for it (the registration is cleared at its next spawn)");
 
                 continue;
@@ -385,7 +448,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 // Unbounded, that is an error line every two seconds for as long as the app runs, which
                 // buries the log it is written into. The stale-registration warning two blocks up already
                 // dedupes for the same reason; this one did not.
-                if (_warnedBrokenSessions.Add($"{registered.OrchId}/{registered.MemberId}"))
+                if (_warnedBrokenSessions.Add(Describe_SessionKey(registered.OrchId, registered.MemberId)))
                     _log.Log_Error(registered.OrchId, $"Print dispatcher: '{registered.MemberId}' could not be considered — it is skipped from now on and this is NOT repeated; fix or delete its {PrintSessionState_Store.STATE_FILE_NAME} and restart the app", ex);
             }
         }
@@ -410,7 +473,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         foreach (var registered in Discover_RegisteredSessions())
         {
-            var key = $"{registered.OrchId}/{registered.MemberId}";
+            var key = Describe_SessionKey(registered.OrchId, registered.MemberId);
 
             // THE WHOLE OPERATION IS IN THE TRY, NOT JUST THE READ (F7, 2026-09-09). An IO failure in
             // the WRITE used to escape into Resume_AllSessions_Async — which runs it BEFORE any channel
@@ -568,10 +631,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </para>
     /// <para>
     /// HERE BECAUSE THIS IS WHERE THE CONFIG IS READ AND A LOG IS TO HAND, not because refusals are
-    /// the dispatcher's subject. The better home is the host, at startup, once — the daemon and the
-    /// app both construct this before their first tick, so a line from here reaches the same log a
-    /// moment later; if a host ever wants it earlier it can call the same list. Reported rather than
-    /// taken: <c>AIOrchestrator.Daemon</c> is outside this stage's file set.
+    /// the dispatcher's subject. An earlier version of this paragraph said the better home was the
+    /// host, at startup, and that it was "reported rather than taken" — it was taken on 2026-09-10:
+    /// <see cref="Report_ConfigRejections"/> is called from the engine's <c>Run_Async</c>, and this
+    /// per-tick call stays for the refusal earned by an edit made while the app runs.
     /// </para>
     /// <para>
     /// ONCE PER DISTINCT LINE, AND NOT ONCE PER PROCESS. config.json is re-read every tick, so a
@@ -581,6 +644,18 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// appears.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The same list, said at BOOT — called once from the engine's <c>Run_Async</c> so an operator
+    /// whose setting was overruled reads it beside the startup banner rather than a tick later among
+    /// session traffic, and reads it at all on a host that is draining (<see cref="Tick"/> returns
+    /// before its own call in that state). Shares
+    /// <see cref="Report_ConfigRejections_Once"/>'s dedupe, so the pair can never say a thing twice.
+    /// </summary>
+    public void Report_ConfigRejections()
+    {
+        Report_ConfigRejections_Once(_configProvider.Get_Current().Runners);
+    }
+
     void Report_ConfigRejections_Once(IRunnerConfigs configs)
     {
         foreach (var rejection in configs.Rejections)
@@ -648,7 +723,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
     void Consider_Session(string stateFile, SessionRoles role, string orchId, string memberId, DateTime nowLocal, IRunnerConfigs configs)
     {
-        var key = $"{orchId}/{memberId}";
+        var key = Describe_SessionKey(orchId, memberId);
 
         lock (_lock)
         {
@@ -1040,6 +1115,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             // (Note_TrafficDelivered), which is the one moment that means the entries have left.
             using var suppressed = ExecutionContext.SuppressFlow();
 
+            // Recorded from the very entries this turn launches with, so what it is carrying is a fact
+            // rather than a re-read of a file that may have been appended to since.
+            _delivering[key] = pending.Select(item => ChannelEntry_Digest.Compute(item.Entry)).ToHashSet(StringComparer.Ordinal);
+
             _inFlight[key] = Task.Run(() => Execute_Turn_Async(key, stateFile, state, pending, sources, tracker, configs));
         }
     }
@@ -1184,6 +1263,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             {
                 _inFlight.Remove(key);
                 _running.Remove(key);
+                _delivering.Remove(key);
             }
         }
     }

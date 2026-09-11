@@ -114,9 +114,6 @@ internal sealed class BridgeEngineModel(
     /// <summary>Channel silence that counts as a stall once nobody is mid-turn.</summary>
     const int STALL_ALERT_MINUTES = 25;
 
-    /// <summary>How long an implementer may leave a brief unanswered before the app nudges it.</summary>
-    const int IMPLEMENTER_NUDGE_MINUTES = 8;
-
     /// <summary>How long the owner may wait for their supervisor's acknowledgement before the app steps in.</summary>
     const int OWNER_REPLY_GRACE_SECONDS = 150;
 
@@ -1236,6 +1233,12 @@ internal sealed class BridgeEngineModel(
         // decision 21's rule (the line goes to orchestrator.log.jsonl, which the app tails) applied
         // to the thing every append now passes through.
         ChannelLock_Diagnostics.Set_Sink(message => _log.Log_Warning(GLOBAL_ORCH_ID, message));
+
+        // A REFUSED SETTING IS SAID AT BOOT, not on the dispatcher's first tick. Same dedupe, so a
+        // later config reload still reports anything NEW and nothing twice; what changes is that an
+        // operator who mistyped a value reads it in the log beside the startup banner, where they are
+        // already looking, instead of a tick later among session traffic.
+        _printTurns.Report_ConfigRejections();
 
         GeneralChannel_Initializer.Ensure_Exists(_paths);
 
@@ -2411,7 +2414,7 @@ internal sealed class BridgeEngineModel(
                 // this member is working, and the expensive mistake is the one that stays quiet: the
                 // gate below still holds it to one nudge per unanswered thing, so the cost of being
                 // wrong here is a single wake.
-                if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+                if (!alreadyNudged && quietFor != null && quietFor.Value.TotalMinutes < Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES)
                     continue;
 
                 // WORKING MEANS DO NOT DISTURB — and the app now answers that from its OWN dispatcher
@@ -2875,7 +2878,7 @@ internal sealed class BridgeEngineModel(
             // rather than left to assume silence means nothing is waiting.
             var memberQuietFor = Nudge_Decider.Measure_QuietFor(entries, DateTime.Now);
 
-            if (memberQuietFor != null && memberQuietFor.Value.TotalMinutes < IMPLEMENTER_NUDGE_MINUTES)
+            if (memberQuietFor != null && memberQuietFor.Value.TotalMinutes < Nudge_Windows.IMPLEMENTER_NUDGE_MINUTES)
                 continue;
 
             waitingMembers.Add(member.MemberId);
@@ -5316,7 +5319,9 @@ internal sealed class BridgeEngineModel(
         {
             // SAID BEFORE THE SPOKE STOPS BEING A SOURCE — see UndeliveredSpokeTraffic_Reporter for
             // why a line and not a drain, and for what the member digest widened.
-            UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, _log, orchId, memberId);
+            // The dispatcher is asked what the supervisor's turn is carrying RIGHT NOW: without it the
+            // reporter reads a cursor that only advances at turn end and calls a report in flight lost.
+            UndeliveredSpokeTraffic_Reporter.Log_BeforeClosing(_paths, _log, orchId, memberId, _printTurns.Get_DeliveringIdentities(orchId, Running.SessionLaunch.SessionLaunch_Factory.SUPERVISOR_MEMBER_ID));
 
             _store.Close_Member(orchId, memberId);
             SessionTerminator.Kill_SessionTree_ByPidFile(_paths.Get_ImplementerPidFile(orchId, memberId));
