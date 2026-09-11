@@ -1462,18 +1462,18 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         void Record_KilledTurn_Retried(string why)
         {
-            Record_KilledTurn($"killed at the deadline while working — {why}; these entries are retried as before");
+            Record_KilledTurn($"{ClosingTurn_Words.Describe_Kill(killed)} while working — {why}; these entries are retried as before");
         }
 
         if (string.IsNullOrWhiteSpace(sessionId))
         {
-            _log.Log_Warning(state.OrchId, $"Turn {requestId} was killed at the deadline but this session has no transcript id to resume — no closing turn is possible, so its entries stay pending and are retried as before");
+            _log.Log_Warning(state.OrchId, $"Turn {requestId} was {ClosingTurn_Words.Describe_Kill(killed)} but this session has no transcript id to resume — no closing turn is possible, so its entries stay pending and are retried as before");
             Record_KilledTurn_Retried("there is no transcript id to resume, so no closing turn was possible");
             Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
             return;
         }
 
-        _log.Log_Info(state.OrchId, $"Turn {requestId} was killed at the deadline after {killed.Elapsed.TotalMinutes:F1} min — running closing turn {closingRequestId} on session {sessionId} (up to {closingTimeout.TotalMinutes:F1} min, {ClosingTurn_Words.BUDGET_FLAG} {ClosingTurn_Words.Describe_Budget(ClosingTurn_Words.BUDGET_USD)})");
+        _log.Log_Info(state.OrchId, $"Turn {requestId} was {ClosingTurn_Words.Describe_Kill(killed)} after {killed.Elapsed.TotalMinutes:F1} min{(killed.SilenceKill == null ? string.Empty : $" ({killed.SilenceKill})")} — running closing turn {closingRequestId} on session {sessionId} (up to {closingTimeout.TotalMinutes:F1} min, {ClosingTurn_Words.BUDGET_FLAG} {ClosingTurn_Words.Describe_Budget(ClosingTurn_Words.BUDGET_USD)})");
 
         ITurnResult? closing;
 
@@ -1547,9 +1547,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         HashSet<string> answered = new(delivery.AnsweredSourceKeys, SOURCE_KEYS);
         var unanswered = pending.Select(item => item.Source.Key).Distinct(SOURCE_KEYS).Where(key => !answered.Contains(key)).ToList();
 
+        var killedNote = $"{ClosingTurn_Words.Describe_Kill(killed)} {KILLED_WHILE_WORKING_NOTE}";
+
         Record_KilledTurn(unanswered.Count == 0
-            ? KILLED_AT_DEADLINE_NOTE
-            : $"{KILLED_AT_DEADLINE_NOTE}, except {string.Join(", ", unanswered)} — the report did not address {(unanswered.Count == 1 ? "that channel" : "those channels")}, so its entries stay pending and are handed to the next turn");
+            ? killedNote
+            : $"{killedNote}, except {string.Join(", ", unanswered)} — the report did not address {(unanswered.Count == 1 ? "that channel" : "those channels")}, so its entries stay pending and are handed to the next turn");
 
         Append_TurnEnded(state, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_NOTE);
 
@@ -1627,7 +1629,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     }
 
     /// <summary>What the killed turn's own record says, on the one branch where a closing turn did run and did report.</summary>
-    const string KILLED_AT_DEADLINE_NOTE = "killed at the deadline while working — a closing turn wrote where it got to, and these entries are not re-run";
+    const string KILLED_WHILE_WORKING_NOTE = "while working — a closing turn wrote where it got to, and these entries are not re-run";
 
     const string CLOSING_TURN_NOTE = "closing turn — where the killed turn got to, not a new answer to those entries";
 

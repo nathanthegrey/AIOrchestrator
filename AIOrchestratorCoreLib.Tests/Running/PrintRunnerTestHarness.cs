@@ -41,6 +41,9 @@ public sealed class PrintRunnerTestHarness : IDisposable
     readonly double _streamSilenceSeconds;
     readonly double _memberDigestMinutes;
 
+    /// <summary>Null writes no key, so the suite runs on the production default — see memberDigestMinutes.</summary>
+    readonly double? _memberSilenceMinutes;
+
     /// <param name="memberDigestMinutes">
     /// The supervisor's wake-up digest (<c>WakeUp_Policy</c>) — THE PRODUCTION WINDOW by default, so
     /// the suite observes what ships.
@@ -60,7 +63,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
     /// the pre-digest behaviour passes <c>0</c> and says why.
     /// </para>
     /// </param>
-    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript", double memberDigestMinutes = 5)
+    public PrintRunnerTestHarness(string printRoles, double coalesceSeconds = 0, double turnTimeoutMinutes = 5, int maxConcurrent = 10, int maxPerOrchestration = 3, string resumeForGeneral = "fresh", double streamSilenceSeconds = 120, string resumeForMembers = "transcript", double memberDigestMinutes = 5, double? memberSilenceMinutes = null)
     {
         TempRoot = Path.Combine(Path.GetTempPath(), $"aiorch-print-runner-{Guid.NewGuid():N}");
         RepoPath = Path.Combine(TempRoot, "repo");
@@ -77,6 +80,7 @@ public sealed class PrintRunnerTestHarness : IDisposable
         _resumeForMembers = resumeForMembers;
         _streamSilenceSeconds = streamSilenceSeconds;
         _memberDigestMinutes = memberDigestMinutes;
+        _memberSilenceMinutes = memberSilenceMinutes;
 
         Directory.CreateDirectory(Paths.Root);
         Write_Config(printRoles);
@@ -123,6 +127,9 @@ public sealed class PrintRunnerTestHarness : IDisposable
                 ["memberDigestMinutes"] = _memberDigestMinutes,
             },
         };
+
+        if (_memberSilenceMinutes != null)
+            config["printRunner"]!["memberSilenceMinutes"] = _memberSilenceMinutes.Value;
 
         File.WriteAllText(Paths.ConfigFile, config.ToJsonString());
         File.SetLastWriteTimeUtc(Paths.ConfigFile, DateTime.UtcNow.AddSeconds(1));
