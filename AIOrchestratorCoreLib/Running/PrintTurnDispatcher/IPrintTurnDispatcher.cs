@@ -13,6 +13,12 @@ public interface IPrintTurnDispatcher
     int InFlightCount { get; }
 
     /// <summary>
+    /// Which owner message each turn's answer answers — written as turns file their replies, read by
+    /// the bridge to thread them on the phone. See <see cref="Running.ReplyLinks.IReplyLinks"/>.
+    /// </summary>
+    Running.ReplyLinks.IReplyLinks ReplyLinks { get; }
+
+    /// <summary>
     /// Whether THIS session has a turn running right now.
     ///
     /// <para>
