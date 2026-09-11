@@ -1376,7 +1376,19 @@ quello di prima.
   caso, e già lo fa per il modello. Resta però un baratto qualità contro token, e oggi il supervisore
   non ha nessun modo di sapere se lo sforzo basso ha fatto danni. Si sblocca con il banco di prova
   qui sotto, non prima.
-- **Il freno ai sub-agenti: rimandato, non scartato.** I sub-agenti sono il capitolo di spesa più
+- **Il freno esiste già, ed è mal tarato — misurato il 2026-09-11, e ha una specifica sua.** Un
+  turno di membro su tre viene ucciso al limite dei trenta minuti, e nei trenta minuti prima di
+  morire quei turni **stavano lavorando**: le chiamate al modello non calano mai verso lo zero.
+  In tre giorni quel limite ha tagliato lavoro 57 volte e non ha intercettato **nessun** blocco
+  vero. Il freno gentile che dovrebbe precederlo — l'avviso a 35 chiamate — raggiunge 25 di quei
+  57 turni, mentre quei turni ne fanno 74 di mediana. Il disegno proposto, le eccezioni che
+  servono (il supervisore sta zitto sette ore di mediana **per mestiere**) e cosa non è stato
+  misurato stanno in `docs/superpowers/specs/2026-09-11-the-brake-that-watches-work.md`.
+- **Il freno ai sub-agenti: ritirato in questa forma.** La riga qui sotto resta come storia; la
+  specifica del 2026-09-11 spiega perché aggiungere un secondo freno prima di aver sistemato il
+  primo è il modo di ritrovarsene tre che si contraddicono. Per i sub-agenti la leva giusta è un
+  patto su quanto restituiscono, non una ghigliottina.
+- **~~Il freno ai sub-agenti: rimandato, non scartato.~~** I sub-agenti sono il capitolo di spesa più
   grosso rimasto — il 10 settembre costano più degli implementatori che li lanciano, e il loro
   contesto per chiamata è salito del 51 % rispetto all'8. Il freno esiste già nello strumento a riga
   di comando ed è verificato presente su questa macchina (un'opzione inventata dà «unknown option»,
