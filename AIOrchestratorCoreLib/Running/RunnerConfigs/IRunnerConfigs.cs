@@ -66,6 +66,26 @@ public interface IRunnerConfigs
     TimeSpan MemberSilenceLimit { get; }
 
     /// <summary>
+    /// THE CEILING OF A BRAKED MEMBER TURN — an implementer's or reviewer's print turn while
+    /// <see cref="MemberSilenceLimit"/> is on. Two hours by default, against <see cref="TurnTimeout"/>'s
+    /// thirty minutes for everybody else.
+    ///
+    /// <para>
+    /// TWO TIMERS, NEVER ONE — the rule every job system the owner asked about agrees on (research,
+    /// 2026-09-11: Temporal, AWS Step Functions, Kubernetes, systemd): a short liveness check, and a
+    /// hard ceiling "longer than the maximum possible" legitimate run (Temporal's wording). The
+    /// silence brake is the liveness check; this is the ceiling. At thirty minutes it cut 58 working
+    /// member turns in three days; its only remaining job is a turn that shows life for ever.
+    /// </para>
+    /// <para>
+    /// ONLY WHILE THE BRAKE IS ON (<see cref="TurnTimeout_Rule"/>). With the brake off, a two-hour
+    /// ceiling would let a hung turn hold its slot for two hours, so the member falls back to
+    /// <see cref="TurnTimeout"/>.
+    /// </para>
+    /// </summary>
+    TimeSpan MemberTurnTimeout { get; }
+
+    /// <summary>
     /// THE MEMORY CEILING ONE SESSION MAY REACH BEFORE THE KERNEL KILLS IT — written the way
     /// systemd writes a size ("3G", "3072M"), or one of the words <c>none</c>/<c>off</c>/<c>0</c>
     /// for no ceiling at all.

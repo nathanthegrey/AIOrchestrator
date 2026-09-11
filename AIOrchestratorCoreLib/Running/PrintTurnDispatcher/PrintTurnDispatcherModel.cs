@@ -87,7 +87,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// added five minutes to what the path can need, the literal stayed where it was and said nothing
     /// (adversarial review, 2026-09-09).
     /// </summary>
-    static readonly TimeSpan DRAIN_GRACE_FALLBACK = ClosingTurn_Rule.Resolve_DrainGrace(RunnerConfigs_Factory.DEFAULT_TURN_TIMEOUT, DRAIN_MARGIN);
+    static readonly TimeSpan DRAIN_GRACE_FALLBACK = ClosingTurn_Rule.Resolve_DrainGrace(ShutdownGrace_Rule.DEFAULT_LONGEST_TURN_TIMEOUT, DRAIN_MARGIN);
 
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
@@ -544,7 +544,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     {
         try
         {
-            return ClosingTurn_Rule.Resolve_DrainGrace(_configProvider.Get_Current().Runners.TurnTimeout, DRAIN_MARGIN);
+            return ClosingTurn_Rule.Resolve_DrainGrace(TurnTimeout_Rule.Resolve_Longest(_configProvider.Get_Current().Runners), DRAIN_MARGIN);
         }
         catch
         {
@@ -1324,7 +1324,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         var attempt = state.FailedAttempts + 1;
         _log.Log_Info(state.OrchId, $"{SessionRunner_Names.Get_Word(executor.Kind)} turn {requestId} started — attempt {attempt}, {Describe_Traffic(pending)}, {(resumeTranscript ? "resume" : fresh ? "fresh session" : "first turn")} {sessionId}");
 
-        var result = await executor.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecuted, environment, configs.TurnTimeout, configs.MemberSilenceLimit, cancellationToken);
+        var result = await executor.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecuted, environment, TurnTimeout_Rule.Resolve_ForRole(state.Role, configs), configs.MemberSilenceLimit, cancellationToken);
 
         // The runner rethrows on shutdown rather than reporting a timeout, so nothing below runs
         // for a turn the app cancelled: no failure counted, no turn_ended entry, no attempt spent.
