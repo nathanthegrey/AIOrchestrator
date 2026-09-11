@@ -87,7 +87,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// added five minutes to what the path can need, the literal stayed where it was and said nothing
     /// (adversarial review, 2026-09-09).
     /// </summary>
-    static readonly TimeSpan DRAIN_GRACE_FALLBACK = ClosingTurn_Rule.Resolve_DrainGrace(RunnerConfigs_Factory.DEFAULT_TURN_TIMEOUT, DRAIN_MARGIN);
+    static readonly TimeSpan DRAIN_GRACE_FALLBACK = ClosingTurn_Rule.Resolve_DrainGrace(ShutdownGrace_Rule.DEFAULT_LONGEST_TURN_TIMEOUT, DRAIN_MARGIN);
 
     readonly ISupervisionPaths _paths;
     readonly IOrchestrationSessionStore _store;
@@ -544,7 +544,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     {
         try
         {
-            return ClosingTurn_Rule.Resolve_DrainGrace(_configProvider.Get_Current().Runners.TurnTimeout, DRAIN_MARGIN);
+            return ClosingTurn_Rule.Resolve_DrainGrace(TurnTimeout_Rule.Resolve_Longest(_configProvider.Get_Current().Runners), DRAIN_MARGIN);
         }
         catch
         {
@@ -1324,7 +1324,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         var attempt = state.FailedAttempts + 1;
         _log.Log_Info(state.OrchId, $"{SessionRunner_Names.Get_Word(executor.Kind)} turn {requestId} started — attempt {attempt}, {Describe_Traffic(pending)}, {(resumeTranscript ? "resume" : fresh ? "fresh session" : "first turn")} {sessionId}");
 
-        var result = await executor.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecuted, environment, configs.TurnTimeout, cancellationToken);
+        var result = await executor.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecuted, environment, TurnTimeout_Rule.Resolve_ForRole(state.Role, configs), configs.MemberSilenceLimit, cancellationToken);
 
         // The runner rethrows on shutdown rather than reporting a timeout, so nothing below runs
         // for a turn the app cancelled: no failure counted, no turn_ended entry, no attempt spent.
@@ -1462,18 +1462,18 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
         void Record_KilledTurn_Retried(string why)
         {
-            Record_KilledTurn($"killed at the deadline while working — {why}; these entries are retried as before");
+            Record_KilledTurn($"{ClosingTurn_Words.Describe_Kill(killed)} while working — {why}; these entries are retried as before");
         }
 
         if (string.IsNullOrWhiteSpace(sessionId))
         {
-            _log.Log_Warning(state.OrchId, $"Turn {requestId} was killed at the deadline but this session has no transcript id to resume — no closing turn is possible, so its entries stay pending and are retried as before");
+            _log.Log_Warning(state.OrchId, $"Turn {requestId} was {ClosingTurn_Words.Describe_Kill(killed)} but this session has no transcript id to resume — no closing turn is possible, so its entries stay pending and are retried as before");
             Record_KilledTurn_Retried("there is no transcript id to resume, so no closing turn was possible");
             Record_Failure(stateFile, state, pending, tracker, killed, requestId, attempt, executor, null, turnEndedAlreadyAppended: true);
             return;
         }
 
-        _log.Log_Info(state.OrchId, $"Turn {requestId} was killed at the deadline after {killed.Elapsed.TotalMinutes:F1} min — running closing turn {closingRequestId} on session {sessionId} (up to {closingTimeout.TotalMinutes:F1} min, {ClosingTurn_Words.BUDGET_FLAG} {ClosingTurn_Words.Describe_Budget(ClosingTurn_Words.BUDGET_USD)})");
+        _log.Log_Info(state.OrchId, $"Turn {requestId} was {ClosingTurn_Words.Describe_Kill(killed)} after {killed.Elapsed.TotalMinutes:F1} min{(killed.BrakeKill == null ? string.Empty : $" ({killed.BrakeKill})")} — running closing turn {closingRequestId} on session {sessionId} (up to {closingTimeout.TotalMinutes:F1} min, {ClosingTurn_Words.BUDGET_FLAG} {ClosingTurn_Words.Describe_Budget(ClosingTurn_Words.BUDGET_USD)})");
 
         ITurnResult? closing;
 
@@ -1547,9 +1547,11 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         HashSet<string> answered = new(delivery.AnsweredSourceKeys, SOURCE_KEYS);
         var unanswered = pending.Select(item => item.Source.Key).Distinct(SOURCE_KEYS).Where(key => !answered.Contains(key)).ToList();
 
+        var killedNote = $"{ClosingTurn_Words.Describe_Kill(killed)} {KILLED_WHILE_WORKING_NOTE}";
+
         Record_KilledTurn(unanswered.Count == 0
-            ? KILLED_AT_DEADLINE_NOTE
-            : $"{KILLED_AT_DEADLINE_NOTE}, except {string.Join(", ", unanswered)} — the report did not address {(unanswered.Count == 1 ? "that channel" : "those channels")}, so its entries stay pending and are handed to the next turn");
+            ? killedNote
+            : $"{killedNote}, except {string.Join(", ", unanswered)} — the report did not address {(unanswered.Count == 1 ? "that channel" : "those channels")}, so its entries stay pending and are handed to the next turn");
 
         Append_TurnEnded(state, closingRequestId, 1, pending, closing, closingOutcome, CLOSING_TURN_NOTE);
 
@@ -1614,7 +1616,10 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (kills < ClosingTurn_Words.KILLS_BEFORE_ALERT || kills % ClosingTurn_Words.KILLS_BEFORE_ALERT != 0)
             return;
 
-        var alert = $"'{state.MemberId}' has been killed at the turn deadline {kills} turns in a row — every one of them reported where it got to, so nothing is lost, but no turn has finished its work inside the deadline";
+        // EVERY KIND OF KILL IS COUNTED HERE, and the advice differs by kind (review finding,
+        // 2026-09-11): a deadline says the brief is bigger than a turn; the silence brake or the loop
+        // detector says the member is stuck, not slow. Each turn_ended record names which fired.
+        var alert = $"'{state.MemberId}' has been killed {kills} turns in a row — at the deadline, by the silence brake or by the loop detector; each turn_ended record says which. Every one reported where it got to, so nothing is lost, but no turn has finished its work";
 
         _log.Log_Warning(state.OrchId, alert);
 
@@ -1622,12 +1627,12 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             state.ChannelFilePath,
             Stall_Audience(state),
             $"{DEADLINE_KILLS_SUBJECT} — '{state.MemberId}', {kills} turns in a row",
-            $"{alert}\n\nNothing is retried and nothing is waiting: each killed turn was closed down and its entries answered. What this says is that the briefs are bigger than a turn — the next one wants to be smaller, or split.\n\nlast request_id: {requestId}\nturns: {string.Join(", ", executedTurns.TakeLast(kills).Select(turn => turn.RequestId))}",
+            $"{alert}\n\nNothing is retried and nothing is waiting: each killed turn was closed down and its entries answered. If they were deadline kills, the briefs are bigger than a turn — the next one wants to be smaller, or split. If the silence brake or the loop detector fired, the member is stuck rather than slow — look at what it was doing, not at the size of the brief.\n\nlast request_id: {requestId}\nturns: {string.Join(", ", executedTurns.TakeLast(kills).Select(turn => turn.RequestId))}",
             DateTime.Now);
     }
 
     /// <summary>What the killed turn's own record says, on the one branch where a closing turn did run and did report.</summary>
-    const string KILLED_AT_DEADLINE_NOTE = "killed at the deadline while working — a closing turn wrote where it got to, and these entries are not re-run";
+    const string KILLED_WHILE_WORKING_NOTE = "while working — a closing turn wrote where it got to, and these entries are not re-run";
 
     const string CLOSING_TURN_NOTE = "closing turn — where the killed turn got to, not a new answer to those entries";
 
@@ -2097,7 +2102,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             $"cost_usd: {(result.TotalCostUsd?.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")}\n" +
             $"duration_ms: {(result.DurationMs?.ToString() ?? "unknown")} (api {(result.DurationApiMs?.ToString() ?? "unknown")}), wall {result.Elapsed.TotalSeconds:F1} s\n" +
             $"api_error_status: {Describe_ApiErrorStatus(result)}\n" +
-            $"exit_code: {result.ExitCode}{(result.TimedOut ? " (killed on timeout)" : string.Empty)}\n" +
+            $"exit_code: {result.ExitCode}{(result.TimedOut ? $" ({ClosingTurn_Words.Describe_Kill(result)})" : string.Empty)}\n" +
             $"session_id: {result.SessionId ?? state.SessionId}";
 
         if (!ChannelAppender.Append_AppEntry(state.ChannelFilePath, AppEntryAudiences.Agent, $"{TURN_ENDED_SUBJECT} {state.MemberId} turn {requestId[(requestId.LastIndexOf('/') + 1)..]} — {outcome}", body, DateTime.Now))
