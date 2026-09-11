@@ -1003,6 +1003,23 @@ Its first entry from you must carry: **exactly what to review** (branch, commit 
 correctness against an unstated intent), and any known-risky areas to attack first. Ask for the
 report in its channel; it never talks to the owner.
 
+**A RE-REVIEW BRIEF names the FIX, not the branch** (owner, 2026-09-11). After the first round, the
+brief carries the last reviewed commit, the new one, and the findings to check — and the reviewer
+reviews `git diff <last>..<new>` plus those findings, at `quick` unless the fix is large or sits on
+a money, auth or gate path (reviewer, "A RE-REVIEW reviews the FIX"). Three rules, because the rounds
+are where review money goes:
+
+- **Never brief an open hunt on a branch already reviewed** — "find the fourth", "find the eighth".
+  It sends a fresh reader over the whole branch, and a whole branch always yields another finding:
+  `fincanva-3`'s five reviews of FIN-D-282a cost $49 and found 9, 11, 10, 8 and 7.
+- **No deep pass on a branch already cleared** unless the fix touches a money, auth or gate path.
+  `fincanva-5` spent $18.77 on a fifth pass of FIN-D-279a that found one LOW, and $25.69 on a late
+  deep pass of FIN-CLEANUP-2 that found nothing that blocked.
+- **Two rounds, then it is your call.** From the third round on the same work, only a CONFIRMED
+  finding at HIGH or above that the latest fix introduced sends it back; everything else is recorded
+  as a stated limitation or parked, and the line closes. The supervisors of `fincanva-3` and
+  `fincanva-5` each had to invent this rule mid-night, under two different names.
+
 ### Governance — do not spend the reviewer's independence
 
 - **A reviewer must never later own work that depends on what it approved.** If a finding needs

@@ -205,6 +205,28 @@ OUT OF SCOPE (pre-existing, not part of this change)
   everything you noticed. A forty-line out-of-scope list is the same failure wearing the fix's
   clothes.
 
+### A RE-REVIEW reviews the FIX — not the branch again
+
+A brief that follows an earlier review of the same work is a re-review, and its scope is narrower
+than the first round's, by rule (owner, 2026-09-11):
+
+- **Review the DELTA and the earlier findings, nothing else.** The delta is
+  `git diff <last reviewed commit>..<new commit>`; the brief names both — ask if it does not. Each
+  earlier finding gets one verdict, with its evidence: FIXED, NOT FIXED, or FIXED WRONG.
+- **A new finding counts only if the delta introduced it.** A regression the fix caused is a finding
+  like any other, and it blocks like any other — a fix that reproduces the defect it closed is the
+  commonest one here.
+- **A defect the delta did not touch is not a finding against the fix** — an earlier round could have
+  read it. One line in a `MISSED EARLIER` block beside OUT OF SCOPE, same shape, with its severity;
+  it does not block this round, and the supervisor decides whether it is worth another. Promoting it
+  into F1 to force a round is the move OUT OF SCOPE exists to stop.
+- **A re-review is `quick` unless the fix itself is large or sits on a money, auth or gate path** —
+  push back on anything heavier before you start, as for any depth.
+- **Why:** `fincanva-3` ran five reviews of FIN-D-282a for $49 and the count never fell — 9, 11, 10,
+  8, 7 findings — because each fresh round re-read the whole branch; an audit of those rounds put
+  about half their findings on code the previous fix had not changed [estimate]. Targeted re-reads of
+  a fix in `fincanva-5` cost $1–4 with no agents.
+
 ## Governance — you have no stake, keep it that way
 
 - **You must not later own work that depends on what you approved.** Reviewing your own work (or
