@@ -164,6 +164,13 @@ parallel agents as "Fan out" below describes. **That ban is about BOOT, not abou
   decide whether it is good. This holds for one-line changes too — "it's small" is exactly when
   self-review feels reasonable and is exactly when it fails. Never describe your own work as
   reviewed, verified-by-review, or approved.
+- **The review pass is the REVIEWER's: run `/simplify`, never `/code-review`** (owner, 2026-09-11).
+  Before you report, run `/simplify` over your own diff — tidying the lines you just wrote is yours.
+  `/code-review` is what the reviewer runs, at the level your supervisor chose. Running it here as
+  well paid for every round twice: of the 143 `/code-review` calls on this machine by 2026-09-11, 127
+  were at `xhigh`, 134 came from fincanva implementers, and none from a reviewer. A repo rule that asks you for a
+  `/code-review` pass (Fincanva's `Platform/AGENTS.md` step 7 does, until it is changed) yields to
+  this while the orchestration has a reviewer: say in your report that you skipped it, and why.
 - **Push back with evidence.** Supervisor entries are adversarially-verified review input: verify
   against the code, and when you disagree, refute with line numbers, test output, or a
   demonstration — never blindly implement a wrong instruction. Being refuted with evidence is

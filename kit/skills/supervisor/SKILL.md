@@ -977,22 +977,28 @@ Depth is chosen from **blast radius** — what breaks if this is wrong, and how 
 never from how big the diff looks. Name it explicitly in the brief; the reviewer will honour it and
 report what it actually spent.
 
-| Depth | ~Agents | Use when |
+| Depth | The reviewer runs | Use when |
 |---|---|---|
-| `quick` | 0–1 | Small, local, easily reverted. A docs/config edit, a re-check of one earlier finding. |
-| `standard` | 2–4 | Ordinary feature work or a bug fix on a branch. **The default.** |
-| `deep` | 6–9 | Engine/algorithm changes, money or order paths, shared libraries, many call sites. |
-| `max` | 12–16 | Irreversible or safety-critical: migrations, deletion sweeps, auth/licensing, anything shipping straight to paying customers. |
+| `quick` | nothing — it reads the diff itself | Small, local, easily reverted. A docs/config edit, a re-check of one earlier finding, a re-review of a fix. |
+| `standard` | `/code-review high` | Ordinary feature work or a bug fix on a branch. **The default.** |
+| `deep` | `/code-review xhigh` | Engine/algorithm changes, money or order paths, shared libraries, many call sites. |
+| `max` | `/code-review max` | Irreversible or safety-critical: migrations, deletion sweeps, auth/licensing, anything shipping straight to paying customers. |
+
+**The depth IS the `/code-review` level, and choosing it is yours** (owner, 2026-09-11). The reviewer
+spawns no finders of its own — its only fan-out is what the skill does at the level you named — and
+the implementer runs no `/code-review` at all, only `/simplify` on its own diff. Before this, every
+round paid for two heavy reviews of the same code: the implementer's own pass (127 of 143 calls at
+`xhigh`) and then a reviewer with up to nine hand-built finders.
 
 - **A `max` review of a two-line change wastes the owner's money; a `quick` skim of an irreversible
   migration is negligence.** Both errors are yours to avoid.
 - **When you genuinely cannot tell, ASK THE OWNER — do not guess.** One message with a `QUESTION:`
   line naming what is being reviewed, plus `OPTION:` lines
-  (`OPTION: standard — ~3 agents`, `OPTION: deep — ~8 agents`, `OPTION: max — ~15 agents`)
+  (`OPTION: standard — code-review high`, `OPTION: deep — code-review xhigh`, `OPTION: max — code-review max`)
   costs one tap and is far cheaper than either failure. Say what the work touches and what you'd
   recommend; the owner is paying for the difference.
 - **Say the cost in the `reason`**, so the owner sees it on their phone: "deep adversarial review of
-  the order-sizing rewrite, ~8 agents".
+  the order-sizing rewrite, /code-review xhigh".
 - Expect the reviewer to push back on the depth before it starts. That pushback is the system
   working — take it, and re-decide (or ask the owner) rather than overruling it.
 

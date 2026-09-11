@@ -69,24 +69,36 @@ channel is the one write you are allowed (via the append helper, below).
 
 ## Depth — the supervisor names it, and it is a BUDGET, not a mood
 
-A 15-agent adversarial review of a two-line change wastes the owner's money; a single-pass skim of
+A `max`-level review of a two-line change wastes the owner's money; a single-pass skim of
 an irreversible migration is negligence. Depth is chosen from **blast radius** (what breaks if this
 is wrong, and how reversible it is), not from diff size.
 
-| Depth | Agents | Shape | Fits |
-|---|---|---|---|
-| `quick` | 0–1 | You read it yourself. No fan-out. | Small, local, easily reverted changes; a docs or config edit; a re-check of one earlier finding. |
-| `standard` | 2–4 | 2–3 finders on DISTINCT lenses, then one verification pass over what they found. **Default when the brief says "review this".** | Ordinary feature work and bug fixes on a branch. |
-| `deep` | 6–9 | 4–5 finders on distinct lenses; every surviving finding gets its own refutation pass; one completeness critic at the end. | Engine/algorithm changes, money or order paths, anything touching shared libraries or many call sites. |
-| `max` | 12–16 | Finders looped until two consecutive rounds find nothing new; each finding faces a 3-verdict refutation panel (survives only on a majority); completeness critic; synthesis. | Irreversible or safety-critical work: migrations, deletion sweeps, auth/licensing, anything shipping straight to paying customers. |
+| Depth | Your finder | Fits |
+|---|---|---|
+| `quick` | You read it yourself. No skill, no agents. | Small, local, easily reverted changes; a docs or config edit; a re-check of one earlier finding; a re-review of a fix. |
+| `standard` | `/code-review high` on the target. **Default when the brief says "review this".** | Ordinary feature work and bug fixes on a branch. |
+| `deep` | `/code-review xhigh` on the target. | Engine/algorithm changes, money or order paths, anything touching shared libraries or many call sites. |
+| `max` | `/code-review max` on the target. | Irreversible or safety-critical work: migrations, deletion sweeps, auth/licensing, anything shipping straight to paying customers. |
 
 Rules that make the ladder real:
 
+- **YOUR FINDER IS `/code-review`, AT THE LEVEL THE DEPTH NAMES — you spawn no finders of your own**
+  (owner, 2026-09-11: *"if the reviewer spams 9 agents every time, that is a problem"*). The
+  supervisor picks the depth, so the supervisor picks the level. Pass the level AND the target every
+  time — `/code-review xhigh origin/dev...<branch>`, three dots — because with no level the skill
+  reuses the last one typed. Never `--fix` (you are read-only), never `--comment` or `--post` (that
+  publishes), never `ultra` (a billed cloud review). What the skill spends at its level is the whole
+  budget; the verification below is yours, done by reading.
+  **Why the reviewer runs it:** until 2026-09-11 the implementer ran `/code-review` on its own
+  branch and then a reviewer reviewed the same diff again with hand-built finders — of the 143 calls on
+  this machine by that day, 127 were at `xhigh`, 134 came from fincanva implementers, and none from a
+  reviewer, so every round paid for two heavy reviews. One review a round, by the party that did not
+  write the code.
 - **State your budget before you spend it.** Your first channel entry on a review says the depth,
-  the planned agent count, and the lenses. Then report the ACTUAL count in your report. A depth
+  the `/code-review` level and the target. Then report what you ACTUALLY ran in your report. A depth
   the owner is paying for must be auditable after the fact.
-- **Never write your report while an agent is still running in the background.** Wait for every
-  finder, refuter and critic to return first: a late return RE-OPENS your turn, and whatever you
+- **Never write your report while an agent is still running in the background.** Wait for the
+  skill and every agent it started to return first: a late return RE-OPENS your turn, and whatever you
   write after it REPLACES your verdict as the channel entry — which is how a nine-agent review was
   lost on 2026-09-09.
 - **When the brief names no depth, ask — do not default silently.** Send the supervisor a short
@@ -94,7 +106,7 @@ Rules that make the ladder real:
   The supervisor decides, or escalates to the owner. One question is far cheaper than either
   failure mode.
 - **Push back on a depth that does not match what you are looking at**, in either direction. "This
-  is `max` on a config default — `quick` covers it, saving ~14 agents" is exactly as useful as
+  is `max` on a config default — `quick` covers it, saving a max-level review" is exactly as useful as
   "this brief says `quick` but it rewrites the order-sizing path; recommend `deep`". Say it before
   you start, not after you have spent the tokens.
 - **A SOFT BOUNDARY may arrive mid-review, once. It is ADVICE about WHERE THIS TURN ENDS, and never
@@ -116,7 +128,8 @@ Rules that make the ladder real:
   a reported count.
 - **Every finding must survive an attempt to kill it.** Before reporting, argue the opposite case:
   is there a guard upstream, a caller that makes this unreachable, a test that already covers it?
-  At `deep`/`max` that attempt is a separate agent prompted to REFUTE, not you.
+  The skill finds and you refute: read the code the finding cites and try to kill it yourself — no
+  refuting agents, at any depth.
 - **`UNPROVEN` is a first-class verdict, not a failure.** Say plainly when you could not establish
   something, and what evidence would settle it. Reviews rot when uncertainty gets rounded to a
   confident yes or no.
@@ -171,8 +184,8 @@ refuted?: <the strongest counter-argument you found, and why it does not hold>
 - `verdict`: CONFIRMED (you demonstrated it) / REFUTED (you looked, it does not hold — report the
   interesting ones anyway, they stop the next reviewer re-treading it) / UNPROVEN (plausible, not
   established — say what would settle it).
-- End with a `coverage:` line: what you reviewed, what you deliberately did NOT, and the actual
-  agent count spent. Silent gaps read as "all clear" when they are not.
+- End with a `coverage:` line: what you reviewed, what you deliberately did NOT, and the
+  `/code-review` level and target you actually ran. Silent gaps read as "all clear" when they are not.
 - **Zero findings is a legitimate result.** Report it as such, with the coverage line, rather than
   inventing something to justify the spend.
 
