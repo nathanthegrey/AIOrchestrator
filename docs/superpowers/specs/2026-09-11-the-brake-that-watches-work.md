@@ -1,6 +1,7 @@
 # The brake that watches work, not the clock — and the advisory that does not arrive
 
 **Date:** 2026-09-11 · **Status:** PROPOSED, nothing built · **Owner:** Nathan
+**Revision 2 (same day):** §4.0 added — the silence brake ALREADY EXISTS on the stream runner and the two brakes are swapped between the roles, so this is a reuse and not a design. The supervisor argument in §4.1 as first written was a wrong-altitude measurement and is corrected in place.
 **Provenance:** measured on the VPS on 2026-09-11 while verifying the night's consumption, as a
 follow-on to `2026-09-10-independent-review/REPORT.md`. Not part of the token plan
 (`2026-09-08-token-efficiency-design.md`) — it is a **consequence** of it that nobody priced.
@@ -111,10 +112,44 @@ changing the number** — a threshold moved under an undiagnosed delivery fault 
 > Not "has it been quiet for N minutes", but **"is anything alive under this turn, and is it waiting
 > for something the system itself told it to wait for"**.
 
-### 4.1 Scope: members only, never supervisors
+### 4.0 CORRECTION, 2026-09-11 — the mechanism already exists, on the other runner
 
-A supervisor is idle by design. The longest silence inside one session, own calls plus sub-agents'
-[measured, all sessions since 09-07]:
+**This section is a correction to §4.1 as first written, raised by the owner's question "does this
+take the supervisor out of the queue?" and it changes the size of the whole proposal.**
+
+The system already has a silence brake. `StreamTurnExecutorModel` kills a stream turn that has
+produced no bytes for `limits.streamSilenceSeconds` and says so in a line that names the limit and
+the config key that sets it. In production that key is **600 seconds** [measured, VPS
+`config.json`], and it has killed **17** supervisor turns since 2026-09-09 [measured, journal].
+
+So the two brakes are **swapped against what the roles need**:
+
+| role | runner | the brake it has | kills since 09-09 |
+|---|---|---|---|
+| supervisor | stream | **silence**, 600 s | 17 [measured] |
+| member (imp / rev) | print | **elapsed time**, 30 min | 57 [measured] |
+
+The role that is idle by design is watched for idleness; the role that works continuously is
+watched by a clock. **Nothing has to be invented.** The proposal is to give the print runner the
+brake the stream runner already has — a mechanism that is built, tested, and running in production —
+not to design a new one. That is a far smaller change than §4.2–§4.4 imply, and better evidenced.
+
+**And the argument in §4.1 below was wrong as argued.** It reads a supervisor's 412-minute median
+silence as proof that an inactivity brake would kill every supervisor. That compares the wrong
+things: those are gaps inside a long-lived *session*, which for a supervisor span the idle time
+*between* turns, while the brake acts *within* a turn. The supervisor already lives under a
+10-minute within-turn silence limit and mostly survives it. The table is kept below because the
+member rows are still the right numbers for §4.2, and because the mistake is instructive: a
+measurement taken at the wrong altitude supports a confident wrong conclusion.
+
+**What this does not settle:** whether those 17 supervisor kills were right. 600 seconds of total
+process silence could be a genuine hang or a long think. Nobody has looked. See §8.
+
+### 4.1 Scope: members only, and what the numbers below do and do not show
+
+The longest silence inside one session, own calls plus sub-agents' [measured, all sessions since
+09-07]. **Read the member rows; the supervisor row is a session-level figure and is not evidence
+about within-turn behaviour — see §4.0:**
 
 | role | sessions | median | p90 | p95 | p99 | max |
 |---|---|---|---|---|---|---|
@@ -122,9 +157,9 @@ A supervisor is idle by design. The longest silence inside one session, own call
 | reviewer | 128 | 0.5 min | 2.1 | 3.2 | 227.4 | 418.6 |
 | **supervisor** | 7 | **412.5 min** | 909.3 | 909.3 | 909.3 | **909.3** |
 
-A naive inactivity brake kills every supervisor, every night. All 57 kills to date were members and
-none was a supervisor [measured], so the brake is already members-only in practice — this makes it
-explicit rather than lucky.
+All 57 deadline kills to date were members and none was a supervisor [measured] — because the two
+runners already carry different brakes (§4.0), not because anyone chose it. The member rows are the
+ones that set the threshold in §4.2.
 
 ### 4.2 Threshold: the members' own numbers
 
@@ -174,8 +209,12 @@ that were correctly parked.
 1. **Diagnose the advisory's 25-of-57 delivery.** Read-only; no production change. It comes first
    because if the gentle brake reaches every long turn, the hard one stops firing on its own and §2
    becomes a much smaller change.
-2. **Replace elapsed-time with liveness, members only, with the three pauses.**
-3. **Only then** consider the ceiling, which by that point is a backstop and not a policy.
+2. **Look at the 17 supervisor silence-kills** before moving that mechanism anywhere. It is the one
+   being proposed for reuse, and whether it is currently killing the right turns is unmeasured
+   (§4.0, §8). Reusing a brake nobody has checked is how this spec's subject came about.
+3. **Give the print runner the stream runner's silence brake**, members only, with the three pauses
+   of §4.4 — reusing the existing mechanism rather than writing a second one.
+4. **Only then** consider the ceiling, which by that point is a backstop and not a policy.
 
 ---
 
@@ -204,6 +243,9 @@ that were correctly parked.
   proposal made in the independent review's §6 in that form.
 - **Move the advisory threshold before §5.1.** Tuning a number whose delivery is broken changes
   nothing and hides the fault.
+- **Write a second silence brake.** One exists (§4.0). A second implementation of the same rule is
+  how a formatter ends up with two copies and one of them without the guard — the failure this
+  repository already has a decision about.
 
 ---
 
@@ -220,5 +262,8 @@ that were correctly parked.
   is about 14 M tokens over three days [estimate, and a floor — a killed turn ran far longer than
   the median], plus 57 closing turns. It was not measured directly because the killed turns'
   records carry no usage at all.
+- **Whether the 17 supervisor silence-kills were legitimate.** 600 seconds of silence could be a
+  hang or a long think; the activity profile of §2 was never run against them. This matters more
+  than it looks: §4.0 proposes reusing that mechanism.
 - **Nobody has reviewed this spec.** On this line of work, six consecutive changes were found
   defective by review after their author had read the diff and seen green. Including this author's.
