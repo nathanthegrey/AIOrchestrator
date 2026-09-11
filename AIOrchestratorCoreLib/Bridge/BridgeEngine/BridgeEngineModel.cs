@@ -14958,7 +14958,21 @@ internal sealed class BridgeEngineModel(
             // which has no supervisor at all — kept telling the owner about one. Every other
             // owner-facing line here already asks Describe_Speaker; a literal beside them is a copy
             // that cannot be kept in step.
-            var text = $"✓✓  ·  {Describe_Speaker(orchId)}: turn ended without a reply — nudged, an answer is coming";
+            //
+            // AND THE PROMISE ONLY WHEN THE TURN BEHIND IT CAN KEEP IT — OwnerNudgeReceipt_Decider
+            // (2026-09-11: promised twice to an owner whose supervisor could not log in).
+            var turnFailures = OwnerFacingTurn_Reader.Read_CurrentTurnFailures(_paths, orchId, _store.Get_Session_OrNull(orchId));
+
+            if (turnFailures.ReadFailure != null)
+                _log.Log_Warning(orchId, OwnerNudgeReceipt_Decider.Describe_Unreadable(turnFailures.ReadFailure));
+
+            var text = OwnerNudgeReceipt_Decider.Build_Receipt_OrNull(Describe_Speaker(orchId), turnFailures.FailedAttempts);
+
+            if (text == null)
+            {
+                _log.Log_Info(orchId, OwnerNudgeReceipt_Decider.Describe_Withheld(turnFailures.FailedAttempts));
+                continue;
+            }
 
             // The same canvas the busy narration draws on: a receipt that was never published (a
             // free recipient gets none now) does not turn this into a second message when a

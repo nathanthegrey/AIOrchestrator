@@ -63,7 +63,6 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     const int MAX_ATTEMPTS = PrintTurn_Words.MAX_ATTEMPTS;
     const string RUNNER_ENV_VAR = PrintTurn_Words.RUNNER_ENV_VAR;
     const string TURN_ENDED_SUBJECT = PrintTurn_Words.TURN_ENDED_SUBJECT;
-    const string TURN_STALLED_SUBJECT = PrintTurn_Words.TURN_STALLED_SUBJECT;
     const string DEADLINE_KILLS_SUBJECT = PrintTurn_Words.DEADLINE_KILLS_SUBJECT;
     const string TURN_LIMITED_SUBJECT = PrintTurn_Words.TURN_LIMITED_SUBJECT;
     const string MISADDRESSED_SUBJECT = PrintTurn_Words.MISADDRESSED_SUBJECT;
@@ -1233,8 +1232,8 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             ChannelAppender.Append_AppEntry(
                 state.ChannelFilePath,
-                Stall_Audience(state),
-                $"{TURN_STALLED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — failed outside the process × {failed.FailedAttempts}",
+                Resolve_StallAlertAudience(state),
+                StallAlert_Decider.Build_Subject(state.MemberId, state.NextTurnNumber, $"failed outside the process × {failed.FailedAttempts}"),
                 $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast error: {cause.GetType().Name}: {cause.Message}",
                 DateTime.Now);
         }
@@ -2031,8 +2030,8 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             ChannelAppender.Append_AppEntry(
                 state.ChannelFilePath,
-                Stall_Audience(state),
-                $"{TURN_STALLED_SUBJECT} {state.MemberId} turn {state.NextTurnNumber} — {outcome} × {failed.FailedAttempts}",
+                Resolve_StallAlertAudience(state),
+                StallAlert_Decider.Build_Subject(state.MemberId, state.NextTurnNumber, $"{outcome} × {failed.FailedAttempts}"),
                 $"{alert}\n\nrequest_id: {requestId}\n{Describe_Traffic(pending)}\nlast exit_code: {result.ExitCode}\napi_error_status: {Describe_ApiErrorStatus(result)}\nstderr (tail): {Tail(result.RawStderr, 600)}",
                 DateTime.Now);
 
@@ -2248,6 +2247,27 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         return state.Role is SessionRoles.Solo or SessionRoles.General or SessionRoles.Supervisor
             ? AppEntryAudiences.Owner
             : AppEntryAudiences.Agent;
+    }
+
+    /// <summary>
+    /// <see cref="Stall_Audience"/>, minus the repeats: a turn whose stall has already reached the
+    /// owner files every later stall of the SAME turn for the session only. See
+    /// <see cref="StallAlert_Decider"/> for the 2026-09-11 incident (three identical alerts on the
+    /// phone for one turn) and for why the memory is the channel rather than the tracker.
+    /// </summary>
+    AppEntryAudiences Resolve_StallAlertAudience(IPrintSessionState state)
+    {
+        var roleAudience = Stall_Audience(state);
+
+        if (roleAudience != AppEntryAudiences.Owner)
+            return roleAudience;
+
+        var audience = StallAlert_Decider.Resolve_Audience(roleAudience, ChannelHistory_Cache.Read_Entries(state.ChannelFilePath), state.MemberId, state.NextTurnNumber);
+
+        if (audience != roleAudience)
+            _log.Log_Info(state.OrchId, StallAlert_Decider.Describe_Repeat(state.MemberId, state.NextTurnNumber));
+
+        return audience;
     }
 
     static string Describe_ApiErrorStatus(ITurnResult result)

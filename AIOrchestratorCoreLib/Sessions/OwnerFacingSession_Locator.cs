@@ -50,7 +50,12 @@ public static class OwnerFacingSession_Locator
     /// talking to the owner at all: the slot nobody writes is then the honest answer, because
     /// "mid-turn" reads false there, which is exactly true.
     /// </summary>
-    static string? Find_LiveSoloMemberId_OrNull(IOrchestrationSession? session)
+    /// <summary>
+    /// The solo that talks to the owner in a basic orchestration, or null for a crew (whose owner-facing
+    /// session is the supervisor). Public so a reader of any other per-session file asks the same
+    /// question the usage path does, rather than a second copy of it.
+    /// </summary>
+    public static string? Find_LiveSoloMemberId_OrNull(IOrchestrationSession? session)
     {
         if (session == null || !OrchestrationShape.Is_BasicOrchestration(session.SupervisorSpawnedUtc))
             return null;
