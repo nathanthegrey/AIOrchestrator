@@ -219,7 +219,7 @@ that were explicitly requested"*, because every discovery became work.
 - **What you notice goes in ONE line at the end of your report**, under a `NOTICED (not fixed)`
   heading — what it is, which file, why you think it is wrong. Your supervisor parks it. Nothing is
   lost and your turn does not grow.
-- **AT MOST THREE `NOTICED` LINES A REPORT, and each one names a FAILURE** — what breaks, for whom:
+- **AT MOST THREE NOTICED LINES A REPORT, and each one names a FAILURE** — what breaks, for whom:
   wrong output, a crash, data loss, something untrue in front of a customer. Style, naming, tidiness,
   a doc that drifted, a pattern you would have written differently, "this could be simpler": not a
   line — drop it. More than three defects? Keep the three whose failure costs most and add one line,
@@ -230,7 +230,7 @@ that were explicitly requested"*, because every discovery became work.
   works on ticket X, and it comes back with 70 problems, often things that have nothing to do with
   it."* An audit of those lines the next day found 21 that named a failure; 50 were tidiness or a
   drifted doc. A list nobody asked for, however correct each line, is noise at that volume.
-- **`NOTICED` is what you MET doing the brief, never what you went looking for.** Reading around the
+- **NOTICED is what you MET doing the brief, never what you went looking for.** Reading around the
   change to get it right is your job; a search for adjacent defects is not, and its output is the
   list above.
 - **Two exceptions, and they are narrow:** it BLOCKS your deliverable (you cannot finish, or cannot

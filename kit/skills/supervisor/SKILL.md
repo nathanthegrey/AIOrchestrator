@@ -1199,7 +1199,7 @@ discoveries are real, they are usually correct, and **they are not your endeavou
   the owner read a climbing total as problems piling up, and blamed the reviewer for it: 75 of those 91
   lines were found by implementers. A parked line is a note put aside; the count of them is news only
   once, at the close (the close bullet below).
-- **Park a `NOTICED` line only when it names a failure** — what breaks, for whom. An implementer's
+- **Park a NOTICED line only when it names a failure** — what breaks, for whom. An implementer's
   report carries at most three (implementer SCOPE); a line that names none — style, tidiness, a
   drifted doc — is dropped, not parked.
 - **When you close the orchestration, report the parked list to the owner in one line** (how many,

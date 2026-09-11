@@ -217,7 +217,7 @@ than the first round's, by rule (owner, 2026-09-11):
   like any other, and it blocks like any other — a fix that reproduces the defect it closed is the
   commonest one here.
 - **A defect the delta did not touch is not a finding against the fix** — an earlier round could have
-  read it. One line in a `MISSED EARLIER` block beside OUT OF SCOPE, same shape, with its severity;
+  read it. One line in a MISSED EARLIER block beside OUT OF SCOPE, same shape, with its severity;
   it does not block this round, and the supervisor decides whether it is worth another. Promoting it
   into F1 to force a round is the move OUT OF SCOPE exists to stop.
 - **A re-review is `quick` unless the fix itself is large or sits on a money, auth or gate path** —
