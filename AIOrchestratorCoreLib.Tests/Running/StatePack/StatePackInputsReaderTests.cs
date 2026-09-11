@@ -135,4 +135,27 @@ public class StatePackInputsReaderTests : IDisposable
         public string ChannelFilePath => path;
         public bool IsOwnerChannel => key == "owner";
     }
+
+    [Fact]
+    public void Read_ForAMember_PicksUpTheProgressNoteBesideItsPack()
+    {
+        var channel = _paths.Get_ImplementerChannelFile("repo-1", "imp-1");
+        Directory.CreateDirectory(Path.GetDirectoryName(channel)!);
+        File.WriteAllText(channel, Entries(("supervisor", 1, "BRIEF — port the ledger")));
+        var note = StatePack_Locator.Get_ProgressFile_OrNull(_paths, SessionRoles.Implementer, "repo-1", "imp-1")!;
+        File.WriteAllText(note, "- ledger ported (abc1234)\n- next: the parser\n");
+
+        var state = PrintSessionState_Factory.Create_New("sid", SessionRoles.Implementer, "repo-1", "imp-1", Path.Combine(_root, "not-a-repo"), null, channel, []);
+        var inputs = StatePackInputs_Reader.Read(_paths, state, "repo-1/imp-1/6", [], [new Source("imp-1", channel)]);
+
+        Assert.Equal("- ledger ported (abc1234)\n- next: the parser", inputs.ProgressNote);
+        Assert.Equal(Path.GetDirectoryName(StatePack_Locator.Get_File(_paths, SessionRoles.Implementer, "repo-1", "imp-1")), Path.GetDirectoryName(note));
+    }
+
+    [Fact]
+    public void Read_WithNoProgressNote_LeavesItNull_AndTheSupervisorHasNone()
+    {
+        Assert.Null(StatePack_Locator.Get_ProgressFile_OrNull(_paths, SessionRoles.Supervisor, "repo-1", "sup"));
+        Assert.Null(StatePack_Locator.Get_ProgressFile_OrNull(_paths, SessionRoles.General, "general", "general"));
+    }
 }

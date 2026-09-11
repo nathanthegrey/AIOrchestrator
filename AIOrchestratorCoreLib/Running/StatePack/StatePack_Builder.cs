@@ -29,6 +29,9 @@ public static class StatePack_Builder
     public const int PLAN_CAP = 24_000;
     public const int GIT_CAP = 3_000;
     public const int OWNER_TAIL_CAP = 8_000;
+    public const int PROGRESS_CAP = 6_000;
+
+    public const string PROGRESS_HEADING = "## Your progress note — progress.md, what you saved while working (resume from here)";
 
     public const string TITLE_PREFIX = "# State pack — ";
     public const string OPENING =
@@ -53,6 +56,9 @@ public static class StatePack_Builder
 
         if (inputs.LastOwnEntry != null)
             Append_Entry(text, "## Your last report (your state as you left it)", inputs.LastOwnEntry, LAST_OWN_CAP);
+
+        if (inputs.ProgressNote != null)
+            Append_Tail(text, PROGRESS_HEADING, inputs.ProgressNote, PROGRESS_CAP, StatePack_Locator.PROGRESS_FILE_NAME);
 
         if (inputs.PlanText != null)
             Append_Block(text, "## The ledger — PLAN.md", inputs.PlanText, PLAN_CAP, "PLAN.md");
@@ -95,6 +101,20 @@ public static class StatePack_Builder
             text.Append(body).Append('\n').Append('\n');
         else
             text.Append(body, 0, cap).Append('\n').Append(Describe_Truncation(body.Length - cap, whereToReadTheRest)).Append('\n').Append('\n');
+    }
+
+    /// <summary>
+    /// Like <see cref="Append_Block"/>, but a note that has outgrown its cap keeps its END: the last
+    /// lines of a progress note are where the member got to, and its first lines are the oldest steps.
+    /// </summary>
+    static void Append_Tail(StringBuilder text, string heading, string body, int cap, string whereToReadTheRest)
+    {
+        text.Append(heading).Append('\n').Append('\n');
+
+        if (body.Length <= cap)
+            text.Append(body).Append('\n').Append('\n');
+        else
+            text.Append(Describe_Truncation(body.Length - cap, whereToReadTheRest)).Append('\n').Append(body, body.Length - cap, cap).Append('\n').Append('\n');
     }
 
     public static string Describe_Truncation(int droppedCharacters, string whereToReadTheRest)
