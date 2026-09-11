@@ -772,7 +772,33 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (digestHeldSince != null)
             _log.Log_Info(orchId, $"'{memberId}': {Describe_Traffic(ordered)} — {wakeReason}");
 
-        Start_Turn(key, stateFile, state, ordered, sources, tracker, configs);
+        Start_Turn(key, stateFile, state, With_AgentNotes(state, sources, ordered, nowLocal), sources, tracker, configs);
+    }
+
+    /// <summary>
+    /// THE APP'S NOTES TO THIS SESSION RIDE THE TURN THAT IS STARTING — first, as context, before the
+    /// traffic that started it — and never start one (see <see cref="PrintTurn_Trigger.Select_AgentNotes"/>
+    /// for what they are and why nothing carried them before). Added AFTER every wake-up rule has
+    /// decided, so a note can neither start a turn nor change which rule released one. A boot turn
+    /// carries none: its empty pending set is what tells the executor it is a boot.
+    /// </summary>
+    IReadOnlyList<PendingEntry> With_AgentNotes(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, IReadOnlyList<PendingEntry> ordered, DateTime nowLocal)
+    {
+        if (ordered.Count == 0)
+            return ordered;
+
+        var own = sources.FirstOrDefault(source => string.Equals(source.ChannelFilePath, state.ChannelFilePath, StringComparison.OrdinalIgnoreCase));
+        var cursor = own == null ? null : state.Cursors.FirstOrDefault(candidate => SOURCE_KEYS.Equals(candidate.SourceKey, own.Key));
+
+        if (own == null || cursor == null)
+            return ordered;
+
+        var notes = PrintTurn_Trigger.Select_AgentNotes(ChannelHistory_Cache.Read_Entries(own.ChannelFilePath), cursor, nowLocal);
+
+        if (notes.Count == 0)
+            return ordered;
+
+        return [.. notes.Select(note => new PendingEntry(own, note)), .. ordered];
     }
 
     /// <summary>
