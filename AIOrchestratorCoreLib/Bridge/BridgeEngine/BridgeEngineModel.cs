@@ -796,6 +796,9 @@ internal sealed class BridgeEngineModel(
     /// </summary>
     readonly Dictionary<long, long> _reactedOwnerMessageIdByThread = [];
 
+    /// <summary>Per owner channel, the latest Telegram message routed into it. Guarded by <c>_deliveryLock</c>.</summary>
+    readonly Dictionary<string, long> _lastOwnerMessageIdByChannel = [];
+
     readonly Lock _receiptLock = new();
 
     /// <summary>
@@ -3841,10 +3844,19 @@ internal sealed class BridgeEngineModel(
             var prose = _configProvider.Get_Current().TelegramProse;
             var pieces = OwnerMessage_Folder.Fold_ForOwner(text, prose.FoldLongEntriesAbove);
 
+            // THREADED ONTO THE OWNER MESSAGE IT ANSWERS, when a turn said which one that was — the
+            // first piece only; the rest follow it as they always did (Running.ReplyLinks).
+            long? replyTo = append.Channel.IsOwnerChannel && ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author)
+                ? _printTurns.ReplyLinks.Find_AnsweredTelegramMessage_OrNull(append.Channel.FilePath, entry.Index)
+                : null;
+
             try
             {
                 foreach (var piece in pieces)
-                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, Resolve_EntrySound(entry), cancellationToken));
+                {
+                    Remember_TopicMessage(threadId, await Send_MirrorPiece_Async(threadId, piece, Resolve_EntrySound(entry), replyTo, cancellationToken));
+                    replyTo = null;
+                }
 
                 // ALSO, never INSTEAD. Every piece above has already been sent; the file is a
                 // convenience for an entry long enough that reading it in the chat is the work.
@@ -3967,13 +3979,13 @@ internal sealed class BridgeEngineModel(
         return ChannelAuthor_Kinds.Speaks_ToOwner(entry.Author) ? TelegramSendSounds.Rings : TelegramSendSounds.Silent;
     }
 
-    async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, TelegramSendSounds sound, CancellationToken cancellationToken)
+    async Task<long?> Send_MirrorPiece_Async(long? threadId, (string Markdown, string Html) piece, TelegramSendSounds sound, long? replyToMessageId, CancellationToken cancellationToken)
     {
         var client = _telegramClient
             ?? throw new Exception("Send_MirrorPiece_Async called without a Telegram client");
 
         return await TelegramProse_Sender.Send_Rendered_Async(
-            client, _log, GLOBAL_ORCH_ID, threadId, piece.Html, piece.Markdown, sound, cancellationToken);
+            client, _log, GLOBAL_ORCH_ID, threadId, piece.Html, piece.Markdown, sound, cancellationToken, replyToMessageId: replyToMessageId);
     }
 
     /// <summary>
@@ -11995,7 +12007,8 @@ internal sealed class BridgeEngineModel(
         }
     }
 
-    List<(long MessageId, long ButtonGroupId, string QuestionText)> Clear_OpenQuestions(string orchId)
+    /// <param name="onlyMessageId">When set, only that question — the one the owner replied to — is cleared.</param>
+    List<(long MessageId, long ButtonGroupId, string QuestionText)> Clear_OpenQuestions(string orchId, long? onlyMessageId = null)
     {
         List<(long MessageId, long ButtonGroupId, string QuestionText)> answered = [];
 
@@ -12003,7 +12016,7 @@ internal sealed class BridgeEngineModel(
         {
             foreach (var pair in _openQuestions)
             {
-                if (pair.Value.OrchId == orchId)
+                if (pair.Value.OrchId == orchId && (onlyMessageId == null || pair.Key == onlyMessageId.Value))
                     answered.Add((pair.Key, pair.Value.ButtonGroupId, pair.Value.Text));
             }
 
@@ -12058,18 +12071,28 @@ internal sealed class BridgeEngineModel(
     /// decider stops that too, since a tap echo arriving with two questions still open reads as
     /// ambiguous rather than as an answer to both.
     /// </summary>
-    async Task Close_AnsweredQuestions_Async(string orchId, string answerText, CancellationToken cancellationToken)
+    async Task Close_AnsweredQuestions_Async(string orchId, string answerText, long? replyToMessageId, CancellationToken cancellationToken)
     {
         int openCount;
+        var replyTarget = OwnerReplyTargets.None;
 
         // OPEN IS BINDABLE AGAIN, and there is no longer a third state between them. A question the
         // owner asked to talk about used to stay open-but-not-bindable; that tap now closes it, so
         // the count and the removal below read the same registry with the same rule — which is what
         // stops a decider and a remover from agreeing only by coincidence.
         lock (_ownerStateLock)
+        {
             openCount = _openQuestions.Values.Count(question => question.OrchId == orchId);
 
-        var binding = AnswerBinding_Decider.Decide(openCount, answerText);
+            if (replyToMessageId != null)
+            {
+                replyTarget = _openQuestions.TryGetValue(replyToMessageId.Value, out var repliedTo) && repliedTo.OrchId == orchId
+                    ? OwnerReplyTargets.AnOpenQuestion
+                    : OwnerReplyTargets.AnotherMessage;
+            }
+        }
+
+        var binding = AnswerBinding_Decider.Decide(openCount, answerText, replyTarget);
 
         if (!AnswerBinding_Decider.Binds(binding))
         {
@@ -12082,10 +12105,15 @@ internal sealed class BridgeEngineModel(
             return;
         }
 
-        var answered = Clear_OpenQuestions(orchId);
+        var answered = binding == AnswerBindings.TheQuestionItRepliesTo
+            ? Clear_OpenQuestions(orchId, onlyMessageId: replyToMessageId)
+            : Clear_OpenQuestions(orchId);
 
         if (answered.Count == 0)
             return;
+
+        if (binding == AnswerBindings.TheQuestionItRepliesTo)
+            _log.Log_Info(orchId, AnswerBinding_Decider.Describe(binding, openCount));
 
         lock (_buttonLock)
         {
@@ -12690,6 +12718,10 @@ internal sealed class BridgeEngineModel(
             segmentText = message.Text;
         }
 
+        // THE OWNER'S OWN WORDS, kept before the quote goes on: whether they answer a question is a
+        // question about what THEY wrote, and a quoted question ends in "?" (see AnswerBinding_Decider).
+        var ownerWords = segmentText;
+
         // AFTER the three paths, not inside one: the owner can reply with text, a voice note or a
         // photo, and the quote is what they were pointing at in every case.
         segmentText = OwnerReplyContext_Formatter.Prepend_OrSame(segmentText, message.ReplyToText);
@@ -12697,6 +12729,12 @@ internal sealed class BridgeEngineModel(
         lock (_deliveryLock)
         {
             _deliveryTargets[channelFile] = (orchId, message.MessageThreadId);
+
+            // The Telegram message the next owner entry of this channel is written from — what a
+            // session's answer to it is threaded onto (Running.ReplyLinks). The LATEST, since
+            // messages a few seconds apart are delivered as one entry and the answer is to all of them.
+            if (!message.IsAppComposed && message.MessageId != null)
+                _lastOwnerMessageIdByChannel[channelFile] = message.MessageId.Value;
         }
 
         // Any word from the owner — including a button tap — means they are back.
@@ -12715,13 +12753,13 @@ internal sealed class BridgeEngineModel(
         // stamped a talk request onto an orphaned-processes question nobody ever decided.
         if (!message.IsAppComposed)
         {
-            await Close_AnsweredQuestions_Async(orchId, segmentText, cancellationToken);
+            await Close_AnsweredQuestions_Async(orchId, ownerWords, message.ReplyToMessageId, cancellationToken);
 
             // Stamped whether or not the reply bound: what matters later is that the owner REPLIED
             // after a question was asked, and a bound reply leaves nothing open to supersede anyway.
             // NOT when the owner ASKED something: a question answers nothing, so it cannot make an
             // older question obsolete (fincanva-6, 2026-09-11 — see QuestionSupersede_Decider).
-            if (QuestionSupersede_Decider.Counts_AsAReply(segmentText))
+            if (QuestionSupersede_Decider.Counts_AsAReply(ownerWords))
             {
                 lock (_ownerStateLock)
                     _ownerRepliedInWordsUtcByOrchId[orchId] = _clock.UtcNow;
@@ -12872,7 +12910,9 @@ internal sealed class BridgeEngineModel(
         // of the owner's message is the local variable. A failed append that simply fell through
         // would destroy it — which is worse than the collision the lock exists to prevent, and is
         // why "fail the write" cannot mean "drop the write" on this path.
-        if (!ChannelAppender.Append_OwnerEntry(delivery.Key, deliveryText, DateTime.Now))
+        var ownerEntryIndex = ChannelAppender.Append_OwnerEntry_OrNull(delivery.Key, deliveryText, DateTime.Now);
+
+        if (ownerEntryIndex == null)
         {
             // Put it back and mark it ready: the owner has already waited out one aggregation
             // window and must not serve a second one for a lock they know nothing about.
@@ -12893,6 +12933,14 @@ internal sealed class BridgeEngineModel(
 
         _log.Log_Info(target.OrchId, "Owner message delivered to the supervisor");
         Raise_OrchestrationActivity(target.OrchId);
+
+        long? ownerMessageId;
+
+        lock (_deliveryLock)
+            ownerMessageId = _lastOwnerMessageIdByChannel.TryGetValue(delivery.Key, out var lastId) ? lastId : null;
+
+        if (ownerMessageId != null)
+            _printTurns.ReplyLinks.Record_OwnerMessage(delivery.Key, ownerEntryIndex.Value, ownerMessageId.Value);
 
         // AN OWNER MESSAGE PUTS THE LEDGER IN DEBT, exactly as a verdict does, and this is the half
         // that was missing (owner, 2026-08-14). They asked for six things over two hours and the bar

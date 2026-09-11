@@ -665,6 +665,68 @@ public class QuestionContractProbeTests : IDisposable
         Assert.Equal(1, _telegram.Count_Edited_Containing(QuestionPrompt_Builder.SUPERSEDED_SUFFIX));
     }
 
+    /// <summary>
+    /// A REPLY NAMES ITS QUESTION. The owner, 2026-09-11: "non c'è modo di linkare domande e risposte?
+    /// Tipo con un rispondi? Avere più domande non lo vedo come un problema." With two open, a typed
+    /// answer binds neither — unless it is a Telegram Reply on one of them, which closes that one and
+    /// only that one, stamped with the owner's words rather than the quote the reply carries.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AReplyOnOneOfTwoOpenQuestions_AnswersThatOneOnly()
+    {
+        var orchId = await Start_Async();
+
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+        Append_Supervisor(orchId, SECOND_QUESTION, entryNumber: 4);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null && _telegram.Find_ButtonFor("Merge it") != null, 25_000),
+            $"both questions never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        var mergeQuestionId = _telegram.Find_MessageIdOfSentContaining("Merge wf-perf into master now?") ?? throw new Exception("no id for the merge question");
+
+        _telegram.Queue_Updates(Build_OwnerReplyJson("tienilo fermo per ora", updateId: 3200, messageId: 201, mergeQuestionId, "Merge wf-perf into master now?"));
+
+        Assert.True(
+            await Run_Until_Async(() => _engineState.Load_OrEmpty().OpenQuestions.Count == 1, 20_000),
+            $"the reply did not close its question.{Environment.NewLine}{_log.Dump()}");
+
+        var open = Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+        Assert.Contains("Start the FIN-D-277a build now?", open.Text, StringComparison.Ordinal);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Has_Edited_Containing("tienilo fermo per ora"), 20_000),
+            $"the answered question was not stamped.{Environment.NewLine}{_telegram.Dump_Sent()}");
+
+        Assert.False(_telegram.Has_Edited_Containing("replying to"), "the stamp carried the quote instead of the owner's words");
+    }
+
+    /// <summary>
+    /// A REPLY TO SOMETHING ELSE IS ABOUT THAT. fincanva-6, 2026-09-11 12:58: with one question open,
+    /// an instruction ("usa key o MCP per cancellare mio abbonamento") was stamped "✅ answered" under
+    /// it. When the owner points at another message, the only open question stays open.
+    /// </summary>
+    [Fact]
+    [Trait("Speed", "Slow")]
+    public async Task AReplyToAnotherMessage_AnswersNothing_EvenWithOneQuestionOpen()
+    {
+        var orchId = await Start_Async();
+        Append_Supervisor(orchId, COMPLETE_QUESTION);
+
+        Assert.True(
+            await Run_Until_Async(() => _telegram.Find_ButtonFor("Start it") != null, 20_000),
+            $"the question never reached the phone.{Environment.NewLine}{_log.Dump()}");
+
+        _telegram.Queue_Updates(Build_OwnerReplyJson("usa key o MCP per cancellare mio abbonamento", updateId: 3210, messageId: 211, replyToMessageId: 987_654, "a report above"));
+
+        Assert.True(
+            await Run_Until_Async(() => _log.Has_Info_Containing("replied to a message that is not an open question"), 20_000),
+            $"the reply was never judged.{Environment.NewLine}{_log.Dump()}");
+
+        Assert.Single(_engineState.Load_OrEmpty().OpenQuestions);
+    }
+
     async Task Run_For_Async(int milliseconds)
     {
         using var cancellation = new CancellationTokenSource();
@@ -717,6 +779,15 @@ public class QuestionContractProbeTests : IDisposable
         return $"{{\"ok\":true,\"result\":[{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
             + $"\"message_thread_id\":{TOPIC_ID},\"from\":{{\"id\":{OWNER_USER_ID}}},"
             + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\"}}}}]}}";
+    }
+
+    /// <summary>An owner message sent with Telegram's Reply on <paramref name="replyToMessageId"/>, quoting it.</summary>
+    static string Build_OwnerReplyJson(string text, long updateId, long messageId, long replyToMessageId, string quotedText)
+    {
+        return $"{{\"ok\":true,\"result\":[{{\"update_id\":{updateId},\"message\":{{\"message_id\":{messageId},"
+            + $"\"message_thread_id\":{TOPIC_ID},\"from\":{{\"id\":{OWNER_USER_ID}}},"
+            + $"\"chat\":{{\"id\":{SUPERGROUP_CHAT_ID}}},\"text\":\"{text}\","
+            + $"\"reply_to_message\":{{\"message_id\":{replyToMessageId},\"text\":\"{quotedText}\"}}}}}}]}}";
     }
 
     static string Build_CallbackTapJson(string callbackData, long questionMessageId, long updateId)

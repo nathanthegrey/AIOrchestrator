@@ -306,6 +306,8 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// </param>
     readonly record struct SourceRead(ITurnSource Source, IReadOnlyList<IChannelEntry> Pending, bool NothingEverDelivered);
 
+    public ReplyLinks.IReplyLinks ReplyLinks { get; } = Running.ReplyLinks.ReplyLinks_Factory.Create_InMemory();
+
     public int InFlightCount
     {
         get
@@ -1344,7 +1346,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
                 return;
             }
 
-            if (!(await Write_Reply_Async(state, sources, result.ResultText)).AllLanded)
+            if (!(await Write_Reply_Async(state, sources, result.ResultText, Find_AnsweredOwnerEntry_OrNull(state, pending))).AllLanded)
             {
                 _log.Log_Error(state.OrchId, $"Turn {requestId} completed but its entry could not be appended — the channel stayed locked; the turn will be retried", null);
                 Record_Failure(stateFile, state, pending, tracker, result, requestId, attempt, executor, "entry not appended (channel locked)");
@@ -1810,10 +1812,49 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             DateTime.Now);
     }
 
-    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText)
+    /// <summary>
+    /// The owner entry this turn's answer answers: the LAST owner message it was handed from the
+    /// session's own channel — the one the owner is looking at when the answer arrives. Null when the
+    /// turn carried no owner message (member traffic, a boot).
+    /// </summary>
+    static int? Find_AnsweredOwnerEntry_OrNull(IPrintSessionState state, IReadOnlyList<PendingEntry> pending)
+    {
+        for (var index = pending.Count - 1; index >= 0; index--)
+        {
+            var item = pending[index];
+
+            if (item.Entry.Author == ChannelAuthors.Owner && string.Equals(item.Source.ChannelFilePath, state.ChannelFilePath, StringComparison.OrdinalIgnoreCase))
+                return item.Entry.Index;
+        }
+
+        return null;
+    }
+
+    async Task<ReplyDelivery> Write_Reply_Async(IPrintSessionState state, IReadOnlyList<ITurnSource> sources, string? resultText, int? answersOwnerEntry = null)
     {
         var author = SessionRole_Names.Get_Author(state.Role);
         var ownChannel = state.ChannelFilePath;
+
+        // THE FIRST PART THAT LANDS IN THE SESSION'S OWN CHANNEL CARRIES THE LINK, and only that one:
+        // it is the answer to the owner's message, and the phone threads it as a reply
+        // (Running.ReplyLinks). Later parts follow it in the chat as they always did.
+        var linkPending = answersOwnerEntry != null;
+
+        async Task<bool> Append_Async(string target, string subject, string body)
+        {
+            var index = await Append_SessionEntry_WithRetry_OrNull_Async(target, author, subject, body);
+
+            if (index == null)
+                return false;
+
+            if (linkPending && string.Equals(target, ownChannel, StringComparison.OrdinalIgnoreCase))
+            {
+                ReplyLinks.Record_Answer(ownChannel, index.Value, answersOwnerEntry!.Value);
+                linkPending = false;
+            }
+
+            return true;
+        }
 
         // WHICH FILES THE REPLY ACTUALLY REACHED, collected as they are written rather than worked out
         // again afterwards from the same text — a second reading of the addressing rule is how the
@@ -1823,7 +1864,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (sources.Count <= 1)
         {
             var (soleSubject, soleBody) = PrintTurnEntry_Splitter.Split(resultText);
-            var soleLanded = await Append_SessionEntry_WithRetry_Async(ownChannel, author, soleSubject, soleBody);
+            var soleLanded = await Append_Async(ownChannel, soleSubject, soleBody);
 
             if (soleLanded)
                 written.Add(ownChannel);
@@ -1837,7 +1878,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
         if (blocks.Count == 0)
         {
             var (emptySubject, emptyBody) = PrintTurnEntry_Splitter.Split(resultText);
-            var emptyLanded = await Append_SessionEntry_WithRetry_Async(ownChannel, author, emptySubject, emptyBody);
+            var emptyLanded = await Append_Async(ownChannel, emptySubject, emptyBody);
 
             if (emptyLanded)
                 written.Add(ownChannel);
@@ -1862,7 +1903,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
 
             var (subject, body) = PrintTurnEntry_Splitter.Split(block.Text);
 
-            if (await Append_SessionEntry_WithRetry_Async(target, author, subject, body))
+            if (await Append_Async(target, subject, body))
                 written.Add(target);
             else
                 allLanded = false;
@@ -2068,17 +2109,17 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
     /// wait is under a second, which no shutdown notices.
     /// </para>
     /// </summary>
-    static async Task<bool> Append_SessionEntry_WithRetry_Async(string channelFilePath, ChannelAuthors author, string subject, string body)
+    static async Task<int?> Append_SessionEntry_WithRetry_OrNull_Async(string channelFilePath, ChannelAuthors author, string subject, string body)
     {
         for (var attempt = 0; attempt < ENTRY_APPEND_ATTEMPTS; attempt++)
         {
-            if (ChannelAppender.Append_SessionEntry(channelFilePath, author, subject, body, DateTime.Now))
-                return true;
+            if (ChannelAppender.Append_SessionEntry_OrNull(channelFilePath, author, subject, body, DateTime.Now) is int index)
+                return index;
 
             await Task.Delay(ENTRY_APPEND_RETRY_MILLISECONDS);
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>

@@ -375,6 +375,33 @@ public class StreamTurnDispatcherTests
         Assert.Equal(["REPORT — one", "UNPROMPTED — staging", "REPORT — two"], entries.Select(entry => entry.Subject));
     }
 
+    /// <summary>
+    /// THE TURN SAYS WHICH OWNER MESSAGE ITS ANSWER ANSWERS, so the phone can thread it (owner,
+    /// 2026-09-11: "non c'è modo di linkare domande e risposte? Tipo con un rispondi?"). The bridge's
+    /// half — which Telegram message became the owner entry — is seeded here as the bridge would.
+    /// </summary>
+    [Fact]
+    public async Task TheSupervisorsAnswer_IsLinkedToTheOwnerMessageItsTurnWasGiven()
+    {
+        using var harness = new PrintRunnerTestHarness("supervisor:stream");
+        var memberId = harness.Register_Supervisor();
+        harness.Write_Scenario("""{"default":{"result":"ack\n\nnoted"}}""");
+        var dispatcher = harness.Create_Dispatcher();
+        var ownerChannel = harness.Paths.Get_OwnerChannelFile("repo-1");
+
+        Append_Owner(harness, "repo-1", "start on the parser");
+        var ownerEntry = Assert.Single(ChannelEntry_Parser.Parse_All(File.ReadAllText(ownerChannel)), entry => entry.Author == ChannelAuthors.Owner);
+        dispatcher.ReplyLinks.Record_OwnerMessage(ownerChannel, ownerEntry.Index, telegramMessageId: 4242);
+
+        Assert.True(PrintRunnerTestHarness.Drive_Until(dispatcher, () => harness.Read_State(SessionRoles.Supervisor, "repo-1", memberId).ExecutedTurns.Count == 1, PrintRunnerTestHarness.GENEROUS));
+        await dispatcher.Stop_Async();
+
+        var answer = Assert.Single(ChannelEntry_Parser.Parse_All(File.ReadAllText(ownerChannel)), entry => entry.Author == ChannelAuthors.Supervisor);
+
+        Assert.Equal(4242, dispatcher.ReplyLinks.Find_AnsweredTelegramMessage_OrNull(ownerChannel, answer.Index));
+        Assert.Null(dispatcher.ReplyLinks.Find_AnsweredTelegramMessage_OrNull(ownerChannel, ownerEntry.Index));
+    }
+
     [Fact]
     public async Task TheSupervisor_RunsInTheStream_AndIsWokenByTheOwnerChannel()
     {
