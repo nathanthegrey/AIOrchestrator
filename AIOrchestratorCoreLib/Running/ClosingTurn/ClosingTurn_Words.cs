@@ -22,15 +22,19 @@ namespace AIOrchestratorCoreLib.Running.ClosingTurn;
 public static class ClosingTurn_Words
 {
     /// <summary>
-    /// HOW THE WORK TURN DIED, in the words every record of it uses: "killed at the deadline" or
-    /// "killed by the silence brake". Both earn the same closing turn, and before 2026-09-11 there was
+    /// HOW THE WORK TURN DIED, in the words every record of it uses: "killed at the deadline", "killed
+    /// by the silence brake" or "killed by the loop detector". All earn the same closing turn, and
+    /// before 2026-09-11 there was
     /// only the first — so every line below was written saying "deadline", and a silence kill reported
     /// through them unchanged would tell the supervisor the turn ran out of time when it had stopped
     /// showing any sign of life, which is the opposite advice (split the brief vs. look for a hang).
     /// </summary>
     public static string Describe_Kill(TurnResult.ITurnResult killed)
     {
-        return killed.SilenceKill == null ? "killed at the deadline" : "killed by the silence brake";
+        if (killed.BrakeKill == null)
+            return "killed at the deadline";
+
+        return TurnLiveness.TurnSilenceBrake_Factory.Is_LoopKill(killed.BrakeKill) ? "killed by the loop detector" : "killed by the silence brake";
     }
 
     /// <summary>

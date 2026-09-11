@@ -177,6 +177,24 @@ public class TranscriptActivityReaderTests : IDisposable
         Assert.Equal(expected, TranscriptActivity_Reader.Resolve_ClaudeHome(null));
     }
 
+    /// <summary>The loop detector reads the main agent's file only — never a sub-agent's, never another session's.</summary>
+    [Fact]
+    public void Find_MainTranscript_IsTheSessionsOwnFile_TheNewestCopy_AndNeverASubAgentsOrAnotherSessions()
+    {
+        var older = Path.Combine(_projects, "-repo-a", SESSION_ID + ".jsonl");
+        var newer = Path.Combine(_projects, "-repo-b", SESSION_ID + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(older)!);
+        Directory.CreateDirectory(Path.Combine(_projects, "-repo-b", SESSION_ID, "subagents"));
+        Write_File(older, OLDER);
+        Write_File(newer, NEWER);
+        Write_File(Path.Combine(_projects, "-repo-b", SESSION_ID, "subagents", "agent-1.jsonl"), NEWEST);
+        Write_File(Path.Combine(_projects, "-repo-a", OTHER_SESSION_ID + ".jsonl"), NEWEST);
+
+        Assert.Equal(newer, TranscriptActivity_Reader.Find_MainTranscript_OrNull(_claudeHome, SESSION_ID));
+        Assert.Null(TranscriptActivity_Reader.Find_MainTranscript_OrNull(_claudeHome, "../" + SESSION_ID));
+        Assert.Null(TranscriptActivity_Reader.Find_MainTranscript_OrNull(_claudeHome, "8b2e6d4c-3e5f-4b7c-9d0e-1f2a3b4c5d6e"));
+    }
+
     static void Write_File(string path, DateTime lastWriteUtc)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);

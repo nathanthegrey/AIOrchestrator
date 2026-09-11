@@ -4,16 +4,27 @@ internal sealed class TurnSilenceBrakeModel(
     TimeSpan silenceLimit,
     TimeSpan pollInterval,
     Func<DateTime?> readTranscriptLastWriteUtc,
-    Func<int, int?> countDescendants) : ITurnSilenceBrake
+    Func<int, int?> countDescendants,
+    Func<DateTime, string?> describeLoopSince) : ITurnSilenceBrake
 {
     readonly Func<DateTime?> _readTranscriptLastWriteUtc = readTranscriptLastWriteUtc;
     readonly Func<int, int?> _countDescendants = countDescendants;
+    readonly Func<DateTime, string?> _describeLoopSince = describeLoopSince;
 
     public TimeSpan SilenceLimit { get; } = silenceLimit;
     public TimeSpan PollInterval { get; } = pollInterval;
 
     public string? Decide_Kill_OrNull(DateTime nowUtc, DateTime turnStartedUtc, DateTime? lastOutputUtc, int processId)
     {
+        // A LOOP IS CHECKED FIRST AND REGARDLESS OF LIFE, because a looping turn is the one that shows
+        // life for ever: it writes its transcript on every step, so the silence test below would spare
+        // it until the ceiling. Only THIS turn's steps count — a resumed transcript's earlier turns are
+        // not evidence about this one.
+        var loop = _describeLoopSince(turnStartedUtc);
+
+        if (loop != null)
+            return Describe_LoopKill(loop);
+
         // THE TURN'S OWN START IS THE FLOOR. A resumed transcript carries every earlier turn's writes,
         // and a stamp older than this turn says nothing about it — the stream brake's first version
         // measured from the PREVIOUS turn's last byte and killed 17 idle supervisors five seconds
@@ -47,6 +58,14 @@ internal sealed class TurnSilenceBrakeModel(
 
         return Describe_Kill(nowUtc - lastSign, SilenceLimit);
     }
+
+    internal static string Describe_LoopKill(string loop)
+    {
+        return $"{LOOP_KILL_PREFIX}: {loop} — and was killed (the pattern is OpenHands' stuck detector; the silence brake is set by '{TurnSilenceBrake_Factory.CONFIG_KEY}' and switches this off with it)";
+    }
+
+    /// <summary>The words a loop kill starts with — the one place that tells the two kinds of brake kill apart.</summary>
+    internal const string LOOP_KILL_PREFIX = "the turn was looping";
 
     internal static string Describe_Kill(TimeSpan silentFor, TimeSpan limit)
     {

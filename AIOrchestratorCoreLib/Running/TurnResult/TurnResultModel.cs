@@ -17,7 +17,7 @@ internal sealed class TurnResultModel(
     TimeSpan elapsed,
     bool nothingToClose,
     IReadOnlyList<string> supersededFinals,
-    string? silenceKill) : ITurnResult
+    string? brakeKill) : ITurnResult
 {
     public int ExitCode { get; } = exitCode;
     public bool TimedOut { get; } = timedOut;
@@ -35,5 +35,5 @@ internal sealed class TurnResultModel(
     public TimeSpan Elapsed { get; } = elapsed;
     public bool NothingToClose { get; } = nothingToClose;
     public IReadOnlyList<string> SupersededFinals { get; } = supersededFinals;
-    public string? SilenceKill { get; } = silenceKill;
+    public string? BrakeKill { get; } = brakeKill;
 }

@@ -127,6 +127,43 @@ public static class TranscriptActivity_Reader
     }
 
     /// <summary>
+    /// The session's OWN transcript — <c>projects/*/&lt;sessionId&gt;.jsonl</c>, the newest if a cwd
+    /// change left it in two project folders — for the loop detector, which reads the main agent's
+    /// steps and nothing a sub-agent wrote. Null for an id that is not a session id, a blank home, or
+    /// no such file yet; the same safe direction as <see cref="Read_LastWriteUtc_OrNull"/>.
+    /// </summary>
+    public static string? Find_MainTranscript_OrNull(string claudeHome, string sessionId)
+    {
+        if (!Is_SessionIdShape(sessionId) || string.IsNullOrWhiteSpace(claudeHome))
+            return null;
+
+        try
+        {
+            var projectsFolder = new DirectoryInfo(Path.Combine(claudeHome, PROJECTS_FOLDER));
+
+            if (!projectsFolder.Exists)
+                return null;
+
+            FileInfo? newest = null;
+
+            foreach (var projectFolder in projectsFolder.EnumerateDirectories())
+            {
+                var candidate = new FileInfo(Path.Combine(projectFolder.FullName, sessionId + TRANSCRIPT_EXTENSION));
+
+                if (candidate.Exists && (newest == null || candidate.LastWriteTimeUtc > newest.LastWriteTimeUtc))
+                    newest = candidate;
+            }
+
+            return newest?.FullName;
+        }
+        catch
+        {
+            // Same as the reader above: an unreadable projects/ says nothing, and must not throw into the turn loop.
+            return null;
+        }
+    }
+
+    /// <summary>
     /// One project folder's contribution. Its own try, so ONE unreadable sibling (another repo's
     /// folder with odd permissions) cannot blind the reading for the folder that holds this session.
     /// </summary>

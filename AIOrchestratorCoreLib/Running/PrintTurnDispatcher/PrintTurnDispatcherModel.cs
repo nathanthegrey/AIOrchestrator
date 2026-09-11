@@ -1473,7 +1473,7 @@ internal sealed class PrintTurnDispatcherModel : IPrintTurnDispatcher
             return;
         }
 
-        _log.Log_Info(state.OrchId, $"Turn {requestId} was {ClosingTurn_Words.Describe_Kill(killed)} after {killed.Elapsed.TotalMinutes:F1} min{(killed.SilenceKill == null ? string.Empty : $" ({killed.SilenceKill})")} — running closing turn {closingRequestId} on session {sessionId} (up to {closingTimeout.TotalMinutes:F1} min, {ClosingTurn_Words.BUDGET_FLAG} {ClosingTurn_Words.Describe_Budget(ClosingTurn_Words.BUDGET_USD)})");
+        _log.Log_Info(state.OrchId, $"Turn {requestId} was {ClosingTurn_Words.Describe_Kill(killed)} after {killed.Elapsed.TotalMinutes:F1} min{(killed.BrakeKill == null ? string.Empty : $" ({killed.BrakeKill})")} — running closing turn {closingRequestId} on session {sessionId} (up to {closingTimeout.TotalMinutes:F1} min, {ClosingTurn_Words.BUDGET_FLAG} {ClosingTurn_Words.Describe_Budget(ClosingTurn_Words.BUDGET_USD)})");
 
         ITurnResult? closing;
 

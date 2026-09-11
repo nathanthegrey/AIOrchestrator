@@ -56,7 +56,21 @@ public static class TurnSilenceBrake_Factory
             silenceLimit,
             Resolve_PollInterval(silenceLimit),
             () => TranscriptActivity_Reader.Read_LastWriteUtc_OrNull(claudeHome, sessionId),
-            ProcessDescendants_Reader.Count_Descendants_OrNull);
+            ProcessDescendants_Reader.Count_Descendants_OrNull,
+            sinceUtc => Describe_Loop_OrNull(claudeHome, sessionId, sinceUtc));
+    }
+
+    /// <summary>True when <paramref name="brakeKill"/> is the loop detector's line rather than the silence brake's.</summary>
+    public static bool Is_LoopKill(string brakeKill)
+    {
+        return brakeKill.StartsWith(TurnSilenceBrakeModel.LOOP_KILL_PREFIX, StringComparison.Ordinal);
+    }
+
+    static string? Describe_Loop_OrNull(string claudeHome, string sessionId, DateTime sinceUtc)
+    {
+        var transcript = TranscriptActivity_Reader.Find_MainTranscript_OrNull(claudeHome, sessionId);
+
+        return transcript == null ? null : TranscriptLoop_Detector.Describe_Loop_OrNull(transcript, sinceUtc);
     }
 
     /// <summary>
@@ -64,13 +78,13 @@ public static class TurnSilenceBrake_Factory
     /// child" without writing a transcript into the real claude home or leaving a process behind.
     /// </summary>
     public static ITurnSilenceBrake Create_WithReaders(
-        TimeSpan silenceLimit, TimeSpan pollInterval, Func<DateTime?> readTranscriptLastWriteUtc, Func<int, int?> countDescendants)
+        TimeSpan silenceLimit, TimeSpan pollInterval, Func<DateTime?> readTranscriptLastWriteUtc, Func<int, int?> countDescendants, Func<DateTime, string?>? describeLoopSince = null)
     {
         if (silenceLimit <= TimeSpan.Zero)
             throw new ArgumentException($"silenceLimit must be positive, got {silenceLimit}");
         if (pollInterval <= TimeSpan.Zero)
             throw new ArgumentException($"pollInterval must be positive, got {pollInterval}");
 
-        return new TurnSilenceBrakeModel(silenceLimit, pollInterval, readTranscriptLastWriteUtc, countDescendants);
+        return new TurnSilenceBrakeModel(silenceLimit, pollInterval, readTranscriptLastWriteUtc, countDescendants, describeLoopSince ?? (_ => null));
     }
 }

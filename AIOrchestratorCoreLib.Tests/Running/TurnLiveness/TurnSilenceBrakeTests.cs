@@ -105,4 +105,32 @@ public class TurnSilenceBrakeTests
     {
         Assert.Null(TurnSilenceBrake_Factory.Create_ForTurn_OrNull(SessionRoles.Implementer, TimeSpan.Zero, Guid.NewGuid().ToString(), new Dictionary<string, string>()));
     }
+
+    /// <summary>
+    /// A LOOPING TURN SHOWS LIFE FOR EVER — output a second ago, a growing transcript, a command
+    /// running — and is still killed, because repetition is the other half of best practice (research
+    /// 2026-09-11, OpenHands' stuck detector). And the loop is looked for only in THIS turn's steps.
+    /// </summary>
+    [Fact]
+    public void Decide_ALoopingTurnThatShowsEverySignOfLife_IsKilledAsALoop()
+    {
+        DateTime? askedSince = null;
+        var brake = TurnSilenceBrake_Factory.Create_WithReaders(LIMIT, TimeSpan.FromSeconds(15), () => START.AddMinutes(9), _ => 3,
+            since => { askedSince = since; return "the same Bash call returned the same result 4 times in a row"; });
+
+        var line = brake.Decide_Kill_OrNull(START.AddMinutes(10), START, START.AddMinutes(10), 4242);
+
+        Assert.NotNull(line);
+        Assert.StartsWith("the turn was looping: the same Bash call", line);
+        Assert.True(TurnSilenceBrake_Factory.Is_LoopKill(line!));
+        Assert.Equal(START, askedSince);
+    }
+
+    [Fact]
+    public void Is_LoopKill_TellsTheTwoBrakeKillsApart()
+    {
+        var silence = Brake(null, 0).Decide_Kill_OrNull(START.AddMinutes(16), START, null, 4242);
+
+        Assert.False(TurnSilenceBrake_Factory.Is_LoopKill(silence!));
+    }
 }

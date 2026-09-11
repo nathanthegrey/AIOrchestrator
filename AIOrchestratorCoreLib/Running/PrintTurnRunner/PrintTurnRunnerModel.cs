@@ -66,16 +66,16 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation, ISessio
 
         var timedOut = false;
         var cancelled = false;
-        string? silenceKill = null;
+        string? brakeKill = null;
 
         try
         {
             if (brake == null)
                 await process.WaitForExitAsync(timeoutSource.Token);
             else
-                silenceKill = await Wait_UnderBrake_OrKillLine_Async(process, brake, startedUtc, () => Interlocked.Read(ref lastOutputTicks), timeoutSource.Token);
+                brakeKill = await Wait_UnderBrake_OrKillLine_Async(process, brake, startedUtc, () => Interlocked.Read(ref lastOutputTicks), timeoutSource.Token);
 
-            if (silenceKill != null)
+            if (brakeKill != null)
             {
                 // KILLED LIKE A TIMEOUT, BECAUSE IT IS ONE — same tree kill, same exit -1, and a turn
                 // that had been working before it went silent earns the same closing turn. Only the
@@ -114,7 +114,7 @@ internal sealed class PrintTurnRunnerModel(IClaudeInvocation invocation, ISessio
         // parsed exactly as it always was.
         var result = TurnResult_Parser.Parse_Stream(timedOut ? -1 : process.ExitCode, timedOut, stdout, stderr, stopwatch.Elapsed);
 
-        return silenceKill == null ? result : TurnResult_Factory.CreateFrom_SilenceKill(result, silenceKill);
+        return brakeKill == null ? result : TurnResult_Factory.CreateFrom_BrakeKill(result, brakeKill);
     }
 
     /// <summary>

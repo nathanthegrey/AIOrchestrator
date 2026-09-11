@@ -19,22 +19,22 @@ public static class TurnResult_Factory
         TimeSpan elapsed,
         bool nothingToClose = false,
         IReadOnlyList<string>? supersededFinals = null,
-        string? silenceKill = null)
+        string? brakeKill = null)
     {
-        return new TurnResultModel(exitCode, timedOut, isError, subtype, resultText, sessionId, totalCostUsd, durationMs, durationApiMs, numTurns, apiErrorStatus, rawStdout, rawStderr, elapsed, nothingToClose, supersededFinals ?? [], silenceKill);
+        return new TurnResultModel(exitCode, timedOut, isError, subtype, resultText, sessionId, totalCostUsd, durationMs, durationApiMs, numTurns, apiErrorStatus, rawStdout, rawStderr, elapsed, nothingToClose, supersededFinals ?? [], brakeKill);
     }
 
     /// <summary>
-    /// The same result, marked as killed by the member silence brake with <paramref name="silenceKill"/>
+    /// The same result, marked as killed by the member silence brake with <paramref name="brakeKill"/>
     /// as the reason. Everything else is kept — including <see cref="ITurnResult.NothingToClose"/>,
     /// which stays false: a turn that went silent after working has work behind it to close.
     /// </summary>
-    public static ITurnResult CreateFrom_SilenceKill(ITurnResult source, string silenceKill)
+    public static ITurnResult CreateFrom_BrakeKill(ITurnResult source, string brakeKill)
     {
         return Create(
             source.ExitCode, source.TimedOut, source.IsError, source.Subtype, source.ResultText, source.SessionId,
             source.TotalCostUsd, source.DurationMs, source.DurationApiMs, source.NumTurns, source.ApiErrorStatus,
-            source.RawStdout, source.RawStderr, source.Elapsed, source.NothingToClose, source.SupersededFinals, silenceKill);
+            source.RawStdout, source.RawStderr, source.Elapsed, source.NothingToClose, source.SupersededFinals, brakeKill);
     }
 
     /// <summary>
@@ -50,6 +50,6 @@ public static class TurnResult_Factory
         return Create(
             source.ExitCode, source.TimedOut, source.IsError, source.Subtype, source.ResultText, source.SessionId,
             source.TotalCostUsd, source.DurationMs, source.DurationApiMs, source.NumTurns, source.ApiErrorStatus,
-            source.RawStdout, source.RawStderr, source.Elapsed, nothingToClose: true, source.SupersededFinals, source.SilenceKill);
+            source.RawStdout, source.RawStderr, source.Elapsed, nothingToClose: true, source.SupersededFinals, source.BrakeKill);
     }
 }

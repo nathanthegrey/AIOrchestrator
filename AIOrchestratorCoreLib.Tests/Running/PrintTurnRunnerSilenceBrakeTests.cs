@@ -38,9 +38,9 @@ public class PrintTurnRunnerSilenceBrakeTests
 
             Assert.True(result.TimedOut);
             Assert.False(result.NothingToClose);
-            Assert.NotNull(result.SilenceKill);
-            Assert.Contains("no sign of life", result.SilenceKill);
-            Assert.Contains(TurnSilenceBrake_Factory.CONFIG_KEY, result.SilenceKill);
+            Assert.NotNull(result.BrakeKill);
+            Assert.Contains("no sign of life", result.BrakeKill);
+            Assert.Contains(TurnSilenceBrake_Factory.CONFIG_KEY, result.BrakeKill);
             Assert.True(result.Elapsed < TimeSpan.FromSeconds(15), $"the hung turn was not killed promptly: {result.Elapsed}");
         }
         finally
@@ -61,7 +61,7 @@ public class PrintTurnRunnerSilenceBrakeTests
             var result = await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromMinutes(5), brake, CancellationToken.None);
 
             Assert.False(result.TimedOut);
-            Assert.Null(result.SilenceKill);
+            Assert.Null(result.BrakeKill);
             Assert.Equal(0, result.ExitCode);
         }
         finally
@@ -82,7 +82,7 @@ public class PrintTurnRunnerSilenceBrakeTests
             var result = await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromMinutes(5), brake, CancellationToken.None);
 
             Assert.False(result.TimedOut);
-            Assert.Null(result.SilenceKill);
+            Assert.Null(result.BrakeKill);
         }
         finally
         {
@@ -103,7 +103,7 @@ public class PrintTurnRunnerSilenceBrakeTests
             var result = await runner.Run_Async(["-p", "--output-format", "json"], "prompt", workDir, NO_ENVIRONMENT, TimeSpan.FromSeconds(2), brake, CancellationToken.None);
 
             Assert.True(result.TimedOut);
-            Assert.Null(result.SilenceKill);
+            Assert.Null(result.BrakeKill);
         }
         finally
         {

@@ -37,7 +37,7 @@ public interface ITurnResult
     /// channel say which of the two happened instead of calling a silence a deadline
     /// (<see cref="TurnLiveness.ITurnSilenceBrake"/>).
     /// </summary>
-    string? SilenceKill { get; }
+    string? BrakeKill { get; }
 
     /// <summary>The CLI's own verdict (<c>is_error</c>); false when the JSON was absent.</summary>
     bool IsError { get; }
