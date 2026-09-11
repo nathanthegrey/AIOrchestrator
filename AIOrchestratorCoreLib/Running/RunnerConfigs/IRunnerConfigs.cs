@@ -51,6 +51,21 @@ public interface IRunnerConfigs
     TimeSpan SilenceLimit { get; }
 
     /// <summary>
+    /// How long an implementer's or reviewer's PRINT turn may show no sign of life — no output, no
+    /// transcript write by it or a sub-agent, no command running below it — before it is killed
+    /// (<see cref="TurnLiveness.ITurnSilenceBrake"/>). Zero is OFF: the turn then answers only to
+    /// <see cref="TurnTimeout"/>, which is how every member turn ran before 2026-09-11.
+    ///
+    /// <para>
+    /// NOT <see cref="SilenceLimit"/>, although both are silence limits. That one counts bytes on a
+    /// long-lived stream process, and a supervisor is idle by design; a member works continuously,
+    /// and a build or a sub-agent writes no byte on the parent's pipes for minutes while being
+    /// entirely healthy. One setting for both would be right for neither.
+    /// </para>
+    /// </summary>
+    TimeSpan MemberSilenceLimit { get; }
+
+    /// <summary>
     /// THE MEMORY CEILING ONE SESSION MAY REACH BEFORE THE KERNEL KILLS IT — written the way
     /// systemd writes a size ("3G", "3072M"), or one of the words <c>none</c>/<c>off</c>/<c>0</c>
     /// for no ceiling at all.

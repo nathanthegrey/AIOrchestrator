@@ -66,6 +66,14 @@ public static class RunnerConfigs_Factory
     public static readonly TimeSpan DEFAULT_SILENCE_LIMIT = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// FIFTEEN MINUTES, from the members' own numbers (VPS, all sessions 2026-09-07 → 09-11): 95 % of
+    /// member sessions never go quiet for more than 10 minutes, counting their sub-agents' calls. A
+    /// limit in that region leaves essentially every healthy turn alone — and it is quiet with NO
+    /// command running as well, which the 10-minute figure did not even subtract.
+    /// </summary>
+    public static readonly TimeSpan DEFAULT_MEMBER_SILENCE_LIMIT = TimeSpan.FromMinutes(15);
+
+    /// <summary>
     /// Three gigabytes per session. Measured against the shape the VPS actually runs: 8 GB total,
     /// the daemon and its bridge under 300 MB, and <c>printRunner.maxConcurrentTurns</c> defaulting
     /// to 10 — so this is not a budget that adds up to the machine, it is the point past which ONE
@@ -83,7 +91,8 @@ public static class RunnerConfigs_Factory
         TimeSpan? silenceLimit = null,
         IReadOnlyList<string>? rejections = null,
         string? sessionMemoryMax = null,
-        TimeSpan? memberDigestWindow = null)
+        TimeSpan? memberDigestWindow = null,
+        TimeSpan? memberSilenceLimit = null)
     {
         if (maxConcurrentTurns < 1)
             throw new ArgumentException($"maxConcurrentTurns must be >= 1, got {maxConcurrentTurns}");
@@ -106,7 +115,14 @@ public static class RunnerConfigs_Factory
         return new RunnerConfigsModel(
             roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow,
             memberDigestWindow ?? DEFAULT_MEMBER_DIGEST_WINDOW,
-            silenceLimit ?? DEFAULT_SILENCE_LIMIT, sessionMemoryMax ?? DEFAULT_SESSION_MEMORY_MAX, rejections ?? []);
+            silenceLimit ?? DEFAULT_SILENCE_LIMIT, sessionMemoryMax ?? DEFAULT_SESSION_MEMORY_MAX, rejections ?? [],
+            Normalise_MemberSilenceLimit(memberSilenceLimit ?? DEFAULT_MEMBER_SILENCE_LIMIT));
+    }
+
+    /// <summary>A negative limit is OFF, like zero — the same reading the digest window gets above.</summary>
+    static TimeSpan Normalise_MemberSilenceLimit(TimeSpan limit)
+    {
+        return limit < TimeSpan.Zero ? TimeSpan.Zero : limit;
     }
 
     /// <summary>Terminal for every role, default limits — what an absent block means.</summary>
@@ -125,7 +141,7 @@ public static class RunnerConfigs_Factory
 
         roles[role] = roleConfig;
 
-        return Create(roles, source.MaxConcurrentTurns, source.MaxConcurrentTurnsPerOrchestration, source.TurnTimeout, source.CoalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, source.MemberDigestWindow);
+        return Create(roles, source.MaxConcurrentTurns, source.MaxConcurrentTurnsPerOrchestration, source.TurnTimeout, source.CoalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, source.MemberDigestWindow, source.MemberSilenceLimit);
     }
 
     /// <summary>
@@ -140,6 +156,6 @@ public static class RunnerConfigs_Factory
         foreach (var known in SessionRole_Names.ALL)
             roles[known] = source.Get_ForRole(known);
 
-        return Create(roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, memberDigestWindow ?? source.MemberDigestWindow);
+        return Create(roles, maxConcurrentTurns, maxConcurrentTurnsPerOrchestration, turnTimeout, coalesceWindow, source.SilenceLimit, source.Rejections, source.SessionMemoryMax, memberDigestWindow ?? source.MemberDigestWindow, source.MemberSilenceLimit);
     }
 }

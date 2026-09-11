@@ -1,3 +1,4 @@
+using AIOrchestratorCoreLib.Running.TurnLiveness;
 using AIOrchestratorCoreLib.Running.ClosingTurn;
 using AIOrchestratorCoreLib.Running.PendingTraffic;
 using AIOrchestratorCoreLib.Running.PrintSessionState;
@@ -36,6 +37,7 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
+        TimeSpan memberSilenceLimit,
         CancellationToken cancellationToken)
     {
         var arguments = PrintTurnCommand_Builder.Build_Arguments(state, roleConfig, sessionId, resumeTranscript, null);
@@ -55,7 +57,12 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         else if (fresh && pending.Count > 0)
             Write_StatePack(state, requestId, pending, sources);
 
-        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
+        // THE WORK TURN IS BRAKED, the closing turn below is not: that one has its own short timeout
+        // and a spend cap, and a brake on the turn that exists to salvage a killed one would only
+        // add a second way for the salvage to die.
+        var brake = TurnSilenceBrake_Factory.Create_ForTurn_OrNull(state.Role, memberSilenceLimit, sessionId, environment);
+
+        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, brake, cancellationToken);
 
         TurnLog_Store.Append_TurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), requestId, result);
 
@@ -81,7 +88,7 @@ internal sealed class PrintTurnExecutorModel(ISupervisionPaths paths, IPrintTurn
         var arguments = PrintTurnCommand_Builder.Build_ClosingTurnArguments(state, roleConfig, resumeSessionId, null);
         var prompt = ClosingTurnPrompt_Builder.Build(closingRequestId, sources);
 
-        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, cancellationToken);
+        var result = await _turnRunner.Run_Async(arguments, prompt, state.WorkingDirectory, environment, timeout, null, cancellationToken);
 
         TurnLog_Store.Append_ClosingTurnResult(TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId), closingRequestId, result);
 

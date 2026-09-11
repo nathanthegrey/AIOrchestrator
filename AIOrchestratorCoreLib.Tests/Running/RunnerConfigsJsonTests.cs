@@ -295,4 +295,45 @@ public class RunnerConfigsJsonTests : IDisposable
 
         Assert.Equal(SessionRunners.Terminal, config.Runners.Get_ForRole(SessionRoles.Implementer).Runner);
     }
+
+    /// <summary>
+    /// THE MEMBER SILENCE BRAKE'S KEY, read the way the digest window is: absent is the default,
+    /// zero and below are OFF (a minus sign never gives the brake back), an absurd number is refused
+    /// with a line rather than thrown — <c>TimeSpan.FromMinutes(1e11)</c> overflows, and a throw here
+    /// takes the whole config read down on every tick — and a save writes it back.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"printRunner":{}}""", 15.0, false)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":20}}""", 20.0, false)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":0}}""", 0.0, false)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":-3}}""", 0.0, false)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":1e11}}""", 15.0, true)]
+    [InlineData("""{"printRunner":{"memberSilenceMinutes":"soon"}}""", 15.0, false)]
+    public void TheMemberSilenceLimit_IsReadWithBothEndsDecided(string json, double expectedMinutes, bool refused)
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse(json) as JsonObject);
+
+        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), configs.MemberSilenceLimit);
+        Assert.Equal(refused, configs.Rejections.Any(line => line.Contains(RunnerConfigs_Json.MEMBER_SILENCE_MINUTES_KEY)));
+    }
+
+    [Fact]
+    public void TheMemberSilenceLimit_SurvivesASave()
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""{"printRunner":{"memberSilenceMinutes":22}}""") as JsonObject);
+        var root = new JsonObject();
+
+        RunnerConfigs_Json.Write(root, configs);
+
+        Assert.Equal(TimeSpan.FromMinutes(22), RunnerConfigs_Json.Parse(root).MemberSilenceLimit);
+    }
+
+    [Fact]
+    public void TheMemberSilenceLimit_SurvivesTheCopyFactories()
+    {
+        var configs = RunnerConfigs_Json.Parse(JsonNode.Parse("""{"printRunner":{"memberSilenceMinutes":22}}""") as JsonObject);
+
+        Assert.Equal(TimeSpan.FromMinutes(22), RunnerConfigs_Factory.Create_WithRole(configs, SessionRoles.Implementer, configs.Get_ForRole(SessionRoles.Implementer)).MemberSilenceLimit);
+        Assert.Equal(TimeSpan.FromMinutes(22), RunnerConfigs_Factory.Create_WithLimits(configs, 4, 2, TimeSpan.FromMinutes(30), TimeSpan.Zero).MemberSilenceLimit);
+    }
 }

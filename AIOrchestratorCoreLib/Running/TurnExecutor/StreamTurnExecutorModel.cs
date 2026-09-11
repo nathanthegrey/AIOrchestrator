@@ -80,12 +80,13 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
+        TimeSpan memberSilenceLimit,
         CancellationToken cancellationToken)
     {
         var key = Build_Key(state.OrchId, state.MemberId);
 
         if (Has_FallenBack(key))
-            return await Run_OnFallback_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecutedTurns, environment, timeout, cancellationToken);
+            return await Run_OnFallback_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecutedTurns, environment, timeout, memberSilenceLimit, cancellationToken);
 
         var logFile = TurnLog_Store.Get_File(_paths, state.Role, state.OrchId, state.MemberId);
         var (process, booted) = Ensure_Process(key, state, roleConfig, sessionId, resumeTranscript, requestId, environment, logFile);
@@ -344,6 +345,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
         IReadOnlyList<int> alreadyExecutedTurns,
         IReadOnlyDictionary<string, string> environment,
         TimeSpan timeout,
+        TimeSpan memberSilenceLimit,
         CancellationToken cancellationToken)
     {
         if (_fallback == null)
@@ -357,7 +359,7 @@ internal sealed class StreamTurnExecutorModel : ITurnExecutor
             [PrintTurn_Words.RUNNER_ENV_VAR] = SessionRunner_Names.Get_Word(_fallback.Kind),
         };
 
-        return await _fallback.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecutedTurns, fallbackEnvironment, timeout, cancellationToken);
+        return await _fallback.Execute_Async(state, roleConfig, sessionId, resumeTranscript, requestId, pending, sources, alreadyExecutedTurns, fallbackEnvironment, timeout, memberSilenceLimit, cancellationToken);
     }
 
     bool Has_FallenBack(string key)
